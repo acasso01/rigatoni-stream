@@ -74,3 +74,10 @@ const categorySelect=()=>get('rows').children.find(n=>n.tag==='select');assert.e
 categorySelect().value='10';categorySelect().onchange();await vm.runInContext('loadMovies()',context);assert.equal(categoryRequests.at(-1),'?category_id=10');assert.equal(cards()[0].children[1].textContent,'Movie in 10');await cards()[0].onclick();assert.equal(get('video').src,'https://homepi.test.ts.net/media/test/resource10');
 window.__rigatoniClearProvider();assert.equal(vm.runInContext('movieCategoryMode',context),false);
 console.log('PASS large-movie category fallback, automatic first category, selector switching, scoped search explanation, movie playback and reset');
+
+vm.runInContext("credentials={base:'https://provider.example.invalid',user:'dummy',pass:'dummy'};moviesLoaded=true;showTab('movies')",context);
+assert.equal(get('heroTitle').textContent,'Movie night, made yours.');assert.equal(get('browse').textContent,'▶ Browse Movies');assert.equal(get('search').placeholder,'Search movies…');
+get('browse').onclick();assert.equal(vm.runInContext('tab',context),'movies');
+vm.runInContext("showTab('live')",context);assert.equal(get('heroTitle').textContent,'Live TV, made yours.');assert.equal(get('search').placeholder,'Search channels…');
+vm.runInContext("showTab('favorites')",context);assert.equal(get('heroTitle').textContent,'Your list, your favorites.');
+console.log('PASS Movies, Live TV and My List headings, descriptions, browse buttons and search prompts match their tabs');

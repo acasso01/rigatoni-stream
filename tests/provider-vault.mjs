@@ -29,3 +29,15 @@ console.log('PASS gateway client sends only account token, validates private HTT
 assert.deepEqual(a.metadataWrites.at(-1),{data:{rigatoni_gateway_url:'https://homepi.test.ts.net:8443'}});assert.ok(!JSON.stringify(a.metadataWrites).includes('dummy-test-password'));
 const failed=await setup({metadataFailure:true});failed.element('server').value='http://provider.example.invalid';failed.element('user').value='dummy';failed.element('pass').value='dummy';await failed.element('saveProvider').onclick();assert.match(failed.element('acctStatus').textContent,/gateway settings could not be saved/);
 console.log('PASS account gateway save/reload/delete, validation, metadata failure reporting and credential-free preferences');
+
+const convenience=await setup();
+convenience.element('server').value='http://provider.example.invalid';convenience.element('user').value='dummy';convenience.element('pass').value='dummy-test-password';convenience.element('gateway').value='https://homepi.test.ts.net:8443/';
+await convenience.window.__rigatoniSaveSettings();
+const persisted=JSON.parse(convenience.requests.at(-1).body);
+const restored=await setup({saved:{saved:true,...persisted},gateway:convenience.metadataWrites.at(-1).data.rigatoni_gateway_url});
+assert.equal(restored.element('server').value,persisted.server_url);assert.equal(restored.element('user').value,persisted.username);assert.equal(restored.element('pass').value,persisted.password);assert.equal(restored.element('gateway').value,'https://homepi.test.ts.net:8443');assert.equal(restored.requests.length,1);
+restored.element('gateway').value='https://homepi.other.ts.net:8443/';await restored.element('gateway').onchange();assert.equal(restored.metadataWrites.at(-1).data.rigatoni_gateway_url,'https://homepi.other.ts.net:8443');assert.equal(restored.requests.length,1);
+restored.element('gateway').value='http://unsafe.example.invalid';await restored.element('gateway').onchange();assert.equal(restored.metadataWrites.length,1);assert.match(restored.element('acctStatus').textContent,/Could not save gateway/);
+assert.ok(html.indexOf('await window.__rigatoniSaveSettings()')<html.indexOf('await window.__rigatoniGatewayConnect()'));
+assert.ok(!html.includes("channels=streams;$('pass').value='';"));
+console.log('PASS connect saves settings first, complete account restore without connecting, automatic gateway save and invalid gateway rejection');
