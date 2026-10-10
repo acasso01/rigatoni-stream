@@ -1,0 +1,13 @@
+services:
+  gateway:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      SUPABASE_URL: https://edjejdftwjiasfhpffmc.supabase.co
+      SUPABASE_ANON_KEY: sb_publishable_w3-KHDqTcBEsLTRNwdRpgg_U9xugdH2
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m

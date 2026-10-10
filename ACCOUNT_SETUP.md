@@ -16,7 +16,7 @@ The account page supports sign-in, account creation, email confirmation and rese
 1. Open the home page and choose **Create an account**.
 2. Enter your email and a matching password of at least eight characters.
 3. Confirm your email using the link Supabase sends, then sign in.
-4. Open the player and connect an authorized IPTV provider. Account and IPTV passwords are separate.
+4. Open the player, enter your authorized IPTV provider, and choose **Save provider securely** without connecting first. Account and IPTV passwords are separate. For HTTP playback on GitHub Pages, install the private gateway using [gateway/README.md](gateway/README.md), then enter its HTTPS URL and connect.
 
 An app account does not include an IPTV subscription. Live playback depends on the provider, browser support, HTTPS compatibility, and provider CORS configuration. Movies and series remain forthcoming in the existing player.
 
@@ -24,4 +24,4 @@ An app account does not include an IPTV subscription. Live playback depends on t
 
 Run `node tests/auth.mjs` for the account state and API-contract checks (uses a fake auth client, creates no users, sends no emails). Check the home, account, and provider pages on desktop and mobile. Complete a real email-confirmation signup after enabling registration with owner approval.
 
-The player scripts and Supabase vault backend are unchanged. The service worker caches only named static app assets and excludes account callbacks, external provider requests, and Supabase responses.
+The player restores the encrypted vault into the form without automatically connecting. The gateway reuses the existing Supabase vault backend. The service worker caches only named static app assets and excludes account callbacks, external provider requests, and Supabase responses.
