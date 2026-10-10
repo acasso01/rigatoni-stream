@@ -1,21 +1,27 @@
-# Rigatoni Stream — invite-only accounts
+# Rigatoni Stream accounts
 
-This is the **account UI scaffold**, not a finished production auth gate or credential vault. The existing IPTV player remains accessible directly. Do not invite external users until access controls and the backend are finished.
+The account page supports sign-in, account creation, email confirmation and resend, password recovery, and existing invitations. The home page and IPTV player share the account page's charcoal and red theme.
 
-## Set up Supabase
+## Supabase configuration
 
-1. Create a Supabase project at https://supabase.com/dashboard.
-2. In **Authentication > Providers > Email**, disable **Allow new users to sign up** / public self-registration. Leave email/password sign-in enabled. (Dashboard wording may vary.)
-3. In **Authentication > URL Configuration**, add the precise HTTPS URL for `auth.html` under redirect allow-list. Set the site URL accordingly. GitHub Pages is HTTPS. Use the hosted HTTPS account page, not the Pi's HTTP test page, for real account passwords.
-4. In the repository `config.js`, replace placeholders with the project's **URL** and **publishable/anon** key. These are public browser values; **never** commit the secret/service_role key.
-5. Open `https://acasso01.github.io/rigatoni-stream/auth.html` and test a sign-in.
-6. Invite users from Supabase Dashboard > Authentication > Users > **Invite user**. Supabase sends the invite email. Confirm email templates and redirects before inviting others. Invited users can set a password via the account page's invitation flow; use password reset if needed.
+- Project: `edjejdftwjiasfhpffmc`.
+- In Authentication → Sign In / Providers, **Allow new users to sign up** must be enabled to use Create Account. Keep **Confirm email** enabled. Signup was disabled when this change was prepared; enabling it requires owner approval.
+- Keep the existing site URL `https://acasso01.github.io/rigatoni-stream/` and the allowed redirect `https://acasso01.github.io/rigatoni-stream/auth.html`.
+- Confirm that email delivery is configured for the intended users. Supabase's default email sender has delivery restrictions and rate limits; broader signup may require custom SMTP.
+- `config.js` contains only public configuration. Never put the service-role key, encryption secret, or IPTV credentials in source code.
+- Preserve `PROVIDER_ENCRYPTION_KEY` in Edge Function Secrets. Replacing it without a data migration can make existing saved passwords unreadable.
 
-## Before making this a public service
+## User flow
 
-- Add a real authorization gate to every backend API and streaming endpoint; hiding a page is not access control.
-- Move the Pi proxy off publicly reachable HTTP. Use HTTPS for account/password flows and any provider credential submission; Tailscale is a private tunnel but the browser's HTTP origin is not suitable for a public login service.
-- Implement encrypted-at-rest provider settings using a trusted server-side key (AES-GCM or managed secrets). Keep decryption keys in server environment variables, never in JavaScript, Supabase public config, or GitHub. Enforce per-user access and audit invitations.
-- Store favorites/profiles in per-user tables protected by Supabase Row Level Security.
-- Add rate limits, credential rotation, session management, recovery testing, and an admin invite workflow.
-- The current `xtream.html` stores provider credentials in tab memory only; it does **not** save or sync provider settings yet.
+1. Open the home page and choose **Create an account**.
+2. Enter your email and a matching password of at least eight characters.
+3. Confirm your email using the link Supabase sends, then sign in.
+4. Open the player and connect an authorized IPTV provider. Account and IPTV passwords are separate.
+
+An app account does not include an IPTV subscription. Live playback depends on the provider, browser support, HTTPS compatibility, and provider CORS configuration. Movies and series remain forthcoming in the existing player.
+
+## Validation
+
+Run `node tests/auth.mjs` for the account state and API-contract checks (uses a fake auth client, creates no users, sends no emails). Check the home, account, and provider pages on desktop and mobile. Complete a real email-confirmation signup after enabling registration with owner approval.
+
+The player scripts and Supabase vault backend are unchanged. The service worker caches only named static app assets and excludes account callbacks, external provider requests, and Supabase responses.
