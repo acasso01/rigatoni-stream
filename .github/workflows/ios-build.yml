@@ -1,0 +1,49 @@
+name: Native iOS build
+on:
+  push:
+    paths:
+      - 'ios/**'
+      - '.github/workflows/ios-build.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+          working-directory: ios
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Install native player
+        run: bundle exec pod install
+      - name: Compile iPhone app and tests
+        run: |
+          set -o pipefail
+          xcodebuild build-for-testing -workspace RigatoniStream.xcworkspace -scheme RigatoniStream -destination 'generic/platform=iOS Simulator' -derivedDataPath .build CODE_SIGNING_ALLOWED=NO | tee .build-compile.log
+      - name: Run native unit tests
+        run: |
+          set -o pipefail
+          DEVICE_ID=$(xcrun simctl list devices available -j | ruby -rjson -e 'JSON.parse(STDIN.read)["devices"].values.flatten.each { |d| if d["name"].start_with?("iPhone"); puts d["udid"]; break; end }')
+          test -n "$DEVICE_ID"
+          xcodebuild test-without-building -workspace RigatoniStream.xcworkspace -scheme RigatoniStream -destination "platform=iOS Simulator,id=$DEVICE_ID" -derivedDataPath .build CODE_SIGNING_ALLOWED=NO | tee .build-tests.log
+      - name: Save build reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-reports
+          path: |
+            ios/.build-compile.log
+            ios/.build-tests.log
+            ios/.build/Logs/Test
+            ios/Podfile.lock

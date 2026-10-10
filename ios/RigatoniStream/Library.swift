@@ -1,0 +1,182 @@
+import Foundation
+import SwiftUI
+
+// Ephemeral, bounded in-memory requests prevent provider responses or URLs entering disk caches.
+final class BoundedTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let limit: Int
+    private let lock = NSLock()
+    private var buffer = Data()
+    private var continuation: CheckedContinuation<Data, Error>?
+    private var session: URLSession?
+    private var task: URLSessionDataTask?
+    private var finished = false
+    init(limit: Int) { self.limit = limit }
+    func fetch(_ url: URL, headers: [String: String] = [:], method: String = "GET") async throws -> Data {
+        try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { next in
+                lock.lock()
+                if finished { lock.unlock(); next.resume(throwing: CancellationError()); return }
+                continuation = next
+                let config = URLSessionConfiguration.ephemeral
+                config.urlCache = nil; config.httpCookieStorage = nil
+                config.requestCachePolicy = .reloadIgnoringLocalCacheData
+                config.timeoutIntervalForRequest = 30; config.timeoutIntervalForResource = 60
+                let connection = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+                session = connection
+                var request = URLRequest(url: url); request.httpMethod = method
+                headers.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }; request.setValue("application/json,image/*", forHTTPHeaderField: "Accept")
+                let nextTask = connection.dataTask(with: request); task = nextTask
+                lock.unlock(); nextTask.resume()
+            }
+        }, onCancel: { self.finish(.failure(CancellationError())) })
+    }
+    private func finish(_ result: Result<Data, Error>) {
+        lock.lock()
+        guard !finished else { lock.unlock(); return }
+        finished = true
+        let next = continuation; continuation = nil
+        let connection = session; session = nil; task = nil
+        lock.unlock()
+        next?.resume(with: result); connection?.invalidateAndCancel()
+    }
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode), response.expectedContentLength <= Int64(limit) else {
+            completionHandler(.cancel); finish(.failure(AppFailure("Provider response failed or is too large. Try another category."))); return
+        }
+        completionHandler(.allow)
+    }
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        lock.lock()
+        guard !finished else { lock.unlock(); return }
+        if buffer.count + data.count > limit { lock.unlock(); finish(.failure(AppFailure("This provider category is too large. Try a smaller category."))); return }
+        buffer.append(data); lock.unlock()
+    }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if error != nil { finish(.failure(AppFailure("Provider unreachable. Check your settings or try again."))) }
+        else { lock.lock(); let data = buffer; lock.unlock(); finish(.success(data)) }
+    }
+}
+
+struct ProviderPoster: View {
+    let url: URL?
+    let kind: LibraryKind
+    @State private var image: UIImage?
+    var body: some View {
+        ZStack {
+            Color.white.opacity(0.06)
+            if let image { Image(uiImage: image).resizable().scaledToFit() }
+            else { Image(systemName: kind.symbol).font(.largeTitle).foregroundStyle(.gray) }
+        }
+        .task(id: url) {
+            image = nil
+            guard let url else { return }
+            if let data = try? await BoundedTransfer(limit: 2 * 1024 * 1024).fetch(url), !Task.isCancelled { image = UIImage(data: data) }
+        }
+    }
+}
+
+struct LibraryView: View {
+    @EnvironmentObject private var model: AppModel
+    let kind: LibraryKind
+    @State private var categories: [CatalogCategory] = []
+    @State private var selected = ""
+    @State private var items: [CatalogItem] = []
+    @State private var query = ""
+    @State private var loading = false
+    @State private var error = ""
+    @State private var page = 0
+    @State private var playing: CatalogItem?
+    @State private var retry = 0
+    private var filtered: [CatalogItem] { query.isEmpty ? items : items.filter { $0.name.localizedCaseInsensitiveContains(query) } }
+    private var visible: [CatalogItem] { Array(filtered.dropFirst(page * 120).prefix(120)) }
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    Text(kind == .movies ? "Movie night, made yours." : "Live TV, made yours.")
+                        .font(.largeTitle.bold()).padding(.top, 10)
+                    Text(kind == .movies ? "Your provider’s movies. Original quality, native playback." : "Your channels. Your sports. Straight from your provider.").foregroundStyle(.secondary)
+                    if !model.providerReady {
+                        Text("Add or restore your provider settings to browse.")
+                        Button("Provider settings") { model.settingsVisible = true }.buttonStyle(.borderedProminent)
+                    } else {
+                        if !categories.isEmpty {
+                            Picker("Category", selection: $selected) {
+                                ForEach(categories) { Text($0.name).tag($0.id) }
+                            }.pickerStyle(.menu).tint(.white)
+                        }
+                        TextField(kind == .movies ? "Search movies in this category" : "Search channels in this category", text: $query)
+                            .textFieldStyle(.roundedBorder).onChange(of: query) { _, _ in page = 0 }
+                        if loading { ProgressView("Loading \(kind.title.lowercased())…").frame(maxWidth: .infinity) }
+                        if !error.isEmpty {
+                            Text(error).foregroundStyle(.secondary)
+                            Button("Retry") { retry += 1 }.buttonStyle(.bordered)
+                        } else if !loading && items.isEmpty { Text("No titles in this category.").foregroundStyle(.secondary) }
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 12)], spacing: 16) {
+                            ForEach(visible) { item in
+                                Button { playing = item } label: {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        ProviderPoster(url: item.poster, kind: kind).frame(height: kind == .movies ? 190 : 100).clipShape(RoundedRectangle(cornerRadius: 10))
+                                        Text(item.name).font(.subheadline.weight(.semibold)).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                                    }.foregroundStyle(.white)
+                                }.buttonStyle(.plain)
+                            }
+                        }
+                        if filtered.count > 120 {
+                            HStack {
+                                Button("Previous") { page -= 1 }.disabled(page == 0)
+                                Spacer(); Text("Page \(page + 1)").foregroundStyle(.secondary); Spacer()
+                                Button("Next") { page += 1 }.disabled((page + 1) * 120 >= filtered.count)
+                            }
+                        }
+                        Text("\(filtered.count) titles · Search covers this category").font(.caption).foregroundStyle(.secondary)
+                    }
+                }.padding()
+            }
+            .background(Color(red: 0.035, green: 0.035, blue: 0.045))
+            .navigationTitle("🍝 Rigatoni Stream").navigationBarTitleDisplayMode(.inline)
+            .toolbar { Button { model.settingsVisible = true } label: { Image(systemName: "person.crop.circle") }.accessibilityLabel("Account and provider settings") }
+            .task(id: "\(model.libraryRevision)-\(retry)") { await loadCategories() }
+            .task(id: "\(selected)-\(model.libraryRevision)-\(retry)") { await loadItems() }
+            .fullScreenCover(item: $playing) { PlayerView(item: $0, provider: model.provider) }
+        }
+    }
+    private func rows(action: String, category: String? = nil) async throws -> [[String: Any]] {
+        if model.provider.usesHTTP { return try await model.gatewayRows(kind: kind, category: category) }
+        let url = try model.provider.apiURL(action: action, category: category)
+        let data = try await BoundedTransfer(limit: 32 * 1024 * 1024).fetch(url)
+        guard let rows = try JSONSerialization.jsonObject(with: data) as? [[String: Any]], rows.count <= 50000 else { throw AppFailure("The provider returned an invalid or oversized category.") }
+        return rows
+    }
+    private func loadCategories() async {
+        categories = []; selected = ""; items = []; error = ""; query = ""; page = 0
+        guard model.signedIn, model.providerReady else { return }
+        loading = true
+        do {
+            let result = try await rows(action: kind.categoryAction)
+            guard !Task.isCancelled else { return }
+            categories = result.compactMap { row in
+                let id = row["category_id"].map { String(describing: $0) } ?? ""
+                guard !id.isEmpty, id.allSatisfy(\.isNumber) else { return nil }
+                return CatalogCategory(id: id, name: row["category_name"] as? String ?? "Category")
+            }
+            selected = categories.first?.id ?? ""
+            if selected.isEmpty { loading = false }
+        } catch { if !Task.isCancelled { self.error = error.localizedDescription; loading = false } }
+    }
+    private func loadItems() async {
+        guard !selected.isEmpty, model.signedIn, model.providerReady else { return }
+        items = []; query = ""; page = 0; error = ""; loading = true
+        do {
+            let result = try await rows(action: kind.streamAction, category: selected)
+            guard !Task.isCancelled else { return }
+            var seen = Set<String>()
+            items = result.compactMap { row in
+                guard var item = CatalogItem.parse(row, kind: kind) else { return nil }
+                if model.provider.usesHTTP { item.playbackURL = try? model.gatewayPlaybackURL(id: item.id, kind: kind) }
+                return item
+            }.filter { seen.insert($0.id).inserted }
+            loading = false
+        } catch { if !Task.isCancelled { self.error = error.localizedDescription; loading = false } }
+    }
+}

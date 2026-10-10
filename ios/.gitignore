@@ -1,0 +1,8 @@
+Pods/
+.build/
+vendor/
+.bundle/
+Generated/
+*.xcworkspace/
+*.xcodeproj/
+.DS_Store
