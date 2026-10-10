@@ -28,7 +28,7 @@ final class CoreTests: XCTestCase {
         XCTAssertNil(CatalogItem.parse(["stream_id": "../private"], kind: .live))
         XCTAssertEqual(CatalogItem.parse(["stream_id": "1", "container_extension": "../../bad"], kind: .movies)?.fileExtension, "mp4")
     }
-    @MainActor func testGatewayPreferenceMatchesWebsiteValidation() throws {
+    @MainActor func testGatewayPreferenceMatchesWebsiteValidation() async throws {
         XCTAssertEqual(try AccountAPI.gatewayOrigin("https://homepi.test.ts.net:8443/"), "https://homepi.test.ts.net:8443")
         XCTAssertEqual(try AccountAPI.gatewayOrigin(""), "")
         for gateway in ["http://homepi.test.ts.net", "https://example.invalid", "https://homepi.test.ts.net/private", "https://user:pass@homepi.test.ts.net"] {

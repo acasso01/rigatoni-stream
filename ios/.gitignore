@@ -6,3 +6,7 @@ Generated/
 *.xcworkspace/
 *.xcodeproj/
 .DS_Store
+.build-device/
+compile.log
+tests.log
+device-build.log

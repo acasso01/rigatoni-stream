@@ -20,7 +20,7 @@ final class AccountProtocol: URLProtocol {
             }
             let response = try Self.respond!(request, body)
             client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: JSONSerialization.data(withJSONObject: response))
+            client?.urlProtocol(self, didLoad: try JSONSerialization.data(withJSONObject: response))
             client?.urlProtocolDidFinishLoading(self)
         } catch { client?.urlProtocol(self, didFailWithError: error) }
     }
