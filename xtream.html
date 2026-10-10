@@ -106,7 +106,11 @@ async function diagnosePlayback(url,attempt,reason){
               const info=await check.json();const streams=Array.isArray(info.streams)?info.streams:[];
               const labels=streams.filter(s=>['video','audio'].includes(s.type)).map(s=>s.type==='video'?String(s.codec||'unknown').toUpperCase()+' '+(Number(s.width)||0)+'×'+(Number(s.height)||0)+' '+String(s.pixel_format||''):String(s.codec||'unknown').toUpperCase()+' audio');
               detail='Gateway read the media: '+labels.join('; ')+'. Safari still failed to decode this stream.';
-            }else detail+=' The gateway could not inspect the media. A segment/key may be failing, or the probe timed out.';
+            }else{
+              const info=await check.json().catch(()=>({}));
+              const failures={media_probe_timeout:'The media probe timed out waiting for segments.',media_probe_extension:'The media probe rejected an extensionless relay link.',media_probe_download:'The media probe could not download a segment or encryption key.',media_probe_invalid:'The media probe received invalid or incomplete media data.',media_probe_unavailable:'FFprobe is unavailable. Rebuild the gateway Docker image.',probe_busy:'Another media check is running. Try again shortly.'};
+              detail+=' '+(failures[info.error]||'The media probe failed to identify this stream.');
+            }
           }catch{detail+=' The media format check did not finish.';}
         }
 

@@ -86,11 +86,28 @@ export function rewritePlaylist(text,base,register) {
   }).join('\n');
 }
 const token=()=>randomBytes(24).toString('base64url');
+export function hlsProbeOptions(help) {
+  // FFmpeg 7/8 added independent extension checks. Relay tickets intentionally have no suffix.
+  return ['-allowed_extensions','ALL',...(help.includes('allowed_segment_extensions')?['-allowed_segment_extensions','ALL']:[]),...(help.includes('extension_picky')?['-extension_picky','0']:[])];
+}
+let probeOptions;
+async function supportedProbeOptions(){
+  if(!probeOptions)probeOptions=new Promise((resolve,reject)=>execFile('ffprobe',['-hide_banner','-h','demuxer=hls'],{timeout:5000,maxBuffer:65536},(error,stdout)=>error?reject(Error('media_probe_unavailable')):resolve(hlsProbeOptions(stdout))));
+  try{return await probeOptions}catch(error){probeOptions=null;throw error}
+}
+export function probeFailure(error,stderr=''){
+  if(error?.killed)return 'media_probe_timeout';
+  if(/not in allowed|mismatches allowed|extension.*blocked/i.test(stderr))return 'media_probe_extension';
+  if(/HTTP error|Server returned|Unable to open|Failed to open|Error when loading first segment|Connection refused|timed out/i.test(stderr))return 'media_probe_download';
+  if(/Invalid data found|Invalid.*NAL|Error parsing|could not find codec parameters/i.test(stderr))return 'media_probe_invalid';
+  return 'media_probe_failed';
+}
 export async function probeMedia(url) {
   // Probe only our own opaque relay. Provider URLs and credentials never enter process arguments.
   const input=new URL(url);
   if(input.protocol!=='http:'||input.hostname!=='127.0.0.1'||!/^\/media\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(input.pathname)||input.search||input.hash||input.username||input.password)throw Error('unsafe_probe');
-  const raw=await new Promise((resolve,reject)=>execFile('ffprobe',['-v','quiet','-protocol_whitelist','http,tcp,crypto','-allowed_extensions','ALL','-rw_timeout','10000000','-analyzeduration','5000000','-probesize','5000000','-show_entries','stream=codec_type,codec_name,width,height,pix_fmt,sample_rate,channels','-of','json',input.href],{timeout:20000,maxBuffer:65536,killSignal:'SIGKILL'},(error,stdout)=>error?reject(Error('media_probe_failed')):resolve(stdout)));
+  const options=await supportedProbeOptions();
+  const raw=await new Promise((resolve,reject)=>execFile('ffprobe',['-v','error','-protocol_whitelist','http,tcp,crypto',...options,'-rw_timeout','10000000','-analyzeduration','5000000','-probesize','5000000','-show_entries','stream=codec_type,codec_name,width,height,pix_fmt,sample_rate,channels','-of','json',input.href],{timeout:20000,maxBuffer:65536,killSignal:'SIGKILL'},(error,stdout,stderr)=>error?reject(Error(probeFailure(error,stderr))):resolve(stdout)));
   const parsed=JSON.parse(raw);
   const streams=(parsed.streams||[]).slice(0,16).filter(s=>['video','audio'].includes(s.codec_type)).map(s=>({type:s.codec_type,codec:/^[a-z0-9_]+$/.test(s.codec_name||'')?s.codec_name:'unknown',...(s.codec_type==='video'?{width:Number(s.width)||0,height:Number(s.height)||0,pixel_format:/^[a-z0-9_]+$/.test(s.pix_fmt||'')?s.pix_fmt:'unknown'}:{channels:Number(s.channels)||0,sample_rate:Number(s.sample_rate)||0})}));
   if(!streams.length)throw Error('media_probe_failed');
@@ -166,7 +183,7 @@ export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.gi
       return json(res,404,{error:'not_found'});
     } catch(error) {
       if(res.headersSent){res.destroy();return}
-      const known=['unsafe_target','upstream_timeout','upstream_unavailable','provider_connection_failed','response_too_large','catalog_too_large','invalid_playlist','session_resource_limit','media_probe_failed'];
+      const known=['unsafe_target','upstream_timeout','upstream_unavailable','provider_connection_failed','response_too_large','catalog_too_large','invalid_playlist','session_resource_limit','media_probe_failed','media_probe_unavailable','media_probe_timeout','media_probe_extension','media_probe_download','media_probe_invalid'];
       return json(res,502,{error:known.includes(error.message)?error.message:'gateway_request_failed'});
     }
   });

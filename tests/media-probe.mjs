@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import {execFile} from 'node:child_process';
 import {Readable} from 'node:stream';
-import {createGateway,probeMedia} from '../gateway/server.mjs';
+import {createGateway,probeMedia,hlsProbeOptions,probeFailure} from '../gateway/server.mjs';
+assert.deepEqual(hlsProbeOptions('allowed_extensions'),['-allowed_extensions','ALL']);
+assert.deepEqual(hlsProbeOptions('allowed_extensions allowed_segment_extensions extension_picky'),['-allowed_extensions','ALL','-allowed_segment_extensions','ALL','-extension_picky','0']);
+assert.equal(probeFailure({killed:true}),'media_probe_timeout');
+assert.equal(probeFailure({},'URL http://dummy.invalid/secret is not in allowed_segment_extensions'),'media_probe_extension');
+assert.equal(probeFailure({},'Failed to open segment http://dummy.invalid/secret'),'media_probe_download');
+assert.equal(probeFailure({},'Invalid data found when processing input'),'media_probe_invalid');
 await assert.rejects(()=>probeMedia('https://provider.example.invalid/private'),/unsafe_probe/);
 await assert.rejects(()=>probeMedia('http://127.0.0.1:8787/media/a/b?password=dummy'),/unsafe_probe/);
 const media=await new Promise((resolve,reject)=>execFile('ffmpeg',['-v','quiet','-f','lavfi','-i','testsrc2=size=1280x720:rate=5','-t','1','-an','-c:v','libx264','-threads','1','-preset','ultrafast','-f','mpegts','pipe:1'],{encoding:'buffer',maxBuffer:5*1024*1024},(err,stdout)=>err?reject(err):resolve(stdout)));
