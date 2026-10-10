@@ -53,3 +53,17 @@ node tests/gateway.mjs
 These tests use dummy provider data and mock upstream streams, not a real subscription. Deployment and real playback require running the Pi setup and testing with your provider.
 
 To update an existing gateway checkout, run `git pull --ff-only`, then `docker compose up -d --build` from its gateway directory. To stop it, run `docker compose down`. This does not change Home Assistant, Samba, MQTT, or your port-8090 Pi test server.
+
+Large catalogs are parsed incrementally and only the fields used by the player are retained. Limits are 128 MiB of upstream JSON, 100,000 live channels, 10,000 categories and 2 MiB per item. The container has a 512 MiB memory cap. Oversized or malformed responses are rejected without logging their contents.
+
+If you changed the host port to 8788, preserve that mapping when pulling updates. The restore below resets only the gateway Compose file; reapply any other customizations before starting it:
+
+```bash
+cd ~/rigatoni-stream-gateway
+git restore gateway/compose.yaml
+git pull --ff-only
+cd gateway
+sed -i 's/127.0.0.1:8787:8787/127.0.0.1:8788:8787/' compose.yaml
+docker compose up -d --build
+curl http://127.0.0.1:8788/health
+```

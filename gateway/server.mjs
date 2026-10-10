@@ -4,6 +4,7 @@ import {lookup} from 'node:dns/promises';
 import {isIP} from 'node:net';
 import {randomBytes} from 'node:crypto';
 import {pipeline} from 'node:stream/promises';
+import {StringDecoder} from 'node:string_decoder';
 import {pathToFileURL} from 'node:url';
 
 export function publicAddress(address) {
@@ -41,6 +42,40 @@ async function boundedBody(stream,limit) {
   for await(const chunk of stream){size+=chunk.length;if(size>limit){stream.destroy();throw Error('response_too_large')}chunks.push(chunk)}
   return Buffer.concat(chunks).toString('utf8');
 }
+// Discard unused provider metadata as each object arrives instead of buffering the whole catalog.
+export async function providerArray(stream,project,{maxBytes=128*1024*1024,maxItems=100000,maxItemBytes=2*1024*1024}={}) {
+  const decoder=new StringDecoder('utf8'),items=[];
+  let bytes=0,state='start',item='',depth=0,inString=false,escaped=false;
+  const consume=text=>{
+    for(const char of text){
+      if(state==='item'){
+        item+=char;
+        if(item.length>maxItemBytes)throw Error('response_too_large');
+        if(inString){if(escaped)escaped=false;else if(char==='\\')escaped=true;else if(char==='"')inString=false;}
+        else if(char==='"')inString=true;
+        else if(char==='{'||char==='[')depth++;
+        else if(char==='}'||char===']')depth--;
+        if(depth===0){
+          if(items.length>=maxItems)throw Error('catalog_too_large');
+          items.push(project(JSON.parse(item)));item='';state='separator';
+        }
+        continue;
+      }
+      if(/\s/.test(char))continue;
+      if(state==='start'&&char==='['){state='first';continue;}
+      if((state==='first'||state==='next')&&char==='{'){state='item';item='{';depth=1;continue;}
+      if((state==='first'||state==='separator')&&char===']'){state='done';continue;}
+      if(state==='separator'&&char===','){state='next';continue;}
+      throw Error('provider_connection_failed');
+    }
+  };
+  try{
+    for await(const chunk of stream){bytes+=chunk.length;if(bytes>maxBytes)throw Error('response_too_large');consume(decoder.write(chunk));}
+    consume(decoder.end());if(state!=='done')throw Error('provider_connection_failed');
+    return items;
+  }catch(error){stream.destroy();throw error;}
+}
+const shortText=value=>String(value??'').slice(0,512);
 export function rewritePlaylist(text,base,register) {
   if(!text.trimStart().startsWith('#EXTM3U'))throw Error('invalid_playlist');
   return text.split(/\r?\n/).map(line=>{
@@ -74,19 +109,20 @@ export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.gi
         const saved=await vault.json();if(!saved.saved)return json(res,409,{error:'save_provider_first'});
         if(sessions.size>=maxSessions)return json(res,503,{error:'gateway_busy'});
         const base=new URL(saved.server_url);if(base.search||base.hash)throw Error('unsafe_target');
-        const api=async action=>{
+        const api=async (action,project,maxItems)=>{
           const url=new URL(base.href.replace(/\/+$/,'')+'/player_api.php');url.search=new URLSearchParams({username:saved.username,password:saved.password,action}).toString();
           const {response}=await upstream(url);if(response.statusCode!==200){response.resume();throw Error('provider_connection_failed')}
-          return JSON.parse(await boundedBody(response,15*1024*1024));
+          return providerArray(response,project,{maxItems});
         };
-        const categories=await api('get_live_categories'),channels=await api('get_live_streams');
+        const categories=await api('get_live_categories',c=>({category_id:shortText(c.category_id),category_name:shortText(c.category_name)}),10000);
+        const channels=await api('get_live_streams',c=>({stream_id:shortText(c.stream_id),name:shortText(c.name),category_id:shortText(c.category_id),stream_icon:''}),100000);
         if(!Array.isArray(channels))throw Error('provider_connection_failed');
         const id=token();const resources=new Map(),resourceKeys=new Map();const channelIds=new Set(channels.map(c=>String(c.stream_id)));
-        const register=url=>{if(resourceKeys.has(url.href))return '/media/'+id+'/'+resourceKeys.get(url.href);if(!['http:','https:'].includes(url.protocol)||url.username||url.password)throw Error('unsafe_target');if(resources.size>=20000)throw Error('session_resource_limit');const key=token();resources.set(key,url.href);resourceKeys.set(url.href,key);return '/media/'+id+'/'+key};
+        const register=url=>{if(resourceKeys.has(url.href))return '/media/'+id+'/'+resourceKeys.get(url.href);if(!['http:','https:'].includes(url.protocol)||url.username||url.password)throw Error('unsafe_target');if(resources.size>=120000)throw Error('session_resource_limit');const key=token();resources.set(key,url.href);resourceKeys.set(url.href,key);return '/media/'+id+'/'+key};
         const streams={};for(const channelId of channelIds){if(!/^\d+$/.test(channelId))continue;streams[channelId]=register(new URL(base.href.replace(/\/+$/,'')+'/live/'+encodeURIComponent(saved.username)+'/'+encodeURIComponent(saved.password)+'/'+channelId+'.m3u8'))}
         sessions.set(id,{expires:now()+4*60*60*1000,resources,register});
         // Provider icons can be HTTP or carry provider credentials. Keep cards but use the existing fallback artwork.
-        return json(res,200,{categories:Array.isArray(categories)?categories:[],channels:channels.map(c=>({stream_id:c.stream_id,name:c.name,category_id:c.category_id,stream_icon:''})),streams,expires_in:14400});
+        return json(res,200,{categories,channels,streams,expires_in:14400});
       }
       if(path.startsWith('/media/')&&req.method==='GET') {
         const [, ,id,key]=path.split('/');const session=sessions.get(id);const url=session?.resources.get(key);
@@ -106,7 +142,7 @@ export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.gi
       return json(res,404,{error:'not_found'});
     } catch(error) {
       if(res.headersSent){res.destroy();return}
-      const known=['unsafe_target','upstream_timeout','upstream_unavailable','provider_connection_failed','response_too_large','invalid_playlist','session_resource_limit'];
+      const known=['unsafe_target','upstream_timeout','upstream_unavailable','provider_connection_failed','response_too_large','catalog_too_large','invalid_playlist','session_resource_limit'];
       return json(res,502,{error:known.includes(error.message)?error.message:'gateway_request_failed'});
     }
   });
