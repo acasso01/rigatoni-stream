@@ -5,6 +5,7 @@ import {isIP} from 'node:net';
 import {randomBytes} from 'node:crypto';
 import {pipeline} from 'node:stream/promises';
 import {StringDecoder} from 'node:string_decoder';
+import {execFile} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
 
 export function publicAddress(address) {
@@ -85,8 +86,19 @@ export function rewritePlaylist(text,base,register) {
   }).join('\n');
 }
 const token=()=>randomBytes(24).toString('base64url');
-export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.github.io',fetchVault=fetch,upstream=providerRequest,now=Date.now,maxSessions=20}={}) {
+export async function probeMedia(url) {
+  // Probe only our own opaque relay. Provider URLs and credentials never enter process arguments.
+  const input=new URL(url);
+  if(input.protocol!=='http:'||input.hostname!=='127.0.0.1'||!/^\/media\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(input.pathname)||input.search||input.hash||input.username||input.password)throw Error('unsafe_probe');
+  const raw=await new Promise((resolve,reject)=>execFile('ffprobe',['-v','quiet','-protocol_whitelist','http,tcp,crypto','-allowed_extensions','ALL','-rw_timeout','10000000','-analyzeduration','5000000','-probesize','5000000','-show_entries','stream=codec_type,codec_name,width,height,pix_fmt,sample_rate,channels','-of','json',input.href],{timeout:20000,maxBuffer:65536,killSignal:'SIGKILL'},(error,stdout)=>error?reject(Error('media_probe_failed')):resolve(stdout)));
+  const parsed=JSON.parse(raw);
+  const streams=(parsed.streams||[]).slice(0,16).filter(s=>['video','audio'].includes(s.codec_type)).map(s=>({type:s.codec_type,codec:/^[a-z0-9_]+$/.test(s.codec_name||'')?s.codec_name:'unknown',...(s.codec_type==='video'?{width:Number(s.width)||0,height:Number(s.height)||0,pixel_format:/^[a-z0-9_]+$/.test(s.pix_fmt||'')?s.pix_fmt:'unknown'}:{channels:Number(s.channels)||0,sample_rate:Number(s.sample_rate)||0})}));
+  if(!streams.length)throw Error('media_probe_failed');
+  return {streams};
+}
+export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.github.io',fetchVault=fetch,upstream=providerRequest,probe=probeMedia,now=Date.now,maxSessions=20}={}) {
   const sessions=new Map();
+  let probing=false;
   const clean=()=>{for(const [id,s] of sessions)if(s.expires<=now())sessions.delete(id)};
   const json=(res,status,body)=>{res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(body))};
   const server=http.createServer(async(req,res)=>{
@@ -124,6 +136,18 @@ export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.gi
         // Provider icons can be HTTP or carry provider credentials. Keep cards but use the existing fallback artwork.
         return json(res,200,{categories,channels,streams,expires_in:14400});
       }
+      if(path.startsWith('/inspect/')&&req.method==='GET') {
+        const [, ,id,key]=path.split('/');const session=sessions.get(id);
+        if(!session?.resources.has(key))return json(res,401,{error:'stream_session_expired'});
+        if(probing)return json(res,429,{error:'probe_busy'});
+        if(session.inspections?.has(key))return json(res,200,session.inspections.get(key));
+        probing=true;
+        try{
+          const result=await probe('http://127.0.0.1:'+server.address().port+'/media/'+id+'/'+key);
+          session.inspections??=new Map();if(session.inspections.size<20)session.inspections.set(key,result);
+          return json(res,200,result);
+        }finally{probing=false}
+      }
       if(path.startsWith('/media/')&&req.method==='GET') {
         const [, ,id,key]=path.split('/');const session=sessions.get(id);const url=session?.resources.get(key);
         if(!url)return json(res,401,{error:'stream_session_expired'});
@@ -142,7 +166,7 @@ export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.gi
       return json(res,404,{error:'not_found'});
     } catch(error) {
       if(res.headersSent){res.destroy();return}
-      const known=['unsafe_target','upstream_timeout','upstream_unavailable','provider_connection_failed','response_too_large','catalog_too_large','invalid_playlist','session_resource_limit'];
+      const known=['unsafe_target','upstream_timeout','upstream_unavailable','provider_connection_failed','response_too_large','catalog_too_large','invalid_playlist','session_resource_limit','media_probe_failed'];
       return json(res,502,{error:known.includes(error.message)?error.message:'gateway_request_failed'});
     }
   });

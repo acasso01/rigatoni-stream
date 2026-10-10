@@ -25,7 +25,7 @@ const fakeUpstream=async(input,options={})=>{
  if(url.pathname.endsWith('.m3u8'))return{url,response:fakeResponse('#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="key.bin"\n#EXTINF:4,\nsegment.ts\n',{'content-type':'application/vnd.apple.mpegurl'})};
  return{url,response:fakeResponse('dummy-media-bytes',{'content-type':'video/mp2t','content-length':'17'})};
 };
-const gateway=createGateway({supabaseUrl:'https://vault.example.invalid',publicKey:'dummy-public-key',now:()=>clock,upstream:fakeUpstream,fetchVault:async(url,options)=>{
+const gateway=createGateway({supabaseUrl:'https://vault.example.invalid',publicKey:'dummy-public-key',now:()=>clock,upstream:fakeUpstream,probe:async url=>{assert.match(url,/^http:\/\/127\.0\.0\.1:\d+\/media\//);return{streams:[{type:'video',codec:'h264',width:1920,height:1080}]}},fetchVault:async(url,options)=>{
  assert.equal(url,'https://vault.example.invalid/functions/v1/provider-vault');assert.equal(options.cache,'no-store');
  if(options.headers.Authorization!=='Bearer dummy-auth')return{ok:false,status:401};
  return{ok:true,json:async()=>({saved:true,server_url:'http://provider.example.invalid',username:'dummy-user',password:'dummy-password'})};
@@ -38,6 +38,7 @@ try{
  r=await fetch(root+'/api/connect',{method:'POST',headers:{Origin:'https://untrusted.example.invalid',Authorization:'Bearer dummy-auth'}});assert.equal(r.status,403);
  r=await fetch(root+'/api/connect',{method:'OPTIONS',headers:{Origin:'https://acasso01.github.io'}});assert.equal(r.status,204);assert.equal(r.headers.get('access-control-allow-origin'),'https://acasso01.github.io');
  r=await fetch(root+'/api/connect',{method:'POST',headers:{Authorization:'Bearer dummy-auth',Origin:'https://acasso01.github.io'}});assert.equal(r.status,200);assert.equal(r.headers.get('cache-control'),'no-store');const data=await r.json();assert.equal(data.channels.length,1);assert.equal(data.channels[0].stream_icon,'');assert.ok(!JSON.stringify(data).includes('dummy-password'));assert.ok(!JSON.stringify(data).includes('dummy-user'));
+ r=await fetch(root+data.streams['7'].replace('/media/','/inspect/'));assert.equal(r.status,200);assert.equal((await r.json()).streams[0].width,1920);
  r=await fetch(root+data.streams['7']);assert.equal(r.status,200);const playlist=await r.text();assert.ok(!playlist.includes('http://'));assert.ok(!playlist.includes('dummy-password'));const paths=[...playlist.matchAll(/\/media\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+/g)].map(m=>m[0]);assert.equal(paths.length,2);
  for(const path of paths){r=await fetch(root+path);assert.equal(r.status,200);assert.equal(await r.text(),'dummy-media-bytes')}
  r=await fetch(root+paths[1],{headers:{Range:'bytes=0-10'}});assert.equal(requests.at(-1).options.range,'bytes=0-10');await r.text();

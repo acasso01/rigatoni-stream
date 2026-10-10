@@ -82,7 +82,7 @@ async function diagnosePlayback(url,attempt,reason){
   if(attempt!==playbackAttempt)return;
   $('playstatus').textContent=reason+' Checking gateway…';
   const diagnostic=++playbackDiagnostic;playbackProbe?.abort();const controller=new AbortController();playbackProbe=controller;
-  const timeout=setTimeout(()=>controller.abort(),8000);
+  let timeout=setTimeout(()=>controller.abort(),8000);
   let detail;
   try{
     const response=await fetch(url,{cache:'no-store',signal:controller.signal});
@@ -95,6 +95,21 @@ async function diagnosePlayback(url,attempt,reason){
       if(/mpegurl/i.test(type)){
         const text=await response.text();
         detail=text.trimStart().startsWith('#EXTM3U')?'Gateway playlist is reachable. A media segment, encryption key or video format may still be failing.':'The gateway did not return a valid HLS playlist.';
+        if(text.trimStart().startsWith('#EXTM3U')&&attempt===playbackAttempt&&diagnostic===playbackDiagnostic){
+          $('playstatus').textContent=reason+' Gateway playlist is reachable. Checking video and audio formats…';
+          clearTimeout(timeout);timeout=setTimeout(()=>controller.abort(),25000);
+          try{
+            const inspect=new URL(url);inspect.pathname=inspect.pathname.replace('/media/','/inspect/');
+            const check=await fetch(inspect.href,{cache:'no-store',signal:controller.signal});
+            if(check.status===404)detail+=' Update the Pi gateway to enable the stream format check.';
+            else if(check.ok){
+              const info=await check.json();const streams=Array.isArray(info.streams)?info.streams:[];
+              const labels=streams.filter(s=>['video','audio'].includes(s.type)).map(s=>s.type==='video'?String(s.codec||'unknown').toUpperCase()+' '+(Number(s.width)||0)+'×'+(Number(s.height)||0)+' '+String(s.pixel_format||''):String(s.codec||'unknown').toUpperCase()+' audio');
+              detail='Gateway read the media: '+labels.join('; ')+'. Safari still failed to decode this stream.';
+            }else detail+=' The gateway could not inspect the media. A segment/key may be failing, or the probe timed out.';
+          }catch{detail+=' The media format check did not finish.';}
+        }
+
       }else{
         await response.body?.cancel();
         detail='Gateway returned a non-HLS response. This channel may require a different stream format.';
