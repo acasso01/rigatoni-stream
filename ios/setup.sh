@@ -6,6 +6,7 @@ if ! command -v xcodegen >/dev/null; then
   exit 1
 fi
 xcodegen generate
+python3 configure_http.py
 bundle install
 bundle exec pod install
 open RigatoniStream.xcworkspace

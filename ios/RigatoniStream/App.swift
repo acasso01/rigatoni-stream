@@ -87,6 +87,7 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section("Provider") {
+                    Text(model.provider.requiresGateway ? "Playback route: HTTPS gateway" : "Playback route: direct provider").font(.footnote).foregroundStyle(.secondary)
                     TextField("Server URL", text: $model.provider.server).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                     TextField("Username", text: $model.provider.username).textInputAutocapitalization(.never).autocorrectionDisabled()
                     HStack {
@@ -95,7 +96,7 @@ struct SettingsView: View {
                         Button { visiblePassword.toggle() } label: { Image(systemName: visiblePassword ? "eye.slash" : "eye") }.accessibilityLabel("Show or hide provider password")
                     }
                     TextField("HTTPS gateway URL (optional)", text: $model.gateway).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    Text("HTTPS providers play directly. HTTP providers use your saved HTTPS gateway; connect Tailscale. VLC plays the original media.").font(.footnote).foregroundStyle(.secondary)
+                    Text("Configured HTTP providers and HTTPS providers play directly. Other HTTP providers use your saved HTTPS gateway.").font(.footnote).foregroundStyle(.secondary)
                     Button("Save provider & gateway") { Task { await model.saveSettings() } }.disabled(model.busy)
                     Button("Reload saved settings") { Task {
                         model.busy = true; defer { model.busy = false }

@@ -10,3 +10,5 @@ Generated/
 compile.log
 tests.log
 device-build.log
+Private/
+__pycache__/

@@ -12,7 +12,8 @@ final class BoundedTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendab
     private var finished = false
     init(limit: Int) { self.limit = limit }
     func fetch(_ url: URL, headers: [String: String] = [:], method: String = "GET") async throws -> Data {
-        try await withTaskCancellationHandler(operation: {
+        guard TransportPolicy.permits(url) else { throw AppFailure("This HTTP host is not enabled in your app build. Configure your provider hostname on your Mac or use the HTTPS gateway.") }
+        return try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { next in
                 lock.lock()
                 if finished { lock.unlock(); next.resume(throwing: CancellationError()); return }
@@ -38,6 +39,12 @@ final class BoundedTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendab
         let connection = session; session = nil; task = nil
         lock.unlock()
         next?.resume(with: result); connection?.invalidateAndCancel()
+    }
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        guard let url = request.url, TransportPolicy.permits(url) else {
+            completionHandler(nil); finish(.failure(AppFailure("The provider redirected to an HTTP host that is not enabled. Use the HTTPS gateway for this provider."))); return
+        }
+        completionHandler(request)
     }
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
         guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode), response.expectedContentLength <= Int64(limit) else {
@@ -110,7 +117,7 @@ struct LibraryView: View {
                         if loading { ProgressView("Loading \(kind.title.lowercased())…").frame(maxWidth: .infinity) }
                         if !error.isEmpty {
                             Text(error).foregroundStyle(.secondary)
-                            Button("Retry") { retry += 1 }.buttonStyle(.bordered)
+                            Button("Retry") { model.resetGateway(); retry += 1 }.buttonStyle(.bordered)
                         } else if !loading && items.isEmpty { Text("No titles in this category.").foregroundStyle(.secondary) }
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 12)], spacing: 16) {
                             ForEach(visible) { item in
@@ -142,7 +149,7 @@ struct LibraryView: View {
         }
     }
     private func rows(action: String, category: String? = nil) async throws -> [[String: Any]] {
-        if model.provider.usesHTTP { return try await model.gatewayRows(kind: kind, category: category) }
+        if model.provider.requiresGateway { return try await model.gatewayRows(kind: kind, category: category) }
         let url = try model.provider.apiURL(action: action, category: category)
         let data = try await BoundedTransfer(limit: 32 * 1024 * 1024).fetch(url)
         guard let rows = try JSONSerialization.jsonObject(with: data) as? [[String: Any]], rows.count <= 50000 else { throw AppFailure("The provider returned an invalid or oversized category.") }
@@ -173,7 +180,7 @@ struct LibraryView: View {
             var seen = Set<String>()
             items = result.compactMap { row in
                 guard var item = CatalogItem.parse(row, kind: kind) else { return nil }
-                if model.provider.usesHTTP { item.playbackURL = try? model.gatewayPlaybackURL(id: item.id, kind: kind) }
+                if model.provider.requiresGateway { item.playbackURL = try? model.gatewayPlaybackURL(id: item.id, kind: kind) }
                 return item
             }.filter { seen.insert($0.id).inserted }
             loading = false

@@ -95,7 +95,7 @@ struct PlayerView: View {
                 Button { player.stop(); dismiss() } label: { Label("Back", systemImage: "chevron.left") }
                 Text(item.name).font(.headline).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
             }.padding()
-            if let url = item.playbackURL ?? (provider.usesHTTP ? nil : try? provider.streamURL(item: item)) {
+            if let url = item.playbackURL ?? (provider.requiresGateway ? nil : try? provider.streamURL(item: item)) {
                 PlayerSurface(player: player, url: url, cache: item.kind == .live ? liveBuffer : movieBuffer)
             } else { Text("Invalid provider settings.").frame(maxWidth: .infinity, maxHeight: .infinity) }
             VStack(spacing: 14) {

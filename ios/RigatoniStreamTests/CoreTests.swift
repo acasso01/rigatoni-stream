@@ -35,4 +35,23 @@ final class CoreTests: XCTestCase {
             XCTAssertThrowsError(try AccountAPI.gatewayOrigin(gateway))
         }
     }
+    func testDirectHTTPPolicyOnlyAllowsConfiguredProviderHost() {
+        let settings: [String: Any] = ["NSExceptionDomains": ["provider.example.invalid": ["NSExceptionAllowsInsecureHTTPLoads": true, "NSIncludesSubdomains": false]]]
+        XCTAssertTrue(TransportPolicy.permits(URL(string: "http://provider.example.invalid:8080/movie/1.mkv")!, settings: settings))
+        XCTAssertFalse(TransportPolicy.permits(URL(string: "http://other.example.invalid")!, settings: settings))
+        XCTAssertFalse(TransportPolicy.permits(URL(string: "http://sub.provider.example.invalid")!, settings: settings))
+        XCTAssertFalse(TransportPolicy.permits(URL(string: "http://provider.example.invalid")!, settings: [:]))
+        XCTAssertTrue(TransportPolicy.permits(URL(string: "https://account.example.invalid")!, settings: settings))
+    }
+    func testConfiguredProviderBypassesGatewayInActualBuild() throws {
+        let settings = Bundle.main.object(forInfoDictionaryKey: "NSAppTransportSecurity") as? [String: Any]
+        let domains = settings?["NSExceptionDomains"] as? [String: Any]
+        guard let host = domains?.keys.first else { throw XCTSkip("This build uses the HTTPS gateway for HTTP providers.") }
+        let provider = Provider(server: "http://\(host)", username: "dummy", password: "dummy")
+        XCTAssertTrue(provider.usesHTTP)
+        XCTAssertFalse(provider.requiresGateway)
+        let other = Provider(server: "http://other.example.invalid", username: "dummy", password: "dummy")
+        XCTAssertTrue(other.requiresGateway)
+    }
+
 }

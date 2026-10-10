@@ -25,6 +25,8 @@ jobs:
         run: |
           brew install xcodegen
           xcodegen generate
+          python3 test_http_config.py
+          python3 configure_http.py --host provider.example.invalid
       - name: Install native player
         run: bundle exec pod install
       - name: Compile iPhone app and tests

@@ -2,11 +2,25 @@ import Foundation
 import Combine
 import Security
 
+enum TransportPolicy {
+    static func permits(_ url: URL, settings: [String: Any]? = Bundle.main.object(forInfoDictionaryKey: "NSAppTransportSecurity") as? [String: Any]) -> Bool {
+        if url.scheme?.lowercased() == "https" { return true }
+        guard url.scheme?.lowercased() == "http", let host = url.host?.lowercased(),
+              let exceptions = settings?["NSExceptionDomains"] as? [String: Any],
+              let rule = exceptions[host] as? [String: Any] else { return false }
+        return rule["NSExceptionAllowsInsecureHTTPLoads"] as? Bool == true && rule["NSIncludesSubdomains"] as? Bool != true
+    }
+}
+
 struct Provider: Equatable {
     var server = ""
     var username = ""
     var password = ""
 
+    var requiresGateway: Bool {
+        guard let url = try? baseURL() else { return false }
+        return usesHTTP && !TransportPolicy.permits(url)
+    }
     var usesHTTP: Bool { (try? baseURL().scheme?.lowercased()) == "http" }
     func baseURL() throws -> URL {
         guard let url = URL(string: server.trimmingCharacters(in: .whitespacesAndNewlines)),
