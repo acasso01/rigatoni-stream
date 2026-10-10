@@ -6,6 +6,7 @@ import {randomBytes} from 'node:crypto';
 import {pipeline} from 'node:stream/promises';
 import {StringDecoder} from 'node:string_decoder';
 import {execFile} from 'node:child_process';
+import {createRemuxManager} from './remux.mjs';
 import {pathToFileURL} from 'node:url';
 
 export function publicAddress(address) {
@@ -115,8 +116,14 @@ export async function probeMedia(url) {
 }
 export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.github.io',fetchVault=fetch,upstream=providerRequest,probe=probeMedia,now=Date.now,maxSessions=20}={}) {
   const sessions=new Map();
+  const remux=createRemuxManager({options:supportedProbeOptions,now});
   let probing=false;
-  const clean=()=>{for(const [id,s] of sessions)if(s.expires<=now())sessions.delete(id)};
+  const inspection=async(session,key,input)=>{
+    if(session.inspections?.has(key))return session.inspections.get(key);
+    if(probing)throw Error('probe_busy');probing=true;
+    try{const result=await probe(input);session.inspections??=new Map();if(session.inspections.size<20)session.inspections.set(key,result);return result}finally{probing=false}
+  };
+  const clean=()=>{for(const [id,s] of sessions)if(s.expires<=now()){sessions.delete(id);for(const key of s.compatibleKeys||[])void remux.stop(id+'/'+key)}};
   const json=(res,status,body)=>{res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(body))};
   const server=http.createServer(async(req,res)=>{
     res.setHeader('Cache-Control','no-store');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('X-Content-Type-Options','nosniff');
@@ -153,17 +160,43 @@ export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.gi
         // Provider icons can be HTTP or carry provider credentials. Keep cards but use the existing fallback artwork.
         return json(res,200,{categories,channels,streams,expires_in:14400});
       }
+      if(path.startsWith('/compatible/')&&req.method==='POST'){
+        const match=path.match(/^\/compatible\/([A-Za-z0-9_-]+)\/([A-Za-z0-9_-]+)\/stop$/);
+        if(!match)return json(res,404,{error:'not_found'});
+        const [,id,key]=match;if(!sessions.get(id)?.resources.has(key))return json(res,401,{error:'stream_session_expired'});
+        await remux.stop(id+'/'+key);return json(res,200,{stopped:true});
+      }
+      if(path.startsWith('/compatible/')&&req.method==='GET'){
+        const match=path.match(/^\/compatible\/([A-Za-z0-9_-]+)\/([A-Za-z0-9_-]+)\/(index\.m3u8|init\.mp4|segment-\d{6,}\.m4s)$/);
+        if(!match)return json(res,404,{error:'not_found'});
+        const [,id,key,file]=match,session=sessions.get(id);
+        if(!session?.resources.has(key))return json(res,401,{error:'stream_session_expired'});
+        const input='http://127.0.0.1:'+server.address().port+'/media/'+id+'/'+key;
+        const info=await inspection(session,key,input);
+        const video=info.streams.find(s=>s.type==='video'),audio=info.streams.find(s=>s.type==='audio');
+        if(!['h264','hevc'].includes(video?.codec)||audio&&audio.codec!=='aac')return json(res,409,{error:'compatibility_codec'});
+        session.compatibleKeys??=new Set();session.compatibleKeys.add(key);
+        const data=await remux.read(id+'/'+key,input,video.codec,file);
+        if(file==='index.m3u8'){
+          const prefix='/compatible/'+id+'/'+key+'/';
+          const playlist=data.toString('utf8').split(/\r?\n/).map(line=>line.startsWith('#')?line.replace(/URI="(init\.mp4)"/g,(_m,name)=>'URI="'+prefix+name+'"'):/^segment-\d{6,}\.m4s$/.test(line)?prefix+line:line).join('\n');
+          res.writeHead(200,{'Content-Type':'application/vnd.apple.mpegurl'});res.end(playlist);return;
+        }
+        const type=file==='init.mp4'?'video/mp4':'video/iso.segment';
+        const range=req.headers.range;
+        if(range){
+          const m=range.match(/^bytes=(\d*)-(\d*)$/);if(!m||!m[1]&&!m[2])return json(res,400,{error:'invalid_range'});
+          const start=m[1]?Number(m[1]):Math.max(0,data.length-Number(m[2])),end=m[1]&&m[2]?Math.min(Number(m[2]),data.length-1):data.length-1;
+          if(start>end||start>=data.length){res.writeHead(416,{'Content-Range':'bytes */'+data.length});res.end();return}
+          const slice=data.subarray(start,end+1);res.writeHead(206,{'Content-Type':type,'Content-Length':slice.length,'Content-Range':'bytes '+start+'-'+end+'/'+data.length,'Accept-Ranges':'bytes'});res.end(slice);return;
+        }
+        res.writeHead(200,{'Content-Type':type,'Content-Length':data.length,'Accept-Ranges':'bytes'});res.end(data);return;
+      }
       if(path.startsWith('/inspect/')&&req.method==='GET') {
         const [, ,id,key]=path.split('/');const session=sessions.get(id);
         if(!session?.resources.has(key))return json(res,401,{error:'stream_session_expired'});
-        if(probing)return json(res,429,{error:'probe_busy'});
-        if(session.inspections?.has(key))return json(res,200,session.inspections.get(key));
-        probing=true;
-        try{
-          const result=await probe('http://127.0.0.1:'+server.address().port+'/media/'+id+'/'+key);
-          session.inspections??=new Map();if(session.inspections.size<20)session.inspections.set(key,result);
-          return json(res,200,result);
-        }finally{probing=false}
+        const result=await inspection(session,key,'http://127.0.0.1:'+server.address().port+'/media/'+id+'/'+key);
+        return json(res,200,result);
       }
       if(path.startsWith('/media/')&&req.method==='GET') {
         const [, ,id,key]=path.split('/');const session=sessions.get(id);const url=session?.resources.get(key);
@@ -183,10 +216,11 @@ export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.gi
       return json(res,404,{error:'not_found'});
     } catch(error) {
       if(res.headersSent){res.destroy();return}
-      const known=['unsafe_target','upstream_timeout','upstream_unavailable','provider_connection_failed','response_too_large','catalog_too_large','invalid_playlist','session_resource_limit','media_probe_failed','media_probe_unavailable','media_probe_timeout','media_probe_extension','media_probe_download','media_probe_invalid'];
-      return json(res,502,{error:known.includes(error.message)?error.message:'gateway_request_failed'});
+      const known=['unsafe_target','upstream_timeout','upstream_unavailable','provider_connection_failed','response_too_large','catalog_too_large','invalid_playlist','session_resource_limit','media_probe_failed','media_probe_unavailable','media_probe_timeout','media_probe_extension','media_probe_download','media_probe_invalid','compatibility_busy','compatibility_failed','compatibility_timeout','compatibility_segment_expired','probe_busy'];
+      return json(res,error.message==='probe_busy'?429:502,{error:known.includes(error.message)?error.message:'gateway_request_failed'});
     }
   });
+  server.on('close',()=>{void remux.close()});server.closeCompatibility=()=>remux.close();
   server.requestTimeout=30000;server.headersTimeout=15000;
   return server;
 }

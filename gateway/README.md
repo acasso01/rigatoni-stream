@@ -28,6 +28,10 @@ The gateway URL is kept only in the current form. Re-enter it after reloading. A
 
 When native playback fails but its playlist is reachable, the player asks the gateway to inspect the media with FFprobe. This reports video/audio codecs and the actual resolution without reducing quality. FFprobe accesses only the gateway's opaque relay paths, so nested playlists, segments and keys retain the same destination checks. One probe can run at a time, with a 20-second process timeout; results for up to 20 channels per session are cached. Output contains only codec/resolution fields, and provider URLs, metadata and stderr are never returned or logged. The Docker image includes FFmpeg for this check. This diagnoses compatibility; it does not add new Safari decoders or promise playback of every HD/4K stream.
 
+After a playback failure, **Try compatible playback (same quality)** repackages supported H.264/HEVC video and AAC audio into fresh fragmented-MP4 HLS. Both video and audio use codec copy: resolution, frame rate and encoded quality are preserved, including a provider's 4K stream. This can address packaging/timestamp compatibility but does not fix all damaged streams or unsupported codecs. It may take 10–30 seconds to start while complete segments arrive. HEVC is tagged `hvc1` for the MP4 output. Other video/audio codecs are rejected with a clear message rather than silently reduced in quality.
+
+One compatible stream runs at a time on the Pi. Segments occupy a rolling RAM buffer in Docker's bounded `/tmp` tmpfs, with no recording on disk. Old segments are deleted, and jobs stop when leaving the player, after 45 seconds without requests, or when the four-hour playback session expires. A five-second cleanup sweep stops jobs above 160 MiB of files; tmpfs has a hard 192 MiB cap and the container retains its 512 MiB memory cap. FFmpeg reads only the existing checked relay, process arguments contain only temporary opaque tickets, and process output is discarded. Rebuilding/restarting clears all temporary buffers and tickets.
+
 ## How credentials are protected
 
 The browser sends its Supabase access token to the private gateway in an Authorization header. The gateway uses that token to call the existing `provider-vault` Edge Function. Only that signed-in user's provider is retrieved. It needs the public Supabase key, never a service-role key or encryption secret. Credentials are used in memory to contact the provider, never written to disk or logged.
@@ -54,6 +58,8 @@ node tests/playback.mjs
 node tests/catalog.mjs
 # Requires FFmpeg/FFprobe locally; generates a dummy HD HLS stream:
 node tests/media-probe.mjs
+# Requires FFmpeg/FFprobe; tests generated 1080p and 4K H264/AAC media:
+node tests/remux.mjs
 ```
 
 These tests use dummy provider data and mock upstream streams, not a real subscription. Deployment and real playback require running the Pi setup and testing with your provider.

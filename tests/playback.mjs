@@ -11,6 +11,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
 const start=()=>{void vm.runInContext("play({stream_id:7,name:'Dummy'})",ctx)};
 reply=new Response(JSON.stringify({error:'stream_unavailable'}),{status:502,headers:{'content-type':'application/json'}});
 start();get('video').error={code:4};get('video').onerror();await tick();assert.match(get('playstatus').textContent,/Media error 4/);assert.match(get('playstatus').textContent,/provider refused/);
+void get('compatible').onclick();assert.match(get('video').src,/\/compatible\/session\/resource\/index\.m3u8$/);vm.runInContext('stopVideo()',ctx);await tick();assert.ok(requests.some(r=>r.options.method==='POST'&&r.url.endsWith('/stop')));
 reply=new Response('#EXTM3U\n#EXTINF:4,\n/media/session/segment',{headers:{'content-type':'application/vnd.apple.mpegurl'}});
 start();get('video').error={code:2};get('video').onerror();await tick();assert.match(get('playstatus').textContent,/playlist is reachable/);
 reply=new Response(JSON.stringify({error:'stream_session_expired'}),{status:401});

@@ -7,6 +7,8 @@ services:
     environment:
       SUPABASE_URL: https://edjejdftwjiasfhpffmc.supabase.co
       SUPABASE_ANON_KEY: sb_publishable_w3-KHDqTcBEsLTRNwdRpgg_U9xugdH2
+    tmpfs:
+      - /tmp:size=192m,mode=1777
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
