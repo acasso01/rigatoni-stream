@@ -120,8 +120,12 @@ export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.gi
   let probing=false;
   const inspection=async(session,key,input)=>{
     if(session.inspections?.has(key))return session.inspections.get(key);
+    if(session.pendingInspections?.has(key))return session.pendingInspections.get(key);
     if(probing)throw Error('probe_busy');probing=true;
-    try{const result=await probe(input);session.inspections??=new Map();if(session.inspections.size<20)session.inspections.set(key,result);return result}finally{probing=false}
+    session.pendingInspections??=new Map();
+    const pending=Promise.resolve().then(()=>probe(input)).then(result=>{session.inspections??=new Map();if(session.inspections.size<20)session.inspections.set(key,result);return result}).finally(()=>{probing=false;session.pendingInspections.delete(key)});
+    session.pendingInspections.set(key,pending);
+    return pending;
   };
   const clean=()=>{for(const [id,s] of sessions)if(s.expires<=now()){sessions.delete(id);for(const key of s.compatibleKeys||[])void remux.stop(id+'/'+key)}};
   const json=(res,status,body)=>{res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(body))};
