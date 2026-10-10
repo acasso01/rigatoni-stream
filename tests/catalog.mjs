@@ -55,3 +55,11 @@ vm.runInContext("showTab('live');showTab('movies')",context);assert.equal(movieR
 vm.runInContext("moviesLoaded=false;moviesPath=null;movieError='';moviesLoading=null;showTab('movies')",context);await vm.runInContext('loadMovies()',context);assert.match(get('rows').children[0].textContent,/Update the Pi/);assert.equal(vm.runInContext('moviesLoading',context),null);
 window.__rigatoniClearProvider();assert.equal(vm.runInContext('movies.length',context),0);
 console.log('PASS 50,000 movies: lazy load/cache, bounded cards, search, namespaced favorites, opaque MP4 playback, unavailable gateway retry and delete cleanup');
+
+for(const [error,expected] of [['catalog_too_large',/item limit/],['response_too_large',/response-size limit/],['session_resource_limit',/resource limit/],['provider_connection_failed',/provider rejected/],['not_found',/Update the Pi/],['secret provider credentials must never be echoed',/could not load/]]){
+ context.fetch=async()=>new Response(JSON.stringify({error}),{status:502});
+ vm.runInContext("credentials={base:'https://provider.example.invalid',user:'dummy',pass:'dummy'};gatewayStreams={};moviesPath='https://homepi.test.ts.net/api/movies/test';moviesLoading=null;moviesLoaded=false;tab='movies'",context);
+ await vm.runInContext('loadMovies()',context);
+ assert.match(get('rows').children[0].textContent,expected);assert.match(get('rows').children[0].textContent,/HTTP 502/);assert.ok(!get('rows').children[0].textContent.includes('secret provider credentials'));assert.equal(vm.runInContext('moviesLoading',context),null);
+}
+console.log('PASS movie failure reasons distinguish limits, provider failures and outdated gateways without reflecting untrusted error strings');
