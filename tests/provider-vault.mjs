@@ -9,7 +9,7 @@ async function setup({saved=null,protocol='https:',port='',failure=0,gatewayResp
  const writes=[]; const document={getElementById:element,querySelectorAll:()=>[]};
  const window={scrollTo(){}}; const location={protocol,port,assign(){}};
  const storage={getItem:()=>null,setItem:(...args)=>writes.push(args)};
- vm.runInNewContext(scripts[0],{document,window,location,localStorage:storage,URL,Set,confirm:()=>true,fetch:()=>{throw Error('Unexpected provider request')}});
+ vm.runInNewContext(scripts[0],{document,window,location,localStorage:storage,URL,Set,setTimeout,clearTimeout,confirm:()=>true,fetch:()=>{throw Error('Unexpected provider request')}});
  const requests=[]; const fetch=async(url,options)=>{requests.push({url,...options});if(url.endsWith('/api/connect'))return{ok:true,json:async()=>gatewayResponse};if(failure)return{ok:false,status:failure,json:async()=>({error:'vault_failure'})};if(options.method==='POST'){const b=JSON.parse(options.body);saved={saved:true,...b};return{ok:true,json:async()=>({saved:true})}}if(options.method==='DELETE'){saved=null;return{ok:true,json:async()=>({deleted:true})}}return{ok:true,json:async()=>saved||{saved:false}}};
  const session={access_token:'test-session',user:{id:'test-user',email:'test@example.invalid'}};
  const client={auth:{getSession:async()=>({data:{session}})},from:()=>({select:async()=>({data:[]})})};
