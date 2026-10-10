@@ -63,7 +63,7 @@ function showSession(session) {
   $('signedin').classList.remove('hidden');
   $('identity').textContent = 'Signed in as ' + (session.user?.email || 'your account');
   $('title').textContent = 'You’re signed in';
-  $('description').textContent = 'Connect your IPTV provider, save its password securely, and enjoy your channels.';
+  $('description').textContent = 'Open your saved provider and gateway, then browse live TV and movies.';
   status('');
 }
 function friendlyError(error) {

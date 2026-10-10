@@ -20,11 +20,11 @@ Use port 8443 to avoid replacing an existing Tailscale HTTPS service on port 443
 
 1. Turn on Tailscale on your iPhone/Mac.
 2. Open https://acasso01.github.io/rigatoni-stream/xtream.html and sign in.
-3. Enter your authorized provider URL, username, and password and click **Save provider securely**. Saving does not contact the provider.
+3. Enter your authorized provider URL, username, and password and enter your gateway URL, then click **Save provider & gateway**. Saving does not contact the provider.
 4. Enter the Pi's exact HTTPS URL (including `:8443`) in **HTTPS gateway URL**.
 5. Click **Connect & Watch**. The gateway uses the provider saved in your account. Save again before connecting if you changed the form.
 
-The gateway URL is kept only in the current form. Re-enter it after reloading. A browser may request local-network permission; allow it for this site to reach your private gateway. Safari/iPhone native HLS is the first playback target, matching the existing player. Codec support, subscription limits, and provider availability still apply. There is no transcoding; movies and series are unchanged.
+The gateway URL is stored as a non-secret preference on your Supabase account and restored after sign-in. Provider credentials continue to use the deployed encrypted provider-vault function. A browser may request local-network permission; allow it for this site to reach your private gateway. Safari/iPhone native HLS is the first playback target, matching the existing player. Codec support, subscription limits, and provider availability still apply. Movies load on demand from the provider’s VOD catalog, with search, category paging, posters, favorites, and native video playback. Movie and poster URLs use opaque relay tickets; seeking forwards byte-range requests to the provider. Browser support depends on the movie container and codecs; this does not transcode unsupported files. Series remain a placeholder.
 
 When native playback fails but its playlist is reachable, the player asks the gateway to inspect the media with FFprobe. This reports video/audio codecs and the actual resolution without reducing quality. FFprobe accesses only the gateway's opaque relay paths, so nested playlists, segments and keys retain the same destination checks. One probe can run at a time, with a 20-second process timeout; results for up to 20 channels per session are cached. Output contains only codec/resolution fields, and provider URLs, metadata and stderr are never returned or logged. The Docker image includes FFmpeg for this check. This diagnoses compatibility; it does not add new Safari decoders or promise playback of every HD/4K stream.
 
@@ -66,7 +66,7 @@ These tests use dummy provider data and mock upstream streams, not a real subscr
 
 To update an existing gateway checkout, run `git pull --ff-only`, then `docker compose up -d --build` from its gateway directory. To stop it, run `docker compose down`. This does not change Home Assistant, Samba, MQTT, or your port-8090 Pi test server.
 
-Large catalogs are parsed incrementally and only the fields used by the player are retained. Limits are 128 MiB of upstream JSON, 100,000 live channels, 10,000 categories and 2 MiB per item. The container has a 512 MiB memory cap. Oversized or malformed responses are rejected without logging their contents.
+Large catalogs are parsed incrementally and only the fields used by the player are retained. Limits are 128 MiB of upstream JSON, 100,000 live channels, 50,000 movies per session, 10,000 categories and 2 MiB per item. The container has a 512 MiB memory cap. Oversized or malformed responses are rejected without logging their contents.
 
 If you changed the host port to 8788, preserve that mapping when pulling updates. The restore below resets only the gateway Compose file; reapply any other customizations before starting it:
 

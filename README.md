@@ -12,3 +12,5 @@ Interactive IPTV PWA design preview. No live streams, provider accounts, or copy
 - `manifest.webmanifest` — PWA manifest
 - `sw.js` — offline cache
 - `icon-*.png`, `icon.svg` — app icons
+
+Movies are loaded on demand from the provider’s VOD catalog through the private gateway, with bounded category paging, search, movie favorites, posters and byte-range seeking. Save provider & gateway stores the gateway as a non-secret Supabase user preference; existing provider credentials stay in the encrypted provider-vault function. Rebuild the Pi gateway to enable the movie endpoint.
