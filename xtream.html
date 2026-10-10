@@ -15,21 +15,68 @@ main{max-width:1600px;margin:auto}.hero{position:relative;min-height:300px;displ
 <div class="content"><div id="searchwrap" class="hide"><input class="searchbar" id="search" type="search" placeholder="Search channels…" autocomplete="off"><p id="count"></p></div><div id="rows"></div><p class="footnote">Rigatoni Stream · Private development preview. Channel availability and playback depend on your provider.</p></div></div></main>
 <div id="watch" class="hide"><div id="watchbar"><button class="btn ghost" id="close">← Back</button><strong id="playing"></strong><button class="btn ghost" id="fullscreen">⛶</button></div><video id="video" controls playsinline autoplay></video><small id="playstatus">Loading stream…</small></div>
 <script>
-const $=id=>document.getElementById(id);let gatewayStreams=null,credentials=null,channels=[],categories=[],tab='home';const favorites=new Set(JSON.parse(localStorage.getItem('rigatoni-favorites')||'[]'));window.__rigatoniFavorites=favorites;const status=s=>$('status').textContent=s;
+const $=id=>document.getElementById(id);let gatewayStreams=null,credentials=null,channels=[],categories=[],tab='home',categoryPage=0,searchTimer;const favorites=new Set(JSON.parse(localStorage.getItem('rigatoni-favorites')||'[]'));window.__rigatoniFavorites=favorites;const status=s=>$('status').textContent=s;
 function endpoint(action){const u=new URL(credentials.base+'/player_api.php');u.searchParams.set('username',credentials.user);u.searchParams.set('password',credentials.pass);u.searchParams.set('action',action);return u}
 async function load(action){const local=location.protocol==='http:'&&location.port==='8090';const r=await fetch(local?'/api':endpoint(action),local?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({server:credentials.base,username:credentials.user,password:credentials.pass,action}),cache:'no-store'}:{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);return r.json()}
 $('form').onsubmit=async e=>{e.preventDefault();const password=$('pass').value;try{const url=new URL($('server').value.trim());if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash)throw Error('Enter only the provider server URL.');if(location.protocol==='https:'&&url.protocol==='http:'&&!$('gateway').value.trim())throw Error('Playback requires the HTTPS gateway on GitHub Pages. You can still save this HTTP provider securely, or use the private Raspberry Pi test site.');credentials={base:url.href.replace(/\/+$/,''),user:$('user').value.trim(),pass:password};$('connect').disabled=true;status('Connecting to your channels…');gatewayStreams=null;let cats,streams;if($('gateway').value.trim()){if(!window.__rigatoniGatewayConnect)throw Error('Sign in before using the gateway.');const result=await window.__rigatoniGatewayConnect();cats=result.categories;streams=result.channels;gatewayStreams=result.streams;}else [cats,streams]=await Promise.all([load('get_live_categories'),load('get_live_streams')]);if(!Array.isArray(streams))throw Error('Unexpected channel response');categories=Array.isArray(cats)?cats:[];channels=streams;$('pass').value='';$('login').classList.add('hide');$('app').classList.remove('hide');$('account').textContent='Connected ✓';showTab('home')}catch(err){credentials=null;gatewayStreams=null;status('Connection failed: '+err.message)}finally{$('connect').disabled=false}};
-$('account').onclick=()=>{if(credentials){if(confirm('Disconnect from this provider?')){credentials=null;gatewayStreams=null;channels=[];$('app').classList.add('hide');$('login').classList.remove('hide');$('account').textContent='Connect';stopVideo()}}else $('login').scrollIntoView()};
-function showTab(t){tab=t;document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===t));$('searchwrap').classList.toggle('hide',t==='home'||t==='movies'||t==='series');render();window.scrollTo(0,0)}
-document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));$('browse').onclick=()=>showTab('live');$('mylist').onclick=()=>showTab('favorites');$('search').oninput=render;
+$('account').onclick=()=>{if(credentials){if(confirm('Disconnect from this provider?')){credentials=null;gatewayStreams=null;channels=[];categories=[];$('rows').replaceChildren();$('app').classList.add('hide');$('login').classList.remove('hide');$('account').textContent='Connect';stopVideo()}}else $('login').scrollIntoView()};
+function showTab(t){clearTimeout(searchTimer);categoryPage=0;tab=t;document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===t));$('searchwrap').classList.toggle('hide',t==='home'||t==='movies'||t==='series');render();window.scrollTo(0,0)}
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));$('browse').onclick=()=>showTab('live');$('mylist').onclick=()=>showTab('favorites');$('search').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{categoryPage=0;render()},180)};
 function makeTile(c){const b=document.createElement('div');b.className='tile';b.style.cursor='pointer';b.onclick=()=>play(c);if(c.stream_icon){const img=document.createElement('img');img.src=c.stream_icon;img.alt='';img.loading='lazy';img.onerror=()=>{img.remove();const d=document.createElement('div');d.className='fallback';d.textContent='▶';b.prepend(d)};b.append(img)}else{const d=document.createElement('div');d.className='fallback';d.textContent='▶';b.append(d)}const n=document.createElement('span');n.className='name';n.textContent=c.name||'Untitled';b.append(n);const f=document.createElement('button');f.className='fav'+(favorites.has(String(c.stream_id))?' saved':'');f.textContent=favorites.has(String(c.stream_id))?'♥':'♡';f.title='Toggle favorite';f.onclick=e=>{e.stopPropagation();const id=String(c.stream_id);if(favorites.has(id))favorites.delete(id);else favorites.add(id);localStorage.setItem('rigatoni-favorites',JSON.stringify([...favorites]));if(window.__rigatoniFavChanged)window.__rigatoniFavChanged(id,favorites.has(id),c.name||'');render()};b.append(f);return b}
-function row(title,items){if(!items.length)return;const wrap=document.createElement('section');const head=document.createElement('div');head.className='rowhead';const h=document.createElement('h2');h.textContent=title;head.append(h);const count=document.createElement('span');count.textContent=items.length+' channels';head.append(count);wrap.append(head);const rail=document.createElement('div');rail.className='rail';for(const c of items.slice(0,45))rail.append(makeTile(c));wrap.append(rail);$('rows').append(wrap)}
-function render(){const root=$('rows');root.replaceChildren();if(tab==='movies'||tab==='series'){const p=document.createElement('p');p.className='empty';p.textContent=(tab==='movies'?'Movies':'Series')+' coming next — Live TV is ready now.';root.append(p);return}const q=$('search').value.trim().toLowerCase();let list=channels.filter(c=>String(c.name||'').toLowerCase().includes(q));if(tab==='favorites')list=list.filter(c=>favorites.has(String(c.stream_id)));$('count').textContent=list.length+' matching channels';if(!list.length){const p=document.createElement('p');p.className='empty';p.textContent=tab==='favorites'?'Tap ♡ on any channel to add it to My List.':'No channels found.';root.append(p);return}if(tab==='favorites'){row('Your Favorites',list);return}if(q){row('Search Results',list);return}if(tab==='home'){const saved=channels.filter(c=>favorites.has(String(c.stream_id)));row('My List',saved);row('Explore Live TV',list.slice(0,45));for(const cat of categories.slice(0,10)){const items=list.filter(c=>String(c.category_id)===String(cat.category_id));row(cat.category_name||'Channels',items)}return}row('All Live Channels',list.slice(0,45));for(const cat of categories){const items=list.filter(c=>String(c.category_id)===String(cat.category_id));row(cat.category_name||'Channels',items)}}
+const CARDS_PER_ROW=24,CATEGORIES_PER_PAGE=6;
+function pager(previous,next,label){
+  const controls=document.createElement('div');controls.className='actions';
+  const back=document.createElement('button');back.className='btn ghost';back.textContent='← Previous';back.disabled=!previous;back.onclick=previous;
+  const count=document.createElement('span');count.textContent=label;count.setAttribute('role','status');
+  const forward=document.createElement('button');forward.className='btn ghost';forward.textContent='Next →';forward.disabled=!next;forward.onclick=next;
+  controls.append(back,count,forward);return controls;
+}
+function row(title,items){
+  if(!items.length)return;
+  const wrap=document.createElement('section'),head=document.createElement('div');head.className='rowhead';
+  const h=document.createElement('h2');h.textContent=title;head.append(h);
+  const count=document.createElement('span');count.textContent=items.length+' channels';head.append(count);wrap.append(head);
+  const rail=document.createElement('div');rail.className='rail';wrap.append(rail);
+  let page=0,controls;
+  const draw=()=>{
+    rail.replaceChildren();const start=page*CARDS_PER_ROW;
+    for(const c of items.slice(start,start+CARDS_PER_ROW))rail.append(makeTile(c));
+    rail.scrollLeft=0;
+    if(controls)controls.remove();
+    if(items.length>CARDS_PER_ROW){
+      controls=pager(page>0?()=>{page--;draw()}:null,start+CARDS_PER_ROW<items.length?()=>{page++;draw()}:null,(start+1)+'–'+Math.min(start+CARDS_PER_ROW,items.length)+' of '+items.length);
+      wrap.append(controls);
+    }
+  };
+  draw();$('rows').append(wrap);
+}
+function render(){
+  const root=$('rows');root.replaceChildren();
+  if(tab==='movies'||tab==='series'){const p=document.createElement('p');p.className='empty';p.textContent=(tab==='movies'?'Movies':'Series')+' coming next — Live TV is ready now.';root.append(p);return}
+  const q=$('search').value.trim().toLowerCase();
+  const list=channels.filter(c=>(!q||String(c.name||'').toLowerCase().includes(q))&&(tab!=='favorites'||favorites.has(String(c.stream_id))));
+  $('count').textContent=list.length+' matching channels';
+  if(!list.length){const p=document.createElement('p');p.className='empty';p.textContent=tab==='favorites'?'Tap ♡ on any channel to add it to My List.':'No channels found.';root.append(p);return}
+  if(tab==='favorites'){row('Your Favorites',list);return}
+  if(q){row('Search Results',list);return}
+  if(tab==='home')row('My List',channels.filter(c=>favorites.has(String(c.stream_id))));
+  row(tab==='home'?'Explore Live TV':'All Live Channels',list);
+  // Group once, then mount only six category rails. Paging replaces cards instead of accumulating them.
+  const groups=new Map();
+  for(const c of list){const id=String(c.category_id);if(!groups.has(id))groups.set(id,[]);groups.get(id).push(c)}
+  const available=categories.filter(c=>groups.has(String(c.category_id)));
+  const pages=Math.ceil(available.length/CATEGORIES_PER_PAGE);categoryPage=Math.min(categoryPage,Math.max(0,pages-1));
+  for(const cat of available.slice(categoryPage*CATEGORIES_PER_PAGE,(categoryPage+1)*CATEGORIES_PER_PAGE))row(cat.category_name||'Channels',groups.get(String(cat.category_id)));
+  if(pages>1){
+    const change=delta=>()=>{categoryPage+=delta;render();root.scrollIntoView({block:'start'})};
+    root.append(pager(categoryPage>0?change(-1):null,categoryPage+1<pages?change(1):null,'Categories '+(categoryPage+1)+' of '+pages));
+  }
+}
 function stopVideo(){const v=$('video');v.pause();v.removeAttribute('src');v.load();$('watch').classList.add('hide')}
 $('close').onclick=stopVideo;$('fullscreen').onclick=()=>{const v=$('video');if(v.webkitEnterFullscreen)v.webkitEnterFullscreen();else if(v.requestFullscreen)v.requestFullscreen()};
 window.__rigatoniUseProvider=({base,user,pass})=>{$('server').value=base;$('user').value=user;$('pass').value=pass;status(location.protocol==='https:'&&new URL(base).protocol==='http:'?'Provider successfully loaded. Playback requires the HTTPS gateway on GitHub Pages. No HTTP connection was attempted. The private Raspberry Pi test site still works.':'Provider successfully loaded. Choose Connect & Watch when ready.');};
 window.__rigatoniProvider=()=>{const url=new URL($('server').value.trim());if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash)throw Error('Enter only the provider server URL.');const user=$('user').value.trim(),pass=$('pass').value||(credentials&&credentials.base===url.href.replace(/\/+$/,'')&&credentials.user===user?credentials.pass:'');if(!user||!pass)throw Error('Enter the provider username and password.');return{base:url.href.replace(/\/+$/,''),user,pass};};
-window.__rigatoniClearProvider=()=>{credentials=null;gatewayStreams=null;channels=[];categories=[];['server','user','pass'].forEach(id=>$(id).value='');$('app').classList.add('hide');$('login').classList.remove('hide');$('account').textContent='Connect';stopVideo();status('Saved provider deleted. Enter a provider to save or connect.');};
+window.__rigatoniClearProvider=()=>{credentials=null;gatewayStreams=null;channels=[];categories=[];$('rows').replaceChildren();['server','user','pass'].forEach(id=>$(id).value='');$('app').classList.add('hide');$('login').classList.remove('hide');$('account').textContent='Connect';stopVideo();status('Saved provider deleted. Enter a provider to save or connect.');};
 async function play(c){if(!credentials)return;const u=gatewayStreams?new URL(gatewayStreams[String(c.stream_id)]):new URL(credentials.base+'/live/'+encodeURIComponent(credentials.user)+'/'+encodeURIComponent(credentials.pass)+'/'+encodeURIComponent(c.stream_id)+'.m3u8');$('playing').textContent=c.name||'Live TV';$('watch').classList.remove('hide');const v=$('video');v.pause();v.src=u.href;v.load();$('playstatus').textContent='Connecting to live stream…';try{await v.play();$('playstatus').textContent='Now playing'}catch(err){$('playstatus').textContent='Playback issue: '+err.message}}
 </script>
 <script type="module">

@@ -5,7 +5,7 @@ const html=fs.readFileSync(new URL('../xtream.html',import.meta.url),'utf8');
 const scripts=[...html.matchAll(/<script(?: type="module")?>([\s\S]*?)<\/script>/g)].map(m=>m[1]);
 const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
 async function setup({saved=null,protocol='https:',port='',failure=0,gatewayResponse=null}={}){
- const elements=new Map(); const element=id=>{if(!elements.has(id))elements.set(id,{value:'',textContent:'',disabled:false,classList:{add(){},remove(){},toggle(){}},pause(){},load(){},removeAttribute(){},scrollIntoView(){},requestSubmit(){throw Error('Unexpected automatic connection')}});return elements.get(id)};
+ const elements=new Map(); const element=id=>{if(!elements.has(id))elements.set(id,{value:'',textContent:'',disabled:false,classList:{add(){},remove(){},toggle(){}},pause(){},load(){},removeAttribute(){},replaceChildren(){},scrollIntoView(){},requestSubmit(){throw Error('Unexpected automatic connection')}});return elements.get(id)};
  const writes=[]; const document={getElementById:element,querySelectorAll:()=>[]};
  const window={scrollTo(){}}; const location={protocol,port,assign(){}};
  const storage={getItem:()=>null,setItem:(...args)=>writes.push(args)};
