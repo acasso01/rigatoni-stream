@@ -1,12 +1,12 @@
 {
   "name": "Rigatoni Stream",
   "short_name": "Rigatoni",
-  "description": "Rigatoni Stream \u2014 interactive IPTV design preview. No live streams included.",
+  "description": "Your personal home for live TV. Bring your own authorized IPTV provider.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#111116",
-  "theme_color": "#111116",
+  "background_color": "#09090b",
+  "theme_color": "#09090b",
   "icons": [
     {
       "src": "icon-192.png",
