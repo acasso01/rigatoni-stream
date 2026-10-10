@@ -4,7 +4,7 @@ import MobileVLCKit
 
 @MainActor
 final class NativePlayer: ObservableObject {
-    let engine = VLCMediaPlayer(options: ["--quiet", "--no-video-title-show"])!
+    let engine = VLCMediaPlayer(options: ["--quiet", "--no-video-title-show"])
     @Published var state = "Connecting…"
     @Published var playing = false
     @Published var seekable = false
@@ -26,7 +26,7 @@ final class NativePlayer: ObservableObject {
         engine.stop()
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         try? AVAudioSession.sharedInstance().setActive(true)
-        let media = VLCMedia(url: url)!
+        let media = VLCMedia(url: url)
         media.addOptions(["network-caching": cache])
         engine.media = media; openedAt = Date(); engine.play()
         timer?.invalidate()

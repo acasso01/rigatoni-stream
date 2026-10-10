@@ -125,15 +125,17 @@ final class AccountAPI {
     private let root = URL(string: "https://edjejdftwjiasfhpffmc.supabase.co")!
     private let publicKey = "sb_publishable_w3-KHDqTcBEsLTRNwdRpgg_U9xugdH2"
     private(set) var session: AuthSession?
-    private let http: URLSession = {
+    private let http: URLSession
+    init(http: URLSession? = nil) {
+        if let http { self.http = http; return }
         let config = URLSessionConfiguration.ephemeral
         config.urlCache = nil
         config.httpCookieStorage = nil
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 60
-        return URLSession(configuration: config)
-    }()
+        self.http = URLSession(configuration: config)
+    }
     private func send(path: String, method: String = "GET", body: [String: Any]? = nil, authenticated: Bool = true) async throws -> Data {
         if authenticated { try await refreshIfNeeded() }
         var request = URLRequest(url: root.appendingPathComponent(path.components(separatedBy: "?")[0]))
