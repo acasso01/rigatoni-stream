@@ -112,19 +112,19 @@ function loadHlsLibrary(){
   }).catch(error=>{hlsLibrary=null;throw error});
   return hlsLibrary;
 }
-function stopVideo(){activeHls?.destroy();activeHls=null;$('alternate').classList.add('hide');if(activeCompatibility){void fetch(activeCompatibility.replace('/index.m3u8','/stop'),{method:'POST',cache:'no-store',keepalive:true}).catch(()=>{});activeCompatibility=null}$('compatible').classList.add('hide');playbackAttempt++;playbackDiagnostic++;clearTimeout(playbackTimer);playbackProbe?.abort();const v=$('video');v.onerror=null;v.onplaying=null;v.onwaiting=null;v.disableRemotePlayback=false;v.pause();v.removeAttribute('src');v.load();$('watch').classList.add('hide')}
+function stopVideo(preserveCompatibility=null){activeHls?.destroy();activeHls=null;$('alternate').classList.add('hide');if(activeCompatibility){if(activeCompatibility!==preserveCompatibility)void fetch(activeCompatibility.replace('/index.m3u8','/stop'),{method:'POST',cache:'no-store',keepalive:true}).catch(()=>{});activeCompatibility=null}$('compatible').classList.add('hide');playbackAttempt++;playbackDiagnostic++;clearTimeout(playbackTimer);playbackProbe?.abort();const v=$('video');v.onerror=null;v.onplaying=null;v.onwaiting=null;v.disableRemotePlayback=false;v.pause();v.removeAttribute('src');v.load();$('watch').classList.add('hide')}
 $('close').onclick=stopVideo;$('fullscreen').onclick=()=>{const v=$('video');if(v.webkitEnterFullscreen)v.webkitEnterFullscreen();else if(v.requestFullscreen)v.requestFullscreen()};
 window.__rigatoniUseProvider=({base,user,pass})=>{$('server').value=base;$('user').value=user;$('pass').value=pass;status(location.protocol==='https:'&&new URL(base).protocol==='http:'?'Provider successfully loaded. Playback requires the HTTPS gateway on GitHub Pages. No HTTP connection was attempted. The private Raspberry Pi test site still works.':'Provider successfully loaded. Choose Connect & Watch when ready.');};
 window.__rigatoniProvider=()=>{const url=new URL($('server').value.trim());if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash)throw Error('Enter only the provider server URL.');const user=$('user').value.trim(),pass=$('pass').value||(credentials&&credentials.base===url.href.replace(/\/+$/,'')&&credentials.user===user?credentials.pass:'');if(!user||!pass)throw Error('Enter the provider username and password.');return{base:url.href.replace(/\/+$/,''),user,pass};};
 window.__rigatoniClearProvider=()=>{credentials=null;gatewayStreams=null;channels=[];categories=[];$('rows').replaceChildren();['server','user','pass','gateway'].forEach(id=>$(id).value='');movies=[];movieCategories=[];movieStreams=null;moviesPath=null;moviesLoaded=false;moviesLoading=null;movieError='';movieCategoryMode=false;movieCategory='';$('app').classList.add('hide');$('login').classList.remove('hide');$('account').textContent='Connect';stopVideo();status('Saved provider deleted. Enter a provider to save or connect.');};
-async function diagnosePlayback(url,attempt,reason){
+async function diagnosePlayback(url,attempt,reason,isMovie=false){
   if(attempt!==playbackAttempt)return;
   $('playstatus').textContent=reason+' Checking gateway…';
   const diagnostic=++playbackDiagnostic;playbackProbe?.abort();const controller=new AbortController();playbackProbe=controller;
   let timeout=setTimeout(()=>controller.abort(),8000);
   let detail;
   try{
-    const response=await fetch(url,{cache:'no-store',signal:controller.signal});
+    const response=await fetch(url,{cache:'no-store',signal:controller.signal,...(isMovie?{headers:{Range:'bytes=0-65535'}}:{})});
     if(!response.ok){
       const known={probe_busy:'Another channel is being inspected. Wait a moment and retry.',compatibility_busy:'Another compatible stream is running. Close it and wait 45 seconds, then retry.',compatibility_codec:'This stream requires codec conversion; same-quality repackaging cannot play it yet.',compatibility_failed:'The gateway could not repackage this stream.',compatibility_timeout:'The repackaged stream did not become ready in time.',compatibility_segment_expired:'A repackaged segment expired. Retry this channel.',stream_session_expired:'Playback session expired. Disconnect and reconnect.',stream_unavailable:'The provider refused or could not supply this channel. Try another channel.',unsafe_target:'The provider redirected to a blocked network address.',upstream_unavailable:'The Pi could not reach the provider stream.',upstream_timeout:'The provider stream timed out.',invalid_playlist:'The provider did not return a valid HLS playlist.'};
       const data=await response.json().catch(()=>({}));
@@ -155,7 +155,18 @@ async function diagnosePlayback(url,attempt,reason){
 
       }else{
         await response.body?.cancel();
-        detail='Gateway returned a non-HLS response. This channel may require a different stream format.';
+        detail=isMovie?'The gateway reached the movie file.':'Gateway returned a non-HLS response. This channel may require a different stream format.';
+        if(isMovie&&new URL(url).pathname.startsWith('/media/')){
+          clearTimeout(timeout);timeout=setTimeout(()=>controller.abort(),25000);
+          $('playstatus').textContent=reason+' Movie file reached. Checking its video and audio formats…';
+          const inspect=new URL(url);inspect.pathname=inspect.pathname.replace('/media/','/inspect/');
+          const check=await fetch(inspect.href,{cache:'no-store',signal:controller.signal});
+          if(check.ok){
+            const info=await check.json();const streams=Array.isArray(info.streams)?info.streams:[];
+            const labels=streams.filter(s=>['video','audio'].includes(s.type)).map(s=>s.type==='video'?String(s.codec||'unknown').toUpperCase()+' '+(Number(s.width)||0)+'×'+(Number(s.height)||0):String(s.codec||'unknown').toUpperCase()+' audio');
+            detail='Movie formats: '+labels.join('; ')+(info.container?' · '+info.container:'')+'. Try compatible playback to repackage the movie for Safari without reducing video quality.';
+          }else{const info=await check.json().catch(()=>({}));const failures={media_probe_timeout:'The movie format check timed out.',media_probe_download:'The gateway could not read the movie data.',media_probe_invalid:'The provider returned invalid or incomplete movie data.',probe_busy:'Another format check is running; retry shortly.'};detail+=' '+(failures[info.error]||'The movie format check failed.')}
+        }
       }
     }
   }catch{
@@ -165,16 +176,16 @@ async function diagnosePlayback(url,attempt,reason){
 }
 async function play(c,compatible=false,alternate=false){
   if(!credentials)return;
-  const isMovie=c.kind==='movie',isHls=!isMovie||c.container_extension==='m3u8';
+  const isMovie=c.kind==='movie',isHls=compatible||!isMovie||c.container_extension==='m3u8';
   const path=(isMovie?movieStreams:gatewayStreams)?.[String(c.stream_id)];
   if((isMovie?movieStreams:gatewayStreams)&&!path){$('playstatus').textContent='This channel has no gateway stream. Reconnect and try another channel.';return}
   const u=path?new URL(compatible?path.replace('/media/','/compatible/')+'/index.m3u8':path):new URL(credentials.base+(isMovie?'/movie/':'/live/')+encodeURIComponent(credentials.user)+'/'+encodeURIComponent(credentials.pass)+'/'+encodeURIComponent(c.stream_id)+'.'+(isMovie?c.container_extension:'m3u8'));
-  stopVideo();if(compatible)activeCompatibility=u.href;const attempt=playbackAttempt;
+  stopVideo(compatible?u.href:null);$('compatible').textContent=isMovie?'Try compatible movie playback (original video quality)':'Try compatible playback (same quality)';if(compatible)activeCompatibility=u.href;const attempt=playbackAttempt;if(isMovie&&compatible){$('alternate').classList.remove('hide');$('alternate').onclick=()=>play(c,true,true)}
   $('playing').textContent=c.name||'Live TV';$('watch').classList.remove('hide');
   const v=$('video');
-  const report=reason=>{clearTimeout(playbackTimer);if(path&&isHls&&!alternate){$('alternate').classList.remove('hide');$('alternate').onclick=()=>play(c,false,true)}if(path&&isHls&&!compatible){$('compatible').classList.remove('hide');$('compatible').onclick=()=>play(c,true)}if(path&&isHls&&!alternate)void diagnosePlayback(u.href,attempt,reason);else $('playstatus').textContent=reason+(isMovie&&!isHls?' This movie’s container or codecs may not be supported by this browser.':'');};
+  const report=reason=>{clearTimeout(playbackTimer);if(path&&isHls&&!alternate){$('alternate').classList.remove('hide');$('alternate').onclick=()=>play(c,compatible,true)}if(path&&!compatible){$('compatible').classList.remove('hide');$('compatible').onclick=()=>play(c,true)}if(path&&!alternate)void diagnosePlayback(u.href,attempt,reason,isMovie&&!compatible);else $('playstatus').textContent=reason+(isMovie&&!isHls?' This movie’s container or codecs may not be supported by this browser.':'');};
   v.onerror=()=>{if(attempt!==playbackAttempt)return;const code=v.error?.code;const reasons={1:'Playback was interrupted.',2:'Safari could not download the video.',3:'Safari could not decode the video.',4:'Safari could not use this stream source.'};report((reasons[code]||'Video failed to load.')+' (Media error '+(code||'unknown')+').');};
-  v.onplaying=()=>{if(attempt!==playbackAttempt)return;clearTimeout(playbackTimer);playbackProbe?.abort();playbackDiagnostic++;$('compatible').classList.add('hide');$('alternate').classList.add('hide');$('playstatus').textContent=alternate?'Now playing · Alternate player':'Now playing';};
+  v.onplaying=()=>{if(attempt!==playbackAttempt)return;clearTimeout(playbackTimer);playbackProbe?.abort();playbackDiagnostic++;$('compatible').classList.add('hide');$('alternate').classList.add('hide');$('playstatus').textContent=isMovie&&compatible?'Now playing · Compatible movie mode · Seeking is limited':alternate?'Now playing · Alternate player':'Now playing';};
   v.onwaiting=()=>{if(attempt===playbackAttempt)$('playstatus').textContent=isMovie?'Buffering movie…':'Buffering live stream…';};
   if(alternate){
     $('playstatus').textContent='Loading alternate player at original quality…';
@@ -206,7 +217,7 @@ async function play(c,compatible=false,alternate=false){
   playbackTimer=setTimeout(()=>{if(attempt===playbackAttempt)report(compatible?'Compatible playback did not start after 40 seconds.':'No video received after 20 seconds.');},compatible?40000:20000);
   try{
     await v.play();
-    if(attempt===playbackAttempt&&!v.error){clearTimeout(playbackTimer);$('playstatus').textContent='Now playing';}
+    if(attempt===playbackAttempt&&!v.error){clearTimeout(playbackTimer);$('playstatus').textContent=isMovie&&compatible?'Now playing · Compatible movie mode · Seeking is limited':'Now playing';}
   }catch(err){
     if(attempt!==playbackAttempt)return;
     if(err.name==='NotAllowedError'){clearTimeout(playbackTimer);$('playstatus').textContent='Tap the video Play button to start playback.';}

@@ -40,3 +40,17 @@ try{
 }finally{await server.closeCompatibility();server.closeAllConnections();await new Promise(r=>server.close(r))}
 
 }
+
+const movieArgs=remuxArguments(input,'/tmp/dummy',[],'h264',{movie:true,audio:'ac3'});assert.ok(movieArgs.indexOf('-re')<movieArgs.indexOf('-i'));assert.equal(movieArgs[movieArgs.indexOf('-c:v')+1],'copy');assert.equal(movieArgs[movieArgs.indexOf('-c:a')+1],'aac');assert.ok(!movieArgs.includes('-vf'));
+const mkv=await command('ffmpeg',['-v','quiet','-f','lavfi','-i','testsrc2=size=1920x1080:rate=2','-f','lavfi','-i','sine=frequency=440:sample_rate=48000','-t','6','-c:v','libx264','-threads','1','-preset','ultrafast','-g','2','-c:a','ac3','-f','matroska','pipe:1']);
+const respond=(body,type)=>Object.assign(Readable.from([Buffer.isBuffer(body)?body:Buffer.from(body)]),{statusCode:200,headers:{'content-type':type}});
+const movieServer=createGateway({supabaseUrl:'https://vault.example.invalid',publicKey:'dummy',fetchVault:async()=>({ok:true,json:async()=>({saved:true,server_url:'http://provider.example.invalid',username:'dummy-user',password:'dummy-pass'})}),upstream:async input=>{const url=new URL(input);if(url.pathname==='/player_api.php'){const action=url.searchParams.get('action');return{url,response:respond(JSON.stringify(action==='get_vod_streams'?[{stream_id:8,name:'MKV movie',container_extension:'mkv'}]:[]),'application/json')}}return{url,response:respond(mkv,'video/x-matroska')}}});
+await new Promise(r=>movieServer.listen(0,'127.0.0.1',r));const movieRoot='http://127.0.0.1:'+movieServer.address().port;
+try{
+ const connection=await (await fetch(movieRoot+'/api/connect',{method:'POST',headers:{Authorization:'Bearer dummy'}})).json();const catalog=await (await fetch(movieRoot+connection.movies_path)).json();const url=movieRoot+catalog.streams[8];
+ const info=await (await fetch(url.replace('/media/','/inspect/'))).json();assert.match(info.container,/matroska/);assert.ok(info.streams.some(s=>s.codec==='ac3'));
+ const compatible=url.replace('/media/','/compatible/')+'/index.m3u8';const playlist=await fetch(compatible);const playlistBody=await playlist.text();assert.equal(playlist.status,200,playlistBody);assert.match(playlistBody,/#EXT-X-MAP/);
+ const result=JSON.parse(await command('ffprobe',['-v','quiet','-show_entries','stream=codec_name,width,height','-of','json',compatible],'utf8'));assert.ok(result.streams.some(s=>s.codec_name==='h264'&&s.width===1920&&s.height===1080));assert.ok(result.streams.some(s=>s.codec_name==='aac'));
+ const decoded=await command('ffmpeg',['-v','error','-i',compatible,'-frames:v','2','-an','-f','framemd5','pipe:1'],'utf8');assert.equal(decoded.split('\n').filter(s=>s&&!s.startsWith('#')).length,2);
+ assert.ok(!JSON.stringify(result).includes('dummy-pass'));console.log('PASS real MKV H264/AC3 movie → original 1080p video copy + AAC audio → paced bounded fMP4 HLS → decoded frames');
+}finally{await movieServer.closeCompatibility();movieServer.closeAllConnections();await new Promise(r=>movieServer.close(r))}

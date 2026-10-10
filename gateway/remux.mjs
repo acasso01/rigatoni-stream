@@ -3,15 +3,15 @@ import {mkdtemp,readFile,rm,readdir,stat} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
-export function remuxArguments(input,dir,options=[],codec='h264'){
+export function remuxArguments(input,dir,options=[],codec='h264',{movie=false,audio='aac'}={}){
  const url=new URL(input);
  if(url.protocol!=='http:'||url.hostname!=='127.0.0.1'||!/^\/media\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(url.pathname)||url.search||url.hash||url.username||url.password)throw Error('unsafe_target');
- return ['-nostdin','-v','quiet','-protocol_whitelist','http,tcp,crypto',...options,'-rw_timeout','15000000','-fflags','+genpts+discardcorrupt','-i',input,'-map','0:v:0','-map','0:a:0?','-c:v','copy','-c:a','copy','-bsf:a','aac_adtstoasc',...(codec==='hevc'?['-tag:v','hvc1']:[]),'-map_metadata','-1','-avoid_negative_ts','make_zero','-f','hls','-hls_segment_type','fmp4','-hls_time','4','-hls_list_size','4','-hls_delete_threshold','1','-hls_flags','delete_segments+temp_file','-hls_fmp4_init_filename','init.mp4','-hls_segment_filename',join(dir,'segment-%06d.m4s'),join(dir,'index.m3u8')];
+ return ['-nostdin','-v','quiet','-protocol_whitelist','http,tcp,crypto',...options,'-rw_timeout','15000000','-fflags','+genpts+discardcorrupt',...(movie?['-re']:[]),'-i',input,'-map','0:v:0','-map','0:a:0?','-c:v','copy',...(movie&&audio!=='aac'?['-c:a','aac','-b:a','192k']:['-c:a','copy','-bsf:a','aac_adtstoasc']),...(codec==='hevc'?['-tag:v','hvc1']:[]),'-map_metadata','-1','-avoid_negative_ts','make_zero','-f','hls','-hls_segment_type','fmp4','-hls_time','4','-hls_list_size','4','-hls_delete_threshold','1','-hls_flags','delete_segments+temp_file','-hls_fmp4_init_filename','init.mp4','-hls_segment_filename',join(dir,'segment-%06d.m4s'),join(dir,'index.m3u8')];
 }
 export function createRemuxManager({options=async()=>[],now=Date.now,maxJobs=1,maxBytes=160*1024*1024,idleMs=45000}={}){
  const jobs=new Map();
  const stop=async key=>{const job=jobs.get(key);if(!job)return;jobs.delete(key);job.stopped=true;job.child?.kill('SIGKILL');await job.ready.catch(()=>{});if(job.dir)await rm(job.dir,{recursive:true,force:true})};
- const ensure=async(key,input,codec)=>{
+ const ensure=async(key,input,codec,media)=>{
   let job=jobs.get(key);
   if(!job){
    if(jobs.size>=maxJobs)throw Error('compatibility_busy');
@@ -19,7 +19,7 @@ export function createRemuxManager({options=async()=>[],now=Date.now,maxJobs=1,m
    job.ready=(async()=>{
     job.dir=await mkdtemp(join(tmpdir(),'rigatoni-remux-'));
     if(job.stopped)throw Error('compatibility_failed');
-    const args=remuxArguments(input,job.dir,await options(),codec);
+    const args=remuxArguments(input,job.dir,media?.movie&&!media.hls?[]:await options(),codec,media);
     if(job.stopped)throw Error('compatibility_failed');
     job.child=spawn('ffmpeg',args,{stdio:'ignore'});job.child.on('error',()=>{job.failed=true});job.child.on('exit',code=>{if(code!==0)job.failed=true});
    })();
@@ -38,9 +38,9 @@ export function createRemuxManager({options=async()=>[],now=Date.now,maxJobs=1,m
  };
  const timer=setInterval(()=>{void sweep()},5000);timer.unref();
  return{
-  async read(key,input,codec,file){
+  async read(key,input,codec,file,media={}){
    if(!/^(index\.m3u8|init\.mp4|segment-\d{6,}\.m4s)$/.test(file))throw Error('compatibility_file');
-   const job=await ensure(key,input,codec);
+   const job=await ensure(key,input,codec,media);
    const deadline=Date.now()+25000;
    do{
     if(job.stopped||job.failed)throw Error('compatibility_failed');

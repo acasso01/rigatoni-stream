@@ -81,3 +81,5 @@ curl http://127.0.0.1:8788/health
 ```
 
 Large movie catalogs automatically switch to browsing one provider category at a time. The gateway forwards a validated category_id to the provider and retains at most two category catalogs. Search filters the selected category. Opaque media resources remain bounded to 300,000 per session; optional posters yield to movie streams.
+
+Movie playback failures now inspect the actual file. Compatible movie mode copies H.264/HEVC video at its original resolution and converts unsupported audio to AAC. Movie input is paced in real time and uses the existing bounded rolling HLS window; this fallback starts from the beginning and has limited seeking. Normal MP4 playback keeps byte-range seeking.

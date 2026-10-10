@@ -66,3 +66,12 @@ vm.runInContext('stopVideo()',ctx);assert.equal(timers.size,0);
 console.log('PASS alternate player: opaque URLs, bounded buffers, MMS opt-in, native AirPlay restoration, safe fragment errors, unsupported and stale-load cleanup');
 assert.ok(requests.every(r=>r.options.cache==='no-store'&&!r.url.includes('dummy')&&r.options.body===undefined));
 console.log('PASS playback media errors, gateway refusal, reachable playlist, expired session, startup timeout, recovery race and credential-free diagnostics');
+
+// Non-HLS movie failures inspect the real media and expose a bounded compatibility fallback.
+vm.runInContext("credentials={base:'http://provider.example.invalid',user:'dummy-user',pass:'dummy-password'};movieStreams={8:'https://homepi.test.ts.net/media/session/movie'}",ctx);
+inspection={container:'matroska,webm',streams:[{type:'video',codec:'h264',width:1920,height:1080},{type:'audio',codec:'ac3'}]};reply=()=>new Response('dummy bytes',{headers:{'content-type':'video/x-matroska'}});
+void vm.runInContext("play({kind:'movie',stream_id:8,name:'Movie',container_extension:'mkv'})",ctx);
+get('video').error={code:4};get('video').onerror();await tick();assert.match(get('playstatus').textContent,/Movie formats: H264 1920×1080; AC3 audio/);assert.match(get('playstatus').textContent,/matroska/);assert.equal(requests.findLast(r=>r.url.endsWith('/media/session/movie')).options.headers.Range,'bytes=0-65535');assert.match(get('compatible').textContent,/movie playback/);
+void get('compatible').onclick();assert.equal(get('video').src,'https://homepi.test.ts.net/compatible/session/movie/index.m3u8');assert.equal(vm.runInContext('activeCompatibility',ctx),get('video').src);get('video').onplaying();assert.match(get('playstatus').textContent,/Seeking is limited/);
+vm.runInContext('stopVideo()',ctx);
+console.log('PASS movie diagnostics use a bounded byte-range check, report actual formats and offer original-quality compatible playback with seeking limits');

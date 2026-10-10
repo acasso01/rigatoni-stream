@@ -108,11 +108,12 @@ export async function probeMedia(url) {
   const input=new URL(url);
   if(input.protocol!=='http:'||input.hostname!=='127.0.0.1'||!/^\/media\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(input.pathname)||input.search||input.hash||input.username||input.password)throw Error('unsafe_probe');
   const options=await supportedProbeOptions();
-  const raw=await new Promise((resolve,reject)=>execFile('ffprobe',['-v','error','-protocol_whitelist','http,tcp,crypto',...options,'-rw_timeout','10000000','-analyzeduration','5000000','-probesize','5000000','-show_entries','stream=codec_type,codec_name,width,height,pix_fmt,sample_rate,channels','-of','json',input.href],{timeout:20000,maxBuffer:65536,killSignal:'SIGKILL'},(error,stdout,stderr)=>error?reject(Error(probeFailure(error,stderr))):resolve(stdout)));
+  const raw=await new Promise((resolve,reject)=>execFile('ffprobe',['-v','error','-protocol_whitelist','http,tcp,crypto',...options,'-rw_timeout','10000000','-analyzeduration','5000000','-probesize','5000000','-show_entries','stream=codec_type,codec_name,width,height,pix_fmt,sample_rate,channels:format=format_name','-of','json',input.href],{timeout:20000,maxBuffer:65536,killSignal:'SIGKILL'},(error,stdout,stderr)=>error?reject(Error(probeFailure(error,stderr))):resolve(stdout)));
   const parsed=JSON.parse(raw);
   const streams=(parsed.streams||[]).slice(0,16).filter(s=>['video','audio'].includes(s.codec_type)).map(s=>({type:s.codec_type,codec:/^[a-z0-9_]+$/.test(s.codec_name||'')?s.codec_name:'unknown',...(s.codec_type==='video'?{width:Number(s.width)||0,height:Number(s.height)||0,pixel_format:/^[a-z0-9_]+$/.test(s.pix_fmt||'')?s.pix_fmt:'unknown'}:{channels:Number(s.channels)||0,sample_rate:Number(s.sample_rate)||0})}));
   if(!streams.length)throw Error('media_probe_failed');
-  return {streams};
+  const container=/^[a-z0-9_,]+$/.test(parsed.format?.format_name||'')?parsed.format.format_name.slice(0,100):'unknown';
+  return {streams,container};
 }
 export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.github.io',fetchVault=fetch,upstream=providerRequest,probe=probeMedia,now=Date.now,maxSessions=20}={}) {
   const sessions=new Map();
@@ -176,7 +177,7 @@ export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.gi
         if(categoryId!==null&&!categories.some(c=>c.category_id===categoryId))return json(res,400,{error:'invalid_movie_category'});
         const getMovies=async()=>{
           const movies=await session.api('get_vod_streams',c=>({kind:'movie',stream_id:shortText(c.stream_id),name:shortText(c.name),category_id:shortText(c.category_id),stream_icon:'',poster:String(c.stream_icon||'').slice(0,2048),container_extension:/^(mp4|m4v|mov|mkv|avi|webm|ts|m3u8)$/.test(c.container_extension)?c.container_extension:'mp4'}),50000,categoryId===null?undefined:categoryId);
-          const streams={};for(const movie of movies){if(!/^\d+$/.test(movie.stream_id))continue;streams[movie.stream_id]=session.register(new URL(session.base+'/movie/'+encodeURIComponent(session.username)+'/'+encodeURIComponent(session.password)+'/'+movie.stream_id+'.'+movie.container_extension))}
+          const streams={};for(const movie of movies){if(!/^\d+$/.test(movie.stream_id))continue;streams[movie.stream_id]=session.register(new URL(session.base+'/movie/'+encodeURIComponent(session.username)+'/'+encodeURIComponent(session.password)+'/'+movie.stream_id+'.'+movie.container_extension));session.movieKeys??=new Set();session.movieKeys.add(streams[movie.stream_id].split('/').at(-1))}
           // Movie streams take priority over optional poster resources.
           for(const movie of movies){const poster=movie.poster;delete movie.poster;if(poster){try{movie.stream_icon=session.register(new URL(poster))}catch{}}}
           return{categories,movies,streams,...(categoryId===null?{}:{browse_by_category:true,category_id:categoryId})};
@@ -213,9 +214,10 @@ export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.gi
         const input='http://127.0.0.1:'+server.address().port+'/media/'+id+'/'+key;
         const info=await inspection(session,key,input);
         const video=info.streams.find(s=>s.type==='video'),audio=info.streams.find(s=>s.type==='audio');
-        if(!['h264','hevc'].includes(video?.codec)||audio&&audio.codec!=='aac')return json(res,409,{error:'compatibility_codec'});
+        const movie=session.movieKeys?.has(key)||false;
+        if(!['h264','hevc'].includes(video?.codec)||!movie&&audio&&audio.codec!=='aac')return json(res,409,{error:'compatibility_codec'});
         session.compatibleKeys??=new Set();session.compatibleKeys.add(key);
-        const data=await remux.read(id+'/'+key,input,video.codec,file);
+        const data=await remux.read(id+'/'+key,input,video.codec,file,{movie,hls:info.container==='hls',audio:audio?.codec||'aac'});
         if(file==='index.m3u8'){
           const prefix='/compatible/'+id+'/'+key+'/';
           const playlist=data.toString('utf8').split(/\r?\n/).map(line=>line.startsWith('#')?line.replace(/URI="(init\.mp4)"/g,(_m,name)=>'URI="'+prefix+name+'"'):/^segment-\d{6,}\.m4s$/.test(line)?prefix+line:line).join('\n');
