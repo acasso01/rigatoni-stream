@@ -21,5 +21,48 @@ inspection={streams:[{type:'video',codec:'hevc',width:3840,height:2160,pixel_for
 reply=new Response('#EXTM3U',{headers:{'content-type':'application/vnd.apple.mpegurl'}});start();get('video').error={code:3};get('video').onerror();await tick();assert.match(get('playstatus').textContent,/HEVC 3840×2160/);assert.match(get('playstatus').textContent,/AAC audio/);
 let finish;reply=()=>new Promise(r=>finish=r);start();get('video').error={code:2};get('video').onerror();await tick();get('video').onplaying();finish(new Response('#EXTM3U',{headers:{'content-type':'application/vnd.apple.mpegurl'}}));await tick();assert.equal(get('playstatus').textContent,'Now playing');
 vm.runInContext('stopVideo()',ctx);assert.equal(timers.size,0);
+// Alternate MMS/MSE path must use only the opaque gateway link and release resources.
+let instance;
+class FakeHls{
+ static Events={ERROR:'error',MANIFEST_PARSED:'manifest'};
+ static isSupported(){return true}
+ constructor(config){this.config=config;this.handlers={};instance=this}
+ on(event,handler){this.handlers[event]=handler}
+ loadSource(url){this.url=url}
+ attachMedia(video){this.video=video}
+ destroy(){this.destroyed=true}
+ emit(event,data){this.handlers[event]?.(event,data)}
+}
+ctx.window.Hls=FakeHls;
+get('video').error=null;
+await vm.runInContext("play({stream_id:7,name:'Dummy'},false,true)",ctx);
+assert.equal(instance.url,'https://homepi.test.ts.net/media/session/resource');
+assert.equal(instance.config.preferManagedMediaSource,true);
+assert.equal(instance.config.maxBufferSize,32*1024*1024);
+assert.equal(get('video').disableRemotePlayback,true);
+instance.emit('manifest');get('video').onplaying();
+assert.equal(get('playstatus').textContent,'Now playing · Alternate player');
+const playingInstance=instance;vm.runInContext('stopVideo()',ctx);
+assert.equal(playingInstance.destroyed,true);assert.equal(get('video').disableRemotePlayback,false);assert.equal(timers.size,0);
+await vm.runInContext("play({stream_id:7,name:'Dummy'},false,true)",ctx);
+instance.emit('error',{fatal:true,details:'fragLoadError',response:{code:502,url:'secret-url'}});
+assert.match(get('playstatus').textContent,/video segment download failed.*HTTP 502/);assert.ok(!get('playstatus').textContent.includes('secret-url'));assert.equal(instance.destroyed,true);
+await vm.runInContext("play({stream_id:7,name:'Dummy'},false,true)",ctx);
+instance.emit('error',{fatal:true,details:'dummy-password',error:{message:'secret-url'}});
+assert.equal(get('playstatus').textContent,'Alternate player: stream playback failed.');
+FakeHls.isSupported=()=>false;
+await vm.runInContext("play({stream_id:7,name:'Dummy'},false,true)",ctx);
+assert.match(get('playstatus').textContent,/not supported/);assert.equal(get('video').disableRemotePlayback,false);
+vm.runInContext('stopVideo()',ctx);
+// A library that finishes loading after the user closes the player cannot attach.
+let script;ctx.window.Hls=undefined;
+ctx.document.createElement=()=>({remove(){this.removed=true}});ctx.document.head={append:s=>script=s};
+void vm.runInContext("play({stream_id:7,name:'Dummy'},false,true)",ctx);
+assert.match(script.src,/hls.js@1\.7\.3/);assert.match(script.integrity,/^sha384-/);assert.equal(script.crossOrigin,'anonymous');assert.equal(script.referrerPolicy,'no-referrer');
+vm.runInContext('stopVideo()',ctx);ctx.window.Hls=FakeHls;script.onload();await tick();assert.equal(get('video').disableRemotePlayback,false);
+ctx.window.Hls=undefined;vm.runInContext('hlsLibrary=null',ctx);
+void vm.runInContext("play({stream_id:7,name:'Dummy'},false,true)",ctx);script.onerror();await tick();assert.match(get('playstatus').textContent,/could not be loaded/);assert.equal(script.removed,true);assert.equal(vm.runInContext('hlsLibrary',ctx),null);
+vm.runInContext('stopVideo()',ctx);assert.equal(timers.size,0);
+console.log('PASS alternate player: opaque URLs, bounded buffers, MMS opt-in, native AirPlay restoration, safe fragment errors, unsupported and stale-load cleanup');
 assert.ok(requests.every(r=>r.options.cache==='no-store'&&!r.url.includes('dummy')&&r.options.body===undefined));
 console.log('PASS playback media errors, gateway refusal, reachable playlist, expired session, startup timeout, recovery race and credential-free diagnostics');

@@ -13,7 +13,7 @@ main{max-width:1600px;margin:auto}.hero{position:relative;min-height:300px;displ
 <main><div id="login"><div class="badge">YOUR PERSONAL STREAM</div><h2>Connect your provider</h2><p style="color:#aaa">Use your authorized Xtream Codes account. Save it securely to your account without connecting first, or connect for this tab only.</p><form id="form"><label for="server">Server URL</label><input id="server" type="url" placeholder="http://provider.example:port" required autocomplete="off"><label for="user">Username</label><input id="user" required autocomplete="off"><label for="pass">Password</label><input id="pass" type="password" required autocomplete="off"><label for="gateway">HTTPS gateway URL (optional)</label><input id="gateway" type="url" placeholder="https://homepi.your-tailnet.ts.net" autocomplete="off"><p style="color:#aaa;font-size:12px">For HTTP playback, save your provider first and enter your private Tailscale gateway URL. Tailscale must be connected.</p><button class="btn red" id="connect">Connect & Watch</button></form><p id="status">Ready to connect.</p><div id="vault"><p id="acctStatus" role="status">Checking your Rigatoni account…</p><div class="account-links"><a id="acctSignin" class="btn ghost" href="./auth.html">Sign in / Create account</a><button class="btn ghost hide" id="acctSignout" type="button">Sign out</button><button class="btn ghost hide" id="saveProvider" type="button">Save provider securely</button><button class="btn ghost hide" id="deleteProvider" type="button">Delete saved provider</button></div></div></div>
 <div id="app" class="hide"><div class="hero"><div class="hero-inner"><div class="eyebrow">YOUR ENTERTAINMENT. YOUR WAY.</div><h1>Live TV, made yours.</h1><p>Discover channels, save your favorites, and jump straight into what you love.</p><div class="actions"><button class="btn red" id="browse">▶ Browse Live TV</button><button class="btn ghost" id="mylist">♡ My List</button></div></div></div>
 <div class="content"><div id="searchwrap" class="hide"><input class="searchbar" id="search" type="search" placeholder="Search channels…" autocomplete="off"><p id="count"></p></div><div id="rows"></div><p class="footnote">Rigatoni Stream · Private development preview. Channel availability and playback depend on your provider.</p></div></div></main>
-<div id="watch" class="hide"><div id="watchbar"><button class="btn ghost" id="close">← Back</button><strong id="playing"></strong><button class="btn ghost" id="fullscreen">⛶</button></div><video id="video" controls playsinline autoplay></video><small id="playstatus">Loading stream…</small><button id="compatible" class="btn ghost hide" type="button" style="margin:0 20px 16px">Try compatible playback (same quality)</button></div>
+<div id="watch" class="hide"><div id="watchbar"><button class="btn ghost" id="close">← Back</button><strong id="playing"></strong><button class="btn ghost" id="fullscreen">⛶</button></div><video id="video" controls playsinline autoplay></video><small id="playstatus">Loading stream…</small><button id="compatible" class="btn ghost hide" type="button" style="margin:0 20px 16px">Try compatible playback (same quality)</button><button id="alternate" class="btn ghost hide" type="button" style="margin:0 20px 16px">Try alternate player (same quality)</button></div>
 <script>
 const $=id=>document.getElementById(id);let gatewayStreams=null,credentials=null,channels=[],categories=[],tab='home',categoryPage=0,searchTimer;const favorites=new Set(JSON.parse(localStorage.getItem('rigatoni-favorites')||'[]'));window.__rigatoniFavorites=favorites;const status=s=>$('status').textContent=s;
 function endpoint(action){const u=new URL(credentials.base+'/player_api.php');u.searchParams.set('username',credentials.user);u.searchParams.set('password',credentials.pass);u.searchParams.set('action',action);return u}
@@ -72,8 +72,23 @@ function render(){
     root.append(pager(categoryPage>0?change(-1):null,categoryPage+1<pages?change(1):null,'Categories '+(categoryPage+1)+' of '+pages));
   }
 }
-let playbackAttempt=0,playbackDiagnostic=0,playbackTimer,playbackProbe,activeCompatibility;
-function stopVideo(){if(activeCompatibility){void fetch(activeCompatibility.replace('/index.m3u8','/stop'),{method:'POST',cache:'no-store',keepalive:true}).catch(()=>{});activeCompatibility=null}$('compatible').classList.add('hide');playbackAttempt++;playbackDiagnostic++;clearTimeout(playbackTimer);playbackProbe?.abort();const v=$('video');v.onerror=null;v.onplaying=null;v.onwaiting=null;v.pause();v.removeAttribute('src');v.load();$('watch').classList.add('hide')}
+let playbackAttempt=0,playbackDiagnostic=0,playbackTimer,playbackProbe,activeCompatibility,activeHls,hlsLibrary;
+function loadHlsLibrary(){
+  if(window.Hls)return Promise.resolve(window.Hls);
+  if(hlsLibrary)return hlsLibrary;
+  hlsLibrary=new Promise((resolve,reject)=>{
+    const script=document.createElement('script');
+    script.src='https://cdn.jsdelivr.net/npm/hls.js@1.7.3/dist/hls.min.js';
+    script.integrity='sha384-cciJ0zi8d1uMKC2zJd7jvPY4HQt7W4ByUI/FlMkltvBi31aW61rcpVBhpmW8/NwX';
+    script.crossOrigin='anonymous';script.referrerPolicy='no-referrer';
+    const fail=()=>{clearTimeout(timer);script.remove();reject(Error('player_library_unavailable'))};
+    const timer=setTimeout(fail,15000);
+    script.onerror=fail;script.onload=()=>{clearTimeout(timer);if(window.Hls)resolve(window.Hls);else fail()};
+    document.head.append(script);
+  }).catch(error=>{hlsLibrary=null;throw error});
+  return hlsLibrary;
+}
+function stopVideo(){activeHls?.destroy();activeHls=null;$('alternate').classList.add('hide');if(activeCompatibility){void fetch(activeCompatibility.replace('/index.m3u8','/stop'),{method:'POST',cache:'no-store',keepalive:true}).catch(()=>{});activeCompatibility=null}$('compatible').classList.add('hide');playbackAttempt++;playbackDiagnostic++;clearTimeout(playbackTimer);playbackProbe?.abort();const v=$('video');v.onerror=null;v.onplaying=null;v.onwaiting=null;v.disableRemotePlayback=false;v.pause();v.removeAttribute('src');v.load();$('watch').classList.add('hide')}
 $('close').onclick=stopVideo;$('fullscreen').onclick=()=>{const v=$('video');if(v.webkitEnterFullscreen)v.webkitEnterFullscreen();else if(v.requestFullscreen)v.requestFullscreen()};
 window.__rigatoniUseProvider=({base,user,pass})=>{$('server').value=base;$('user').value=user;$('pass').value=pass;status(location.protocol==='https:'&&new URL(base).protocol==='http:'?'Provider successfully loaded. Playback requires the HTTPS gateway on GitHub Pages. No HTTP connection was attempted. The private Raspberry Pi test site still works.':'Provider successfully loaded. Choose Connect & Watch when ready.');};
 window.__rigatoniProvider=()=>{const url=new URL($('server').value.trim());if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash)throw Error('Enter only the provider server URL.');const user=$('user').value.trim(),pass=$('pass').value||(credentials&&credentials.base===url.href.replace(/\/+$/,'')&&credentials.user===user?credentials.pass:'');if(!user||!pass)throw Error('Enter the provider username and password.');return{base:url.href.replace(/\/+$/,''),user,pass};};
@@ -124,7 +139,7 @@ async function diagnosePlayback(url,attempt,reason){
   }finally{clearTimeout(timeout)}
   if(attempt===playbackAttempt&&diagnostic===playbackDiagnostic)$('playstatus').textContent=reason+' '+detail;
 }
-async function play(c,compatible=false){
+async function play(c,compatible=false,alternate=false){
   if(!credentials)return;
   const path=gatewayStreams?.[String(c.stream_id)];
   if(gatewayStreams&&!path){$('playstatus').textContent='This channel has no gateway stream. Reconnect and try another channel.';return}
@@ -132,10 +147,36 @@ async function play(c,compatible=false){
   stopVideo();if(compatible)activeCompatibility=u.href;const attempt=playbackAttempt;
   $('playing').textContent=c.name||'Live TV';$('watch').classList.remove('hide');
   const v=$('video');
-  const report=reason=>{clearTimeout(playbackTimer);if(path&&!compatible){$('compatible').classList.remove('hide');$('compatible').onclick=()=>play(c,true)}if(path)void diagnosePlayback(u.href,attempt,reason);else $('playstatus').textContent=reason;};
+  const report=reason=>{clearTimeout(playbackTimer);if(path&&!alternate){$('alternate').classList.remove('hide');$('alternate').onclick=()=>play(c,false,true)}if(path&&!compatible){$('compatible').classList.remove('hide');$('compatible').onclick=()=>play(c,true)}if(path&&!alternate)void diagnosePlayback(u.href,attempt,reason);else $('playstatus').textContent=reason;};
   v.onerror=()=>{if(attempt!==playbackAttempt)return;const code=v.error?.code;const reasons={1:'Playback was interrupted.',2:'Safari could not download the video.',3:'Safari could not decode the video.',4:'Safari could not use this stream source.'};report((reasons[code]||'Video failed to load.')+' (Media error '+(code||'unknown')+').');};
-  v.onplaying=()=>{if(attempt!==playbackAttempt)return;clearTimeout(playbackTimer);playbackProbe?.abort();playbackDiagnostic++;$('compatible').classList.add('hide');$('playstatus').textContent='Now playing';};
+  v.onplaying=()=>{if(attempt!==playbackAttempt)return;clearTimeout(playbackTimer);playbackProbe?.abort();playbackDiagnostic++;$('compatible').classList.add('hide');$('alternate').classList.add('hide');$('playstatus').textContent=alternate?'Now playing · Alternate player':'Now playing';};
   v.onwaiting=()=>{if(attempt===playbackAttempt)$('playstatus').textContent='Buffering live stream…';};
+  if(alternate){
+    $('playstatus').textContent='Loading alternate player at original quality…';
+    try{
+      const Hls=await loadHlsLibrary();if(attempt!==playbackAttempt)return;
+      // iPhone ManagedMediaSource requires remote playback disabled in this mode.
+      // Standard playback keeps the existing AirPlay behavior.
+      v.disableRemotePlayback=true;
+      if(!Hls.isSupported()){v.disableRemotePlayback=false;report('The alternate player is not supported by this browser.');return}
+      const hls=new Hls({preferManagedMediaSource:true,enableWorker:true,lowLatencyMode:false,backBufferLength:8,maxBufferLength:20,maxMaxBufferLength:30,maxBufferSize:32*1024*1024});activeHls=hls;
+      const safeErrors={manifestLoadError:'playlist download failed',manifestLoadTimeOut:'playlist download timed out',manifestParsingError:'playlist is invalid',levelLoadError:'channel playlist download failed',fragLoadError:'video segment download failed',fragLoadTimeOut:'video segment download timed out',keyLoadError:'encryption key download failed',keyLoadTimeOut:'encryption key download timed out',fragParsingError:'video segment could not be parsed',bufferAppendError:'Safari rejected the video buffer',bufferAddCodecError:'Safari rejected the video codec',bufferIncompatibleCodecsError:'video codec is unsupported',internalException:'player processing failed'};
+      hls.on(Hls.Events.ERROR,(_event,data)=>{
+        if(attempt!==playbackAttempt||!data.fatal)return;
+        const code=Number(data.response?.code),http=code>=400&&code<=599?' (HTTP '+code+')':'';
+        report('Alternate player: '+(safeErrors[data.details]||'stream playback failed')+http+'.');
+        hls.destroy();if(activeHls===hls)activeHls=null;v.disableRemotePlayback=false;
+      });
+      hls.on(Hls.Events.MANIFEST_PARSED,()=>{
+        if(attempt!==playbackAttempt)return;
+        void v.play().catch(error=>{if(attempt!==playbackAttempt)return;if(error.name==='NotAllowedError')$('playstatus').textContent='Tap the video Play button to start the alternate player.';});
+      });
+      $('playstatus').textContent='Connecting with alternate player…';
+      playbackTimer=setTimeout(()=>{if(attempt===playbackAttempt)report('Alternate player did not start after 30 seconds.');},30000);
+      hls.loadSource(u.href);hls.attachMedia(v);
+    }catch{if(attempt===playbackAttempt){activeHls?.destroy();activeHls=null;v.disableRemotePlayback=false;report('The alternate player could not be loaded. Check your connection and retry.');}}
+    return;
+  }
   v.src=u.href;v.load();$('playstatus').textContent=compatible?'Preparing same-quality compatible playback…':'Connecting to live stream…';
   playbackTimer=setTimeout(()=>{if(attempt===playbackAttempt)report(compatible?'Compatible playback did not start after 40 seconds.':'No video received after 20 seconds.');},compatible?40000:20000);
   try{
