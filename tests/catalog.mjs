@@ -63,3 +63,14 @@ for(const [error,expected] of [['catalog_too_large',/item limit/],['response_too
  assert.match(get('rows').children[0].textContent,expected);assert.match(get('rows').children[0].textContent,/HTTP 502/);assert.ok(!get('rows').children[0].textContent.includes('secret provider credentials'));assert.equal(vm.runInContext('moviesLoading',context),null);
 }
 console.log('PASS movie failure reasons distinguish limits, provider failures and outdated gateways without reflecting untrusted error strings');
+
+window.__rigatoniClearProvider();
+get('search').value='';
+const categoryRequests=[];
+context.fetch=async input=>{const url=new URL(input);categoryRequests.push(url.search);const category=url.searchParams.get('category_id');return new Response(JSON.stringify({browse_by_category:true,categories:[{category_id:'9',category_name:'Action'},{category_id:'10',category_name:'Drama'}],movies:category?[{stream_id:category,name:'Movie in '+category,container_extension:'mp4',category_id:category}]:[],streams:category?{[category]:'/media/test/resource'+category}:{},...(category?{category_id:category}:{})}))};
+vm.runInContext("credentials={base:'https://provider.example.invalid',user:'dummy',pass:'dummy'};gatewayStreams={};moviesPath='https://homepi.test.ts.net/api/movies/test';tab='movies'",context);
+await vm.runInContext('loadMovies()',context);assert.deepEqual(categoryRequests,['','?category_id=9']);assert.equal(cards().length,1);
+const categorySelect=()=>get('rows').children.find(n=>n.tag==='select');assert.equal(categorySelect().value,'9');assert.equal(categorySelect().children.length,2);assert.ok(get('rows').children.some(n=>n.textContent.includes('selected category')));
+categorySelect().value='10';categorySelect().onchange();await vm.runInContext('loadMovies()',context);assert.equal(categoryRequests.at(-1),'?category_id=10');assert.equal(cards()[0].children[1].textContent,'Movie in 10');await cards()[0].onclick();assert.equal(get('video').src,'https://homepi.test.ts.net/media/test/resource10');
+window.__rigatoniClearProvider();assert.equal(vm.runInContext('movieCategoryMode',context),false);
+console.log('PASS large-movie category fallback, automatic first category, selector switching, scoped search explanation, movie playback and reset');

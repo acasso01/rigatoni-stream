@@ -149,8 +149,9 @@ export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.gi
         const saved=await vault.json();if(!saved.saved)return json(res,409,{error:'save_provider_first'});
         if(sessions.size>=maxSessions)return json(res,503,{error:'gateway_busy'});
         const base=new URL(saved.server_url);if(base.search||base.hash)throw Error('unsafe_target');
-        const api=async (action,project,maxItems)=>{
+        const api=async (action,project,maxItems,categoryId)=>{
           const url=new URL(base.href.replace(/\/+$/,'')+'/player_api.php');url.search=new URLSearchParams({username:saved.username,password:saved.password,action}).toString();
+          if(categoryId!==undefined)url.searchParams.set('category_id',categoryId);
           const {response}=await upstream(url);if(response.statusCode!==200){response.resume();throw Error('provider_connection_failed')}
           return providerArray(response,project,{maxItems});
         };
@@ -158,7 +159,7 @@ export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.gi
         const channels=await api('get_live_streams',c=>({stream_id:shortText(c.stream_id),name:shortText(c.name),category_id:shortText(c.category_id),stream_icon:''}),100000);
         if(!Array.isArray(channels))throw Error('provider_connection_failed');
         const id=token();const resources=new Map(),resourceKeys=new Map();const channelIds=new Set(channels.map(c=>String(c.stream_id)));
-        const register=url=>{if(resourceKeys.has(url.href))return '/media/'+id+'/'+resourceKeys.get(url.href);if(!['http:','https:'].includes(url.protocol)||url.username||url.password)throw Error('unsafe_target');if(resources.size>=120000)throw Error('session_resource_limit');const key=token();resources.set(key,url.href);resourceKeys.set(url.href,key);return '/media/'+id+'/'+key};
+        const register=url=>{if(resourceKeys.has(url.href))return '/media/'+id+'/'+resourceKeys.get(url.href);if(!['http:','https:'].includes(url.protocol)||url.username||url.password)throw Error('unsafe_target');if(resources.size>=300000)throw Error('session_resource_limit');const key=token();resources.set(key,url.href);resourceKeys.set(url.href,key);return '/media/'+id+'/'+key};
         const streams={};for(const channelId of channelIds){if(!/^\d+$/.test(channelId))continue;streams[channelId]=register(new URL(base.href.replace(/\/+$/,'')+'/live/'+encodeURIComponent(saved.username)+'/'+encodeURIComponent(saved.password)+'/'+channelId+'.m3u8'))}
         sessions.set(id,{expires:now()+4*60*60*1000,resources,register,api,base:base.href.replace(/\/+$/,''),username:saved.username,password:saved.password});
         // Provider icons can be HTTP or carry provider credentials. Keep cards but use the existing fallback artwork.
@@ -167,13 +168,34 @@ export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.gi
       if(path.startsWith('/api/movies/')&&req.method==='GET'){
         const match=path.match(/^\/api\/movies\/([A-Za-z0-9_-]+)$/),session=match&&sessions.get(match[1]);
         if(!session)return json(res,401,{error:'stream_session_expired'});
+        const query=new URL(req.url,'http://localhost').searchParams;
+        const categoryId=query.get('category_id');
+        if(categoryId!==null&&!/^\d{1,20}$/.test(categoryId))return json(res,400,{error:'invalid_movie_category'});
+        session.movieCategories??=session.api('get_vod_categories',c=>({category_id:shortText(c.category_id),category_name:shortText(c.category_name)}),10000).catch(error=>{session.movieCategories=null;throw error});
+        const categories=await session.movieCategories;
+        if(categoryId!==null&&!categories.some(c=>c.category_id===categoryId))return json(res,400,{error:'invalid_movie_category'});
+        const getMovies=async()=>{
+          const movies=await session.api('get_vod_streams',c=>({kind:'movie',stream_id:shortText(c.stream_id),name:shortText(c.name),category_id:shortText(c.category_id),stream_icon:'',poster:String(c.stream_icon||'').slice(0,2048),container_extension:/^(mp4|m4v|mov|mkv|avi|webm|ts|m3u8)$/.test(c.container_extension)?c.container_extension:'mp4'}),50000,categoryId===null?undefined:categoryId);
+          const streams={};for(const movie of movies){if(!/^\d+$/.test(movie.stream_id))continue;streams[movie.stream_id]=session.register(new URL(session.base+'/movie/'+encodeURIComponent(session.username)+'/'+encodeURIComponent(session.password)+'/'+movie.stream_id+'.'+movie.container_extension))}
+          // Movie streams take priority over optional poster resources.
+          for(const movie of movies){const poster=movie.poster;delete movie.poster;if(poster){try{movie.stream_icon=session.register(new URL(poster))}catch{}}}
+          return{categories,movies,streams,...(categoryId===null?{}:{browse_by_category:true,category_id:categoryId})};
+        };
+        if(categoryId!==null){
+          session.movieCatalogs??=new Map();
+          if(!session.movieCatalogs.has(categoryId)){
+            // Keep only two completed category catalogs; active loads remain coalesced.
+            for(const [key,entry] of session.movieCatalogs){if(session.movieCatalogs.size<2)break;if(entry.done)session.movieCatalogs.delete(key)}
+            if(session.movieCatalogs.size>=2)return json(res,429,{error:'movie_catalog_busy'});
+            const entry={done:false};entry.promise=getMovies().then(result=>{entry.done=true;return result}).catch(error=>{session.movieCatalogs.delete(categoryId);throw error});session.movieCatalogs.set(categoryId,entry);
+          }
+          return json(res,200,await session.movieCatalogs.get(categoryId).promise);
+        }
         if(!session.movies){
-          session.movies=(async()=>{
-            const categories=await session.api('get_vod_categories',c=>({category_id:shortText(c.category_id),category_name:shortText(c.category_name)}),10000);
-            const movies=await session.api('get_vod_streams',c=>({kind:'movie',stream_id:shortText(c.stream_id),name:shortText(c.name),category_id:shortText(c.category_id),stream_icon:'',poster:String(c.stream_icon||'').slice(0,2048),container_extension:/^(mp4|m4v|mov|mkv|avi|webm|ts|m3u8)$/.test(c.container_extension)?c.container_extension:'mp4'}),50000);
-            const streams={};for(const movie of movies){const poster=movie.poster;delete movie.poster;if(poster){try{movie.stream_icon=session.register(new URL(poster))}catch{}}if(!/^\d+$/.test(movie.stream_id))continue;streams[movie.stream_id]=session.register(new URL(session.base+'/movie/'+encodeURIComponent(session.username)+'/'+encodeURIComponent(session.password)+'/'+movie.stream_id+'.'+movie.container_extension))}
-            return{categories,movies,streams};
-          })().catch(error=>{session.movies=null;throw error});
+          session.movies=getMovies().catch(error=>{
+            if(['catalog_too_large','response_too_large'].includes(error.message)&&categories.length)return{categories,movies:[],streams:{},browse_by_category:true};
+            session.movies=null;throw error;
+          });
         }
         return json(res,200,await session.movies);
       }

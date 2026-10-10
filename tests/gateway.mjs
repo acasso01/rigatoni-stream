@@ -13,7 +13,7 @@ for(const address of ['8.8.8.8','1.1.1.1','2606:4700:4700::1111'])assert.equal(p
 await assert.rejects(()=>checkedTarget('http://provider.example.invalid',async()=>[{address:'8.8.8.8',family:4},{address:'127.0.0.1',family:4}]),/unsafe_target/);
 await assert.rejects(()=>checkedTarget('file:///etc/passwd'),/unsafe_target/);
 await assert.rejects(()=>checkedTarget('http://user:pass@8.8.8.8'),/unsafe_target/);
-let clock=Date.now(),largeCatalog=false;const requests=[];
+let clock=Date.now(),largeCatalog=false,largeMovies=false;const requests=[];
 const fakeResponse=(body,headers={})=>Object.assign(Readable.from([Buffer.from(body)]),{statusCode:200,headers});
 const fakeUpstream=async(input,options={})=>{
  const url=new URL(input);requests.push({url,options});
@@ -21,7 +21,11 @@ const fakeUpstream=async(input,options={})=>{
    async function* catalog(){yield Buffer.from('[');for(let i=1;i<=21001;i++)yield Buffer.from((i>1?',':'')+JSON.stringify({stream_id:i,name:'Large channel '+i,category_id:1,unused:'x'.repeat(1024)}));yield Buffer.from(']');}
    return{url,response:Object.assign(Readable.from(catalog()),{statusCode:200,headers:{}})};
  }
- if(url.pathname==='/player_api.php'&&url.searchParams.get('action')==='get_vod_categories')return{url,response:fakeResponse(JSON.stringify([{category_id:9,category_name:'Test Movies'}]))};
+ if(url.pathname==='/player_api.php'&&url.searchParams.get('action')==='get_vod_categories')return{url,response:fakeResponse(JSON.stringify([{category_id:9,category_name:'Test Movies'},{category_id:10,category_name:'Other Movies'},{category_id:11,category_name:'More Movies'}]))};
+ if(largeMovies&&url.pathname==='/player_api.php'&&url.searchParams.get('action')==='get_vod_streams'&&!url.searchParams.has('category_id')){
+  async function* catalog(){yield Buffer.from('[');for(let i=1;i<=50001;i++)yield Buffer.from((i>1?',':'')+JSON.stringify({stream_id:i,name:'Movie '+i,category_id:9}));yield Buffer.from(']');}
+  return{url,response:Object.assign(Readable.from(catalog()),{statusCode:200,headers:{}})};
+ }
  if(url.pathname==='/player_api.php'&&url.searchParams.get('action')==='get_vod_streams')return{url,response:fakeResponse(JSON.stringify([{stream_id:7,name:'Dummy movie',category_id:9,container_extension:'mp4',stream_icon:'http://provider.example.invalid/poster?username=dummy-user&password=dummy-password',unused:'discard'}]))};
  if(url.pathname==='/player_api.php')return{url,response:fakeResponse(JSON.stringify(url.searchParams.get('action')==='get_live_streams'?[{name:'Dummy test channel',stream_id:7,category_id:1,stream_icon:'http://private.invalid/secret.png'}]:[{category_id:1,category_name:'Dummy'}]))};
  if(url.pathname.endsWith('.m3u8'))return{url,response:fakeResponse('#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="key.bin"\n#EXTINF:4,\nsegment.ts\n',{'content-type':'application/vnd.apple.mpegurl'})};
@@ -58,6 +62,16 @@ try{
  r=await fetch(root+'/api/connect',{method:'POST',headers:{Authorization:'Bearer dummy-auth',Origin:'https://acasso01.github.io'}});
  assert.equal(r.status,200);const large=await r.json();assert.equal(large.channels.length,21001);assert.equal(Object.keys(large.streams).length,21001);assert.ok(large.streams['21001']);assert.ok(!JSON.stringify(large).includes('unused'));
  r=await fetch(root+large.streams['21001']);assert.equal(r.status,200);assert.ok((await r.text()).startsWith('#EXTM3U'));
+ largeMovies=true;
+ r=await fetch(root+large.movies_path);assert.equal(r.status,200);const overview=await r.json();assert.equal(overview.browse_by_category,true);assert.equal(overview.movies.length,0);assert.equal(overview.categories.length,3);
+ const bulkRequests=()=>requests.filter(r=>r.url.searchParams.get('action')==='get_vod_streams'&&!r.url.searchParams.has('category_id')).length;
+ const before=bulkRequests();r=await fetch(root+large.movies_path);assert.equal(r.status,200);await r.json();assert.equal(bulkRequests(),before);
+ const categoriesReplies=await Promise.all([fetch(root+large.movies_path+'?category_id=9'),fetch(root+large.movies_path+'?category_id=9')]);const selected=await categoriesReplies[0].json();await categoriesReplies[1].json();assert.equal(selected.category_id,'9');assert.equal(selected.movies[0].name,'Dummy movie');assert.ok(!JSON.stringify(selected).includes('dummy-password'));assert.equal(requests.filter(r=>r.url.searchParams.get('category_id')==='9').length,1);
+ for(const category of ['10','11','9']){r=await fetch(root+large.movies_path+'?category_id='+category);assert.equal(r.status,200);assert.equal((await r.json()).category_id,category)}
+ assert.equal(requests.filter(r=>r.url.searchParams.get('category_id')==='9').length,2);
+ for(const category of ['999','bad','9%26password=bad']){const count=requests.length;r=await fetch(root+large.movies_path+'?category_id='+category);assert.equal(r.status,400);assert.equal(requests.length,count)}
+ r=await fetch(root+selected.streams[7]);assert.equal(r.status,200);await r.text();
+ console.log('PASS 50,001-movie catalog automatically switches to categories; scoped provider requests, cache/coalescing, eviction and category validation preserve playable opaque links');
  console.log('PASS catalog above 15 MiB and 20,000 channels, UTF-8/chunk boundaries, metadata projection, malformed JSON and bounded parser limits');
  console.log('PASS gateway auth, CORS, SSRF protections, vault retrieval, opaque stream links, HLS playlist/key/segment relay, ranges, expiry and no-store');
 }finally{gateway.closeAllConnections();await new Promise(resolve=>gateway.close(resolve))}
