@@ -24,7 +24,8 @@ vm.runInContext('stopVideo()',ctx);assert.equal(timers.size,0);
 // Alternate MMS/MSE path must use only the opaque gateway link and release resources.
 let instance;
 class FakeHls{
- static Events={ERROR:'error',MANIFEST_PARSED:'manifest'};
+ static Events={ERROR:'error',MANIFEST_PARSED:'manifest',FRAG_BUFFERED:'buffered'};
+ static DefaultConfig={manifestLoadPolicy:{default:{timeoutRetry:null,errorRetry:null}}};
  static isSupported(){return true}
  constructor(config){this.config=config;this.handlers={};instance=this}
  on(event,handler){this.handlers[event]=handler}
@@ -75,3 +76,13 @@ get('video').error={code:4};get('video').onerror();await tick();assert.match(get
 void get('compatible').onclick();assert.equal(get('video').src,'https://homepi.test.ts.net/compatible/session/movie/index.m3u8');assert.equal(vm.runInContext('activeCompatibility',ctx),get('video').src);get('video').onplaying();assert.match(get('playstatus').textContent,/Seeking is limited/);
 vm.runInContext('stopVideo()',ctx);
 console.log('PASS movie diagnostics use a bounded byte-range check, report actual formats and offer original-quality compatible playback with seeking limits');
+
+FakeHls.isSupported=()=>true;ctx.window.Hls=FakeHls;let starts=0;get('video').play=()=>{starts++;return Promise.resolve()};get('video').currentTime=0;let bufferEnd=4;get('video').buffered={length:1,start:()=>0,end:()=>bufferEnd};get('video').error=null;
+await vm.runInContext("play({kind:'movie',stream_id:8,name:'Movie',container_extension:'mkv'},true,true)",ctx);
+assert.equal(instance.config.maxBufferSize,64*1024*1024);assert.equal(instance.config.maxBufferLength,30);assert.equal(instance.config.manifestLoadPolicy.default.maxTimeToFirstByteMs,60000);assert.equal(get('video').autoplay,false);
+instance.emit('manifest');instance.emit('buffered');assert.equal(starts,0);bufferEnd=8;instance.emit('buffered');assert.equal(starts,1);get('video').onplaying();
+get('video').currentTime=7;get('video').onwaiting();assert.match(get('playstatus').textContent,/Refilling/);instance.emit('buffered');assert.equal(starts,1);bufferEnd=15;instance.emit('buffered');assert.equal(starts,2);
+vm.runInContext('stopVideo()',ctx);assert.equal(get('video').autoplay,true);
+// Short finished movies do not wait for more seconds than the movie contains.
+get('video').currentTime=0;bufferEnd=6;await vm.runInContext("play({kind:'movie',stream_id:8,name:'Short',container_extension:'mkv'},true,true)",ctx);instance.currentLevel=0;instance.levels=[{details:{live:false,edge:6}}];instance.emit('buffered');assert.equal(starts,3);vm.runInContext('stopVideo()',ctx);
+console.log('PASS movie-only startup and refill buffer gates, short movie completion, 64 MiB memory bound and native autoplay restoration; live defaults unchanged');

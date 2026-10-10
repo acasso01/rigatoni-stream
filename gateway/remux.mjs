@@ -6,7 +6,12 @@ const delay=ms=>new Promise(r=>setTimeout(r,ms));
 export function remuxArguments(input,dir,options=[],codec='h264',{movie=false,audio='aac'}={}){
  const url=new URL(input);
  if(url.protocol!=='http:'||url.hostname!=='127.0.0.1'||!/^\/media\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(url.pathname)||url.search||url.hash||url.username||url.password)throw Error('unsafe_target');
- return ['-nostdin','-v','quiet','-protocol_whitelist','http,tcp,crypto',...options,'-rw_timeout','15000000','-fflags','+genpts+discardcorrupt',...(movie?['-re']:[]),'-i',input,'-map','0:v:0','-map','0:a:0?','-c:v','copy',...(movie&&audio!=='aac'?['-c:a','aac','-b:a','192k']:['-c:a','copy','-bsf:a','aac_adtstoasc']),...(codec==='hevc'?['-tag:v','hvc1']:[]),'-map_metadata','-1','-avoid_negative_ts','make_zero','-f','hls','-hls_segment_type','fmp4','-hls_time','4','-hls_list_size','4','-hls_delete_threshold','1','-hls_flags','delete_segments+temp_file','-hls_fmp4_init_filename','init.mp4','-hls_segment_filename',join(dir,'segment-%06d.m4s'),join(dir,'index.m3u8')];
+ return ['-nostdin','-v','quiet','-protocol_whitelist','http,tcp,crypto',...options,'-rw_timeout','15000000','-fflags','+genpts+discardcorrupt',...(movie?['-re']:[]),'-i',input,'-map','0:v:0','-map','0:a:0?','-c:v','copy',...(movie&&audio!=='aac'?['-c:a','aac','-b:a','192k']:['-c:a','copy','-bsf:a','aac_adtstoasc']),...(codec==='hevc'?['-tag:v','hvc1']:[]),'-map_metadata','-1','-avoid_negative_ts','make_zero','-f','hls','-hls_segment_type','fmp4','-hls_time','4','-hls_list_size',movie?'8':'4','-hls_delete_threshold',movie?'2':'1','-hls_flags','delete_segments+temp_file','-hls_fmp4_init_filename','init.mp4','-hls_segment_filename',join(dir,'segment-%06d.m4s'),join(dir,'index.m3u8')];
+}
+export function moviePlaylistReady(text){
+ if(text.includes('#EXT-X-ENDLIST'))return true;
+ const seconds=[...text.matchAll(/^#EXTINF:([0-9.]+)/gm)].reduce((sum,match)=>sum+Number(match[1]),0);
+ return seconds>=12;
 }
 export function createRemuxManager({options=async()=>[],now=Date.now,maxJobs=1,maxBytes=160*1024*1024,idleMs=45000}={}){
  const jobs=new Map();
@@ -41,10 +46,10 @@ export function createRemuxManager({options=async()=>[],now=Date.now,maxJobs=1,m
   async read(key,input,codec,file,media={}){
    if(!/^(index\.m3u8|init\.mp4|segment-\d{6,}\.m4s)$/.test(file))throw Error('compatibility_file');
    const job=await ensure(key,input,codec,media);
-   const deadline=Date.now()+25000;
+   const deadline=Date.now()+(media.movie?45000:25000);
    do{
     if(job.stopped||job.failed)throw Error('compatibility_failed');
-    try{return await readFile(join(job.dir,file))}catch(error){if(error.code!=='ENOENT')throw Error('compatibility_failed');if(file!=='index.m3u8')throw Error('compatibility_segment_expired')}
+    try{const data=await readFile(join(job.dir,file));if(file!=='index.m3u8'||!media.movie||moviePlaylistReady(data.toString('utf8')))return data;}catch(error){if(error.code!=='ENOENT')throw Error('compatibility_failed');if(file!=='index.m3u8')throw Error('compatibility_segment_expired')}
     await delay(200);
    }while(Date.now()<deadline);
    await stop(key);throw Error('compatibility_timeout');
