@@ -20,11 +20,12 @@ struct TVCatalogBrowser: View {
 
     private var orderedCategories: [CatalogCategory] {
         guard let store else { return [] }
-        return allowPins ? CategoryPins.ordered(store.categories, pins: pinnedIDs) : store.categories
+        let shown = store.categories.filter { model.preferences.categoryVisible($0.id, kind: kind) }
+        return allowPins ? CategoryPins.ordered(shown, pins: pinnedIDs) : shown
     }
 
     private var selectedName: String {
-        orderedCategories.first { $0.id == selectedCategory }?.name ?? ""
+        selectedCategory == "all" ? "All movies" : orderedCategories.first { $0.id == selectedCategory }?.name ?? ""
     }
 
     private var isPinned: Bool { pinnedIDs.contains(selectedCategory) }
@@ -41,12 +42,11 @@ struct TVCatalogBrowser: View {
 
     @ViewBuilder
     private func content(_ store: TVLibraryStore) -> some View {
-        HStack(alignment: .top, spacing: 44) {
-            categorySidebar(store).frame(width: 360)
+        HStack(alignment: .top, spacing: 24) {
+            categorySidebar(store).frame(width: 285)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 26) {
-                    StreamHeading(title: selectedName.isEmpty ? kind.title : selectedName,
-                                  subtitle: kind == .live ? "Live TV · Your front row seat" : "Movies · Find something great")
+                    Text(selectedName.isEmpty ? kind.title : selectedName).font(.title2.bold())
                     if !model.providerReady {
                         Text("Save your provider in Settings to browse.").foregroundStyle(.secondary)
                     } else if store.loading {
@@ -55,34 +55,39 @@ struct TVCatalogBrowser: View {
                         Text(store.error).foregroundStyle(.secondary)
                         Button("Retry") { store.revision += 1 }.buttonStyle(.bordered)
                     } else { itemGrid(store) }
-                }.padding(.vertical, 32).padding(.horizontal, 20)
+                }.padding(.vertical, 12).padding(.horizontal, 12)
             }
-        }.padding(.horizontal, 48).padding(.top, 20)
+        }.padding(.horizontal, 24).padding(.top, 12)
         .background { StreamBackdrop() }
         .task(id: "\(model.libraryRevision)-\(store.revision)") {
             let previous = selectedCategory
             await store.loadCategories()
             guard !Task.isCancelled else { return }
             pinnedIDs = store.pinnedIDs()
-            if selectedCategory.isEmpty || !orderedCategories.contains(where: { $0.id == selectedCategory }) {
-                selectedCategory = orderedCategories.first { $0.id == initialCategoryID }?.id ?? orderedCategories.first?.id ?? ""
+            if selectedCategory.isEmpty || (selectedCategory != "all" && !orderedCategories.contains(where: { $0.id == selectedCategory })) {
+                selectedCategory = initialCategoryID == "all" ? "all" : orderedCategories.first { $0.id == initialCategoryID }?.id ?? orderedCategories.first?.id ?? ""
             }
             if selectedCategory == previous, !selectedCategory.isEmpty {
-                await store.loadItems(categoryID: selectedCategory)
+                await loadSelection(store)
             }
         }
         .task(id: selectedCategory) {
             guard !selectedCategory.isEmpty else { return }
             visibleCount = 60
-            await store.loadItems(categoryID: selectedCategory)
+            await loadSelection(store)
             focusedCard = store.items.first?.id
         }
         .onChange(of: store.items.map(\.id)) { _, ids in
             if focusedCard == nil { focusedCard = ids.first }
         }
         .fullScreenCover(item: $playing) { item in
-            TVPlayerView(item: item, provider: model.provider, channels: kind == .live ? store.items : [])
+            CatalogDestination(item: item, channels: kind == .live ? store.items : [])
         }
+    }
+
+    private func loadSelection(_ store: TVLibraryStore) async {
+        if selectedCategory == "all" { await store.loadAllForSearch { _, _ in } }
+        else { await store.loadItems(categoryID: selectedCategory) }
     }
 
     private func categorySidebar(_ store: TVLibraryStore) -> some View {
@@ -91,6 +96,9 @@ struct TVCatalogBrowser: View {
             Text("CATEGORIES").font(.caption.weight(.semibold)).tracking(2).foregroundStyle(.secondary).padding(.horizontal, 16)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
+                    if kind == .movies {
+                        Button("All titles") { selectedCategory = "all" }.buttonStyle(.bordered)
+                    }
                     ForEach(orderedCategories) { category in
                         Button { selectedCategory = category.id } label: {
                             HStack(spacing: 12) {
@@ -119,7 +127,8 @@ struct TVCatalogBrowser: View {
 
     @ViewBuilder
     private func itemGrid(_ store: TVLibraryStore) -> some View {
-        let visible = Array(store.items.prefix(visibleCount))
+        let shown = store.items.filter(model.preferences.visible)
+        let visible = Array(shown.prefix(visibleCount))
         if visible.isEmpty {
             Text("No titles available.").foregroundStyle(TVTheme.muted)
         } else {
@@ -128,31 +137,31 @@ struct TVCatalogBrowser: View {
                     ForEach(visible) { item in
                         Button { playing = item } label: {
                             HStack(spacing: 24) {
-                                ProviderPoster(url: item.poster, kind: .live).frame(width: 148, height: 86)
+                                ProviderPoster(url: item.poster, kind: .live).frame(width: 100, height: 56)
                                     .clipShape(RoundedRectangle(cornerRadius: 14))
                                 Text(item.name).font(.headline).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
                                 Image(systemName: "play.circle.fill").font(.title2).foregroundStyle(.secondary)
-                            }.padding(18).foregroundStyle(.white)
+                            }.padding(18).foregroundStyle(.primary)
                                 .background(TVTheme.panel, in: RoundedRectangle(cornerRadius: TVTheme.corner))
                         }.buttonStyle(.card).focused($focusedCard, equals: item.id)
                     }
                 }.padding(.vertical, 12)
             } else {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 28)], spacing: 36) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 22)], spacing: 36) {
                     ForEach(visible) { item in
                         Button { playing = item } label: { TVCatalogCard(item: item) }
                             .buttonStyle(.card).focused($focusedCard, equals: item.id)
                     }
                 }.padding(.vertical, 12)
             }
-            if store.items.count > visibleCount {
-                Button("Show more (\(store.items.count - visibleCount) remaining)") {
+            if shown.count > visibleCount {
+                Button("Show more (\(shown.count - visibleCount) remaining)") {
                     visibleCount += 60
                 }
                 .buttonStyle(.card)
                 .padding(.top, 8)
             }
-            Text("\(store.items.count) titles")
+            Text("\(shown.count) titles")
                 .font(.caption)
                 .foregroundStyle(TVTheme.muted)
                 .padding(.top, 8)

@@ -3,6 +3,40 @@ import UIKit
 @testable import RigatoniStream
 
 final class CoreTests: XCTestCase {
+    func testHiddenContentIsRemovedFromUnifiedSearchAndCanBeRestored() {
+        let movie = CatalogItem(id: "7", name: "Sports movie", kind: .movies, fileExtension: "mkv", poster: nil, categoryID: "2")
+        let channel = CatalogItem(id: "7", name: "Sports channel", kind: .live, fileExtension: "ts", poster: nil, categoryID: "1")
+        var preferences = LibraryPreferences()
+        preferences.setCategory("2", kind: .movies, visible: false)
+        preferences.hiddenChannels.insert("7")
+        XCTAssertTrue(UnifiedSearch.matches([movie, channel].filter(preferences.visible), query: "sports", filter: "all").isEmpty)
+        preferences.setCategory("2", kind: .movies, visible: true)
+        XCTAssertEqual([movie, channel].filter(preferences.visible).map(\.kind), [.movies])
+        preferences.hiddenChannels.remove("7")
+        XCTAssertEqual([movie, channel].filter(preferences.visible).count, 2)
+    }
+    func testLibraryPreferencesPersistProgressWithoutCredentialsAndKeepNamespacesSeparate() {
+        let key = "rigatoni-test-" + UUID().uuidString
+        defer { UserDefaults.standard.removeObject(forKey: key) }
+        var preferences = LibraryPreferences()
+        preferences.progress["7"] = MovieProgress(seconds: 125, duration: 7200, updated: 1)
+        preferences.hiddenLiveCategories = ["23"]
+        preferences.write(key: key)
+        XCTAssertEqual(LibraryPreferences.read(key: key).progress["7"]?.label, "2:05")
+        XCTAssertFalse(LibraryPreferences.read(key: key).categoryVisible("23", kind: .live))
+        XCTAssertTrue(LibraryPreferences.read(key: key + "other").progress.isEmpty)
+        let stored = String(data: UserDefaults.standard.data(forKey: key)!, encoding: .utf8)!
+        for secretField in ["username", "password", "server", "playbackURL"] { XCTAssertFalse(stored.contains(secretField)) }
+    }
+    func testMovieDetailsReadProviderFieldsAndHandleMissingMetadata() {
+        let info = MovieInformation.parse(["info": ["plot": "A movie overview", "releaseDate": "2026-01-01", "genre": "Drama"]])
+        XCTAssertEqual(info.overview, "A movie overview")
+        XCTAssertEqual(info.release, "2026-01-01")
+        XCTAssertEqual(info.genre, "Drama")
+        XCTAssertEqual(MovieInformation.parse([:]), MovieInformation())
+        XCTAssertEqual(MovieInformation.parse(["movie_data": ["releasedate": "2020"]]).release, "2020")
+    }
+
     func testCategoryPinsKeepOrderAndRemovePins() {
         let categories = [CatalogCategory(id: "1", name: "News"), CatalogCategory(id: "2", name: "Sports"), CatalogCategory(id: "3", name: "Movies")]
         let pins = CategoryPins.toggled("2", in: [])

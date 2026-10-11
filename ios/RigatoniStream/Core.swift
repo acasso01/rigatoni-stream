@@ -76,6 +76,7 @@ struct CatalogItem: Identifiable, Equatable {
     let fileExtension: String
     let poster: URL?
     var playbackURL: URL? = nil
+    var categoryID: String = ""
     static func parse(_ row: [String: Any], kind: LibraryKind) -> CatalogItem? {
         let id = row["stream_id"].map { String(describing: $0) } ?? ""
         guard !id.isEmpty, id.allSatisfy(\.isNumber) else { return nil }
@@ -84,7 +85,8 @@ struct CatalogItem: Identifiable, Equatable {
         let image = (row["stream_icon"] as? String).flatMap(URL.init(string:))
         return CatalogItem(id: id, name: row["name"] as? String ?? "Untitled", kind: kind,
                            fileExtension: allowed.contains(ext) ? ext : "mp4",
-                           poster: ["https", "http"].contains(image?.scheme ?? "") ? image : nil)
+                           poster: ["https", "http"].contains(image?.scheme ?? "") ? image : nil,
+                           categoryID: row["category_id"].map { String(describing: $0) } ?? "")
     }
 }
 
@@ -256,12 +258,32 @@ final class AppModel: ObservableObject {
     @Published var libraryRevision = 0
     let account = AccountAPI()
     let catalog = SessionCatalog()
+    @Published var preferences = LibraryPreferences()
+    var preferenceKey: String? {
+        guard let id = account.session?.user.id, let host = try? provider.baseURL().host else { return nil }
+        return CategoryPins.key(accountID: id, host: host) + "-library-v1"
+    }
+    func savePreferences() {
+        preferences.write(key: preferenceKey); libraryRevision += 1
+    }
+    func saveProgress(id: String, seconds: Double, duration: Double) {
+        guard preferenceKey != nil, seconds.isFinite, duration.isFinite, seconds >= 10, duration > 0 else { return }
+        if seconds >= duration - 20 { preferences.progress[id] = nil }
+        else { preferences.progress[id] = MovieProgress(seconds: seconds, duration: duration, updated: Date().timeIntervalSince1970) }
+        // Bound preferences without saving any provider URLs or login details.
+        if preferences.progress.count > 500 {
+            let oldest = preferences.progress.min { $0.value.updated < $1.value.updated }?.key
+            if let oldest { preferences.progress[oldest] = nil }
+        }
+        preferences.write(key: preferenceKey)
+    }
     var gatewayConnection: [String: Any]?
     var gatewayConnectTask: Task<[String: Any], Error>?
     var gatewayMovieCatalog: [String: Any]?
     var gatewayMedia: [LibraryKind: [String: String]] = [:]
     func resetGateway() {
         catalog.reset()
+        preferences = LibraryPreferences.read(key: preferenceKey)
         gatewayConnectTask?.cancel(); gatewayConnectTask = nil; gatewayConnection = nil
         gatewayMovieCatalog = nil; gatewayMedia = [:]
     }

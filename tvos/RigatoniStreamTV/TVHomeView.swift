@@ -12,7 +12,7 @@ struct TVHomeView: View {
             if let store {
                 TVHomeBody(store: store, model: model, playing: $playing)
                     .fullScreenCover(item: $playing) { item in
-                        TVPlayerView(item: item, provider: model.provider, channels: store.items)
+                        CatalogDestination(item: item, channels: store.items)
                     }
             } else {
                 ProgressView("Loading…")
@@ -31,7 +31,7 @@ private struct TVHomeBody: View {
 
     private var pinned: [CatalogCategory] {
         let ids = Set(store.pinnedIDs())
-        return CategoryPins.ordered(store.categories, pins: store.pinnedIDs())
+        return CategoryPins.ordered(store.categories.filter { model.preferences.categoryVisible($0.id, kind: .live) }, pins: store.pinnedIDs())
             .filter { ids.contains($0.id) }
     }
 
@@ -87,7 +87,7 @@ private struct TVPinnedRow: View {
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 24) {
-                        ForEach(items.prefix(20)) { item in
+                        ForEach(items.filter(model.preferences.visible).prefix(20)) { item in
                             Button { playing = item } label: {
                                 VStack(alignment: .leading, spacing: 8) {
                                     ProviderPoster(url: item.poster, kind: .live)

@@ -102,6 +102,7 @@ final class TVLibraryStore: ObservableObject {
         } else if let category {
             categoryCache = [category: result]
         }
+        if let category { result = result.map { var item = $0; if item.categoryID.isEmpty { item.categoryID = category }; return item } }
         return result
     }
 

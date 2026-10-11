@@ -58,7 +58,7 @@ final class SessionCatalog: ObservableObject {
                 let data = try await BoundedTransfer(limit: 32 * 1024 * 1024, timeout: category == nil ? 10 : 30).fetch(url)
                 let worker = Task.detached(priority: .userInitiated) {
                     guard let result = try JSONSerialization.jsonObject(with: data) as? [[String: Any]], result.count <= CatalogIndex.maximumItems else { throw AppFailure("The catalog is too large or invalid.") }
-                    return result
+            return result
                 }
                 rows = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
             }
@@ -73,6 +73,7 @@ final class SessionCatalog: ObservableObject {
                     return item
                 }
             }
+            if let category { result = result.map { var item = $0; if item.categoryID.isEmpty { item.categoryID = category }; return item } }
             return result
         }
         jobs[key] = task
@@ -123,7 +124,7 @@ struct MovieCard: View {
                 .clipShape(RoundedRectangle(cornerRadius: StreamTheme.corner))
             Text(item.name).font(.subheadline.weight(.medium)).lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
-        }.foregroundStyle(.white)
+        }.foregroundStyle(.primary)
     }
 }
 
@@ -146,6 +147,7 @@ struct MoviesHomeView: View {
                     if !categories.isEmpty {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 10) {
+                                NavigationLink("All titles") { LibraryView(kind: .movies, initialCategoryID: "all", embedded: true) }.buttonStyle(.bordered)
                                 ForEach(categories) { category in
                                     NavigationLink { LibraryView(kind: .movies, initialCategoryID: category.id, embedded: true) } label: {
                                         Text(category.name).font(.subheadline.weight(.semibold))
@@ -158,15 +160,15 @@ struct MoviesHomeView: View {
                     }
                     if let featured {
                         ZStack(alignment: .bottomLeading) {
-                            ProviderPoster(url: featured.poster, kind: .movies).frame(height: 360).clipped()
+                            ProviderPoster(url: featured.poster, kind: .movies).frame(height: 260).clipped()
                             LinearGradient(colors: [.clear, .black.opacity(0.35), .black], startPoint: .top, endPoint: .bottom)
                             VStack(alignment: .leading, spacing: 12) {
                                 Text("IN THE SPOTLIGHT").font(.caption.weight(.bold)).tracking(3)
                                 Text(featured.name).font(.largeTitle.weight(.bold)).lineLimit(3)
                                 Button { playing = featured } label: { Label("Play", systemImage: "play.fill").font(.headline).padding(.horizontal, 24).padding(.vertical, 10) }
                                     .buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black)
-                            }.padding(22)
-                        }.frame(height: 360)
+                            }.padding(22).foregroundStyle(.white)
+                        }.frame(height: 260)
                             .clipShape(RoundedRectangle(cornerRadius: 24)).padding(.horizontal, 16)
                     } else if featuredLoading && model.providerReady {
                         ProgressView("Loading movies…").frame(maxWidth: .infinity).padding(40)
@@ -199,8 +201,8 @@ struct MoviesHomeView: View {
                 do {
                     let loaded = try await catalog.categories(kind: .movies, model: model)
                     try Task.checkCancellation()
-                    categories = loaded
-                    if let first = loaded.first {
+                    categories = loaded.filter { model.preferences.categoryVisible($0.id, kind: .movies) }
+                    if let first = categories.first {
                         let items = try await catalog.items(kind: .movies, category: first.id, model: model)
                         try Task.checkCancellation()
                         featured = items.first { $0.poster != nil } ?? items.first
@@ -208,7 +210,7 @@ struct MoviesHomeView: View {
                     if loaded.isEmpty { error = "No movie categories are available." }
                 } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
             }
-            .fullScreenCover(item: $playing) { PlayerView(item: $0, provider: model.provider) }
+            .fullScreenCover(item: $playing) { CatalogDestination(item: $0) }
         }
     }
 }
@@ -243,7 +245,7 @@ struct MovieShelf: View {
             do {
                 error = ""
                 let loaded = try await catalog.items(kind: .movies, category: category.id, model: model)
-                try Task.checkCancellation(); items = Array(loaded.prefix(20))
+                try Task.checkCancellation(); items = Array(loaded.filter(model.preferences.visible).prefix(20))
                 if loaded.isEmpty { error = "No movies in this category." }
             } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
         }
@@ -303,7 +305,7 @@ struct GlobalSearchView: View {
                                         Label(hit.item.kind.title, systemImage: hit.item.kind.symbol).font(.caption).foregroundStyle(.secondary)
                                     }
                                     Spacer(); Image(systemName: "play.circle").font(.title2)
-                                }.foregroundStyle(.white)
+                                }.foregroundStyle(.primary)
                             }.buttonStyle(.plain)
                         }
                         if results.count > limit { Button("More results") { limit += 60 } }
@@ -325,13 +327,13 @@ struct GlobalSearchView: View {
                 limit = 60
                 guard hasQuery else { results = []; return }
                 do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
-                let snapshot = LibraryKind.allCases.flatMap { catalog.searchable[$0] ?? [] }
+                let snapshot = LibraryKind.allCases.flatMap { catalog.searchable[$0] ?? [] }.filter(model.preferences.visible)
                 let term = query; let choice = filter
                 let worker = Task.detached(priority: .userInitiated) { UnifiedSearch.matches(snapshot, query: term, filter: choice) }
                 let found = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
                 guard !Task.isCancelled else { return }; results = found
             }
-            .fullScreenCover(item: $playing) { PlayerView(item: $0, provider: model.provider, channels: catalog.searchable[.live] ?? []) }
+            .fullScreenCover(item: $playing) { CatalogDestination(item: $0, channels: catalog.searchable[.live] ?? []) }
         }
     }
     private func load(_ kind: LibraryKind) async {
@@ -343,3 +345,214 @@ struct GlobalSearchView: View {
 }
 
 #endif
+
+// Device-local personalization stores only provider-scoped IDs and playback times.
+struct MovieProgress: Codable, Equatable {
+    let seconds: Double
+    let duration: Double
+    let updated: Double
+    var label: String { String(format: "%d:%02d", Int(seconds) / 60, Int(seconds) % 60) }
+}
+struct LibraryPreferences: Codable {
+    var hiddenLiveCategories: Set<String> = []
+    var hiddenMovieCategories: Set<String> = []
+    var hiddenChannels: Set<String> = []
+    var progress: [String: MovieProgress] = [:]
+    static func read(key: String?) -> Self {
+        guard let key, let data = UserDefaults.standard.data(forKey: key), let value = try? JSONDecoder().decode(Self.self, from: data) else { return Self() }
+        return value
+    }
+    func write(key: String?) {
+        guard let key, let data = try? JSONEncoder().encode(self) else { return }
+        UserDefaults.standard.set(data, forKey: key)
+    }
+    func categoryVisible(_ id: String, kind: LibraryKind) -> Bool {
+        !(kind == .live ? hiddenLiveCategories : hiddenMovieCategories).contains(id)
+    }
+    func visible(_ item: CatalogItem) -> Bool {
+        categoryVisible(item.categoryID, kind: item.kind) && (item.kind != .live || !hiddenChannels.contains(item.id))
+    }
+    mutating func setCategory(_ id: String, kind: LibraryKind, visible: Bool) {
+        if kind == .live { if visible { hiddenLiveCategories.remove(id) } else { hiddenLiveCategories.insert(id) } }
+        else { if visible { hiddenMovieCategories.remove(id) } else { hiddenMovieCategories.insert(id) } }
+    }
+}
+enum AppAppearance: String, CaseIterable, Identifiable {
+    case dark, light, netflix
+    var id: String { rawValue }
+    var title: String { switch self { case .dark: return "iOS Dark"; case .light: return "iOS Light"; case .netflix: return "Netflix" } }
+    var scheme: ColorScheme { self == .light ? .light : .dark }
+    var accent: Color { self == .netflix ? .red : .blue }
+}
+
+struct LibraryCustomizationView: View {
+    @EnvironmentObject private var model: AppModel
+    @AppStorage("rigatoni-appearance") private var appearance = AppAppearance.dark.rawValue
+    @State private var categories: [CatalogCategory] = []
+    @State private var channels: [CatalogItem] = []
+    @State private var kind = LibraryKind.live
+    @State private var selected = ""
+    @State private var query = ""
+    @State private var error = ""
+    @State private var loading = false
+    @State private var limit = 100
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                Text("Make it yours").font(.largeTitle.bold())
+                Picker("Theme", selection: $appearance) {
+                    ForEach(AppAppearance.allCases) { Text($0.title).tag($0.rawValue) }
+                }
+                Text("Themes, hidden content and watch progress are saved on this device. Provider and gateway settings remain in your account.").font(.footnote).foregroundStyle(.secondary)
+                Picker("Manage", selection: $kind) { ForEach(LibraryKind.allCases) { Text($0.title).tag($0) } }
+                TextField("Find category or channel", text: $query)
+                Text("Visible categories").font(.title2.bold())
+                Text("Turn off categories you don’t watch. Hidden titles also disappear from search.").foregroundStyle(.secondary)
+                Button("Show all categories & channels") {
+                    model.preferences.hiddenLiveCategories = []; model.preferences.hiddenMovieCategories = []; model.preferences.hiddenChannels = []
+                    model.savePreferences()
+                }
+                if loading { ProgressView("Loading…") }
+                if !error.isEmpty { Text(error).foregroundStyle(.secondary); Button("Retry") { Task { await load() } } }
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    ForEach(categories.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }) { category in
+                        Toggle(category.name, isOn: Binding(get: { model.preferences.categoryVisible(category.id, kind: kind) }, set: {
+                            model.preferences.setCategory(category.id, kind: kind, visible: $0); model.savePreferences()
+                        }))
+                    }
+                }
+                if kind == .live && !categories.isEmpty {
+                    Text("Visible channels").font(.title2.bold())
+                    Picker("Channel category", selection: $selected) {
+                        Text("Choose a category").tag("")
+                        ForEach(categories) { Text($0.name).tag($0.id) }
+                    }
+                    LazyVStack(alignment: .leading, spacing: 14) {
+                        ForEach(Array(channels.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }.prefix(limit))) { item in
+                            Toggle(item.name, isOn: Binding(get: { !model.preferences.hiddenChannels.contains(item.id) }, set: {
+                                if $0 { model.preferences.hiddenChannels.remove(item.id) } else { model.preferences.hiddenChannels.insert(item.id) }
+                                model.savePreferences()
+                            }))
+                        }
+                    }
+                    if channels.count > limit { Button("More channels") { limit += 100 } }
+                }
+            }.padding(28).frame(maxWidth: 1100, alignment: .leading).frame(maxWidth: .infinity)
+        }.background { StreamBackdrop() }.navigationTitle("Appearance & library")
+        .task(id: "\(kind.rawValue)-\(model.provider.server)") { await load() }
+        .task(id: selected) {
+            channels = []; limit = 100; guard kind == .live, !selected.isEmpty else { return }
+            do { channels = try await model.catalog.items(kind: .live, category: selected, model: model) }
+            catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+        }
+    }
+    private func load() async {
+        categories = []; channels = []; selected = ""; error = ""; loading = true
+        defer { loading = false }
+        guard model.providerReady else { error = "Save a provider first."; return }
+        do { categories = try await model.catalog.categories(kind: kind, model: model) }
+        catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+    }
+}
+
+struct MovieInformation: Equatable {
+    var overview = ""
+    var release = ""
+    var genre = ""
+    static func parse(_ row: [String: Any]) -> Self {
+        let info = row["info"] as? [String: Any] ?? [:]
+        let movie = row["movie_data"] as? [String: Any] ?? [:]
+        func value(_ names: [String]) -> String {
+            for name in names {
+                for source in [info, movie] {
+                    if let value = source[name] as? String, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return value }
+                }
+            }
+            return ""
+        }
+        return Self(overview: value(["plot", "description"]), release: value(["releasedate", "releaseDate", "release_date"]), genre: value(["genre"]))
+    }
+}
+
+// A detail page is used by every movie entry point on both platforms.
+struct MovieDetailView: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    let item: CatalogItem
+    @State private var info = MovieInformation()
+    @State private var loading = true
+    @State private var metadataNotice = ""
+    @State private var playing = false
+    @State private var resumeSeconds = 0.0
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                Button { dismiss() } label: { Label("Back", systemImage: "chevron.left") }
+                HStack(alignment: .top, spacing: 28) {
+                    ProviderPoster(url: item.poster, kind: .movies).aspectRatio(2.0 / 3.0, contentMode: .fit)
+                        .frame(maxWidth: posterWidth).clipShape(RoundedRectangle(cornerRadius: 18))
+                    VStack(alignment: .leading, spacing: 18) {
+                        Text(item.name).font(.largeTitle.bold())
+                        if !info.release.isEmpty { Text("Released \(info.release)").foregroundStyle(.secondary) }
+                        if !info.genre.isEmpty { Text(info.genre).foregroundStyle(.secondary) }
+                        if let saved = model.preferences.progress[item.id] {
+                            Button { resumeSeconds = saved.seconds; playing = true } label: { Label("Continue from \(saved.label)", systemImage: "play.fill") }.buttonStyle(.borderedProminent)
+                            Button("Restart movie") { restart() }.buttonStyle(.bordered)
+                        } else {
+                            Button { resumeSeconds = 0; playing = true } label: { Label("Play movie", systemImage: "play.fill") }.buttonStyle(.borderedProminent)
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }
+                Text("Overview").font(.title2.bold())
+                if loading { ProgressView("Loading movie details…") }
+                else { Text(info.overview.isEmpty ? "No overview supplied by your provider." : info.overview).font(.body) }
+                if !metadataNotice.isEmpty { Text(metadataNotice).font(.footnote).foregroundStyle(.secondary) }
+            }.padding(28).frame(maxWidth: 1200, alignment: .leading).frame(maxWidth: .infinity)
+        }.background { StreamBackdrop() }
+        .task {
+            defer { loading = false }
+            do {
+                guard !model.provider.requiresGateway else { throw AppFailure("Movie details require direct provider access in this build. Playback is still available through the gateway.") }
+                var parts = URLComponents(url: try model.provider.apiURL(action: "get_vod_info"), resolvingAgainstBaseURL: false)!
+                parts.queryItems?.append(URLQueryItem(name: "vod_id", value: item.id))
+                let data = try await BoundedTransfer(limit: 2 * 1024 * 1024).fetch(parts.url!)
+                let row = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+                try Task.checkCancellation(); info = MovieInformation.parse(row)
+            } catch { if !Task.isCancelled { metadataNotice = error.localizedDescription } }
+        }
+        .fullScreenCover(isPresented: $playing) {
+            #if os(iOS)
+            PlayerView(item: item, provider: model.provider, startSeconds: resumeSeconds)
+            #else
+            TVPlayerView(item: item, provider: model.provider, startSeconds: resumeSeconds)
+            #endif
+        }
+    }
+    private var posterWidth: CGFloat {
+        #if os(tvOS)
+        return 300
+        #else
+        return 130
+        #endif
+    }
+    private func restart() {
+        model.preferences.progress[item.id] = nil; model.preferences.write(key: model.preferenceKey)
+        resumeSeconds = 0; playing = true
+    }
+}
+
+struct CatalogDestination: View {
+    @EnvironmentObject private var model: AppModel
+    let item: CatalogItem
+    var channels: [CatalogItem] = []
+    var body: some View {
+        if item.kind == .movies { MovieDetailView(item: item) }
+        else {
+            #if os(iOS)
+            PlayerView(item: item, provider: model.provider, channels: channels.filter(model.preferences.visible))
+            #else
+            TVPlayerView(item: item, provider: model.provider, channels: channels.filter(model.preferences.visible))
+            #endif
+        }
+    }
+}

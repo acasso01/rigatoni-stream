@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct RigatoniStreamApp: App {
     @StateObject private var model = AppModel()
+    @AppStorage("rigatoni-appearance") private var appearance = "dark"
     var body: some Scene {
         WindowGroup {
             Group {
@@ -16,8 +17,8 @@ struct RigatoniStreamApp: App {
                     .sheet(isPresented: $model.settingsVisible) { SettingsView() }
                 } else { LoginView() }
             }
-            .environmentObject(model).environmentObject(model.catalog).tint(.white)
-            .preferredColorScheme(.dark).task { await model.restore() }
+            .environmentObject(model).environmentObject(model.catalog).tint((AppAppearance(rawValue: appearance) ?? .dark).accent)
+            .preferredColorScheme((AppAppearance(rawValue: appearance) ?? .dark).scheme).task { await model.restore() }
         }
     }
 }
@@ -32,7 +33,7 @@ struct LoginView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    Image(systemName: "play.tv.fill").font(.system(size: 46)).foregroundStyle(.white)
+                    Image(systemName: "play.tv.fill").font(.system(size: 46)).foregroundStyle(.primary)
                     Text("Rigatoni Stream").font(.largeTitle.weight(.bold))
                     Text(createAccount ? "Create your account" : "Welcome back").font(.title.bold())
                     Text("Your TV and movies, in your pocket.").foregroundStyle(.secondary)
@@ -45,7 +46,7 @@ struct LoginView: View {
                         Button { showPassword.toggle() } label: { Image(systemName: showPassword ? "eye.slash" : "eye") }.accessibilityLabel(showPassword ? "Hide password" : "Show password")
                     }
                     Button(createAccount ? "Create account" : "Sign in") { Task { await authenticate() } }
-                        .buttonStyle(.borderedProminent).controlSize(.large).foregroundStyle(.black)
+                        .buttonStyle(.borderedProminent).controlSize(.large).foregroundStyle(.white)
                         .disabled(model.busy || email.isEmpty || password.isEmpty)
                     Button(createAccount ? "Already have an account? Sign in" : "Create an account") { createAccount.toggle(); model.notice = "" }
                     Button("Forgot password?") {
@@ -86,6 +87,9 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section("Personalize") {
+                    NavigationLink("Themes & hidden categories / channels") { LibraryCustomizationView() }
+                }
                 Section("Provider") {
                     Text(model.provider.requiresGateway ? "Playback route: HTTPS gateway" : "Playback route: direct provider").font(.footnote).foregroundStyle(.secondary)
                     TextField("Server URL", text: $model.provider.server).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()

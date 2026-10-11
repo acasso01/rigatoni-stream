@@ -20,6 +20,11 @@ final class NativePlayer: ObservableObject {
     private var remoteTargets: [(MPRemoteCommand, Any)] = []
     var title = ""
     var isLive = false
+    var progressRecorder: ((Double, Double) -> Void)?
+    var resumeSeconds = 0.0
+    private var lastRecorded = Date.distantPast
+    private var lastSeconds = 0.0
+    private var lastDuration = 0.0
     private var timer: Timer?
     private var openedAt = Date()
     private var url: URL?
@@ -61,6 +66,15 @@ final class NativePlayer: ObservableObject {
         playing = engine.isPlaying; seekable = engine.isSeekable
         if !dragging { position = Double(engine.position).clamped(to: 0...1) }
         let seconds = max(0, Int(engine.time.value?.int64Value ?? 0) / 1000)
+        let duration = Double(engine.media?.length.value?.int64Value ?? 0) / 1000
+        if !isLive, resumeSeconds > 0, seekable, duration > resumeSeconds {
+            engine.position = min(1, resumeSeconds / duration); resumeSeconds = 0
+        } else if !isLive, resumeSeconds == 0, duration > 0, seconds > 0 {
+            lastSeconds = Double(seconds); lastDuration = duration
+            if Date().timeIntervalSince(lastRecorded) >= 5 {
+                progressRecorder?(lastSeconds, lastDuration); lastRecorded = Date()
+            }
+        }
         elapsed = seconds >= 3600 ? String(format: "%d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60) : String(format: "%d:%02d", seconds / 60, seconds % 60)
         let size = engine.videoSize
         resolution = size.width > 0 ? "\(Int(size.width))×\(Int(size.height)) · Original quality" : ""
@@ -132,6 +146,7 @@ final class NativePlayer: ObservableObject {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
     func stop() {
+        if !isLive, resumeSeconds == 0 { progressRecorder?(lastSeconds, lastDuration) }
         timer?.invalidate(); timer = nil
         pipBridge?.detach(); pipBridge = nil
         pictureInPictureAvailable = false; pictureInPictureActive = false
@@ -218,6 +233,8 @@ struct PlayerView: View {
     let item: CatalogItem
     let provider: Provider
     var channels: [CatalogItem] = []
+    var startSeconds: Double = 0
+    @EnvironmentObject private var model: AppModel
     @State private var selectedChannel: CatalogItem?
     private var currentItem: CatalogItem { selectedChannel ?? item }
     @Environment(\.dismiss) private var dismiss
@@ -290,7 +307,7 @@ struct PlayerView: View {
         }
         .statusBarHidden(!controlsVisible)
         .persistentSystemOverlays(controlsVisible ? .automatic : .hidden)
-        .onAppear { player.title = currentItem.name; player.isLive = currentItem.kind == .live; showControls() }
+        .onAppear { player.resumeSeconds = startSeconds; player.progressRecorder = { seconds, duration in model.saveProgress(id: item.id, seconds: seconds, duration: duration) }; player.title = currentItem.name; player.isLive = currentItem.kind == .live; showControls() }
         .onChange(of: currentItem.id) { _, _ in
             guard let url = currentItem.playbackURL ?? (provider.requiresGateway ? nil : try? provider.streamURL(item: currentItem)) else {
                 player.stop(); return

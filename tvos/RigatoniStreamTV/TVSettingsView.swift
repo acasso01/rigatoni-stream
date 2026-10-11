@@ -102,6 +102,7 @@ struct TVSettingsView: View {
     @AppStorage("rigatoni-movie-buffer-ms") private var movieBuffer = 4000
 
     var body: some View {
+        NavigationStack {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 Text("Settings")
@@ -113,6 +114,9 @@ struct TVSettingsView: View {
                         .foregroundStyle(TVTheme.muted)
                 }
 
+                settingsGroup(title: "Personalize") {
+                    NavigationLink("Themes & hidden categories / channels") { LibraryCustomizationView() }
+                }
                 settingsGroup(title: "Provider") {
                     Text(model.provider.requiresGateway
                          ? "Playback route: HTTPS gateway"
@@ -189,6 +193,8 @@ struct TVSettingsView: View {
         ) {
             Button("Delete settings", role: .destructive) { Task { await model.deleteSettings() } }
         }
+    }
+
     }
 
     private func settingsGroup<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {

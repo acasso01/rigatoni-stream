@@ -17,6 +17,11 @@ final class TVNativePlayer: ObservableObject {
     @Published var resolution = ""
     var title = ""
     var isLive = false
+    var progressRecorder: ((Double, Double) -> Void)?
+    var resumeSeconds = 0.0
+    private var lastRecorded = Date.distantPast
+    private var lastSeconds = 0.0
+    private var lastDuration = 0.0
     private var timer: Timer?
     private var openedAt = Date()
     private var url: URL?
@@ -50,6 +55,15 @@ final class TVNativePlayer: ObservableObject {
         playing = engine.isPlaying; seekable = engine.isSeekable
         position = Double(engine.position).clamped(to: 0...1)
         let seconds = max(0, Int(engine.time.value?.int64Value ?? 0) / 1000)
+        let duration = Double(engine.media?.length.value?.int64Value ?? 0) / 1000
+        if !isLive, resumeSeconds > 0, seekable, duration > resumeSeconds {
+            engine.position = min(1, resumeSeconds / duration); resumeSeconds = 0
+        } else if !isLive, resumeSeconds == 0, duration > 0, seconds > 0 {
+            lastSeconds = Double(seconds); lastDuration = duration
+            if Date().timeIntervalSince(lastRecorded) >= 5 {
+                progressRecorder?(lastSeconds, lastDuration); lastRecorded = Date()
+            }
+        }
         elapsed = seconds >= 3600
             ? String(format: "%d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60)
             : String(format: "%d:%02d", seconds / 60, seconds % 60)
@@ -76,7 +90,8 @@ final class TVNativePlayer: ObservableObject {
         seek(to: (Double(engine.position) + seconds * 1000 / length).clamped(to: 0...1))
     }
 
-    func stop() { timer?.invalidate(); timer = nil; engine.stop() }
+    func stop() {
+        if !isLive, resumeSeconds == 0 { progressRecorder?(lastSeconds, lastDuration) } timer?.invalidate(); timer = nil; engine.stop() }
 }
 
 // tvOS-local equivalent of the iPhone build's ChannelNavigation helper,
@@ -117,6 +132,8 @@ struct TVPlayerView: View {
     let item: CatalogItem
     let provider: Provider
     var channels: [CatalogItem] = []
+    var startSeconds: Double = 0
+    @EnvironmentObject private var model: AppModel
 
     @Environment(\.dismiss) private var dismiss
     @StateObject private var player = TVNativePlayer()
@@ -128,10 +145,11 @@ struct TVPlayerView: View {
     @AppStorage("rigatoni-live-buffer-ms") private var liveBuffer = 1500
     @AppStorage("rigatoni-movie-buffer-ms") private var movieBuffer = 4000
 
-    init(item: CatalogItem, provider: Provider, channels: [CatalogItem] = []) {
+    init(item: CatalogItem, provider: Provider, channels: [CatalogItem] = [], startSeconds: Double = 0) {
         self.item = item
         self.provider = provider
         self.channels = channels
+        self.startSeconds = startSeconds
         _currentID = State(initialValue: item.id)
     }
 
@@ -239,6 +257,8 @@ struct TVPlayerView: View {
             showControls()
         }
         .onAppear {
+            player.resumeSeconds = startSeconds
+            player.progressRecorder = { seconds, duration in model.saveProgress(id: item.id, seconds: seconds, duration: duration) }
             player.title = currentItem.name
             player.isLive = currentItem.kind == .live
             if let url = playbackURL { player.play(url: url, cache: cache) }
@@ -246,6 +266,8 @@ struct TVPlayerView: View {
         }
         .onChange(of: currentID) { _, _ in
             guard let url = playbackURL else { player.stop(); return }
+            player.resumeSeconds = startSeconds
+            player.progressRecorder = { seconds, duration in model.saveProgress(id: item.id, seconds: seconds, duration: duration) }
             player.title = currentItem.name
             player.isLive = currentItem.kind == .live
             player.play(url: url, cache: cache)

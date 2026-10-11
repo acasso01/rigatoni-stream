@@ -65,14 +65,14 @@ struct TVSearchView: View {
             limit = 60
             guard hasQuery else { results = []; return }
             do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
-            let snapshot = LibraryKind.allCases.flatMap { catalog.searchable[$0] ?? [] }
+            let snapshot = LibraryKind.allCases.flatMap { catalog.searchable[$0] ?? [] }.filter(model.preferences.visible)
             let term = query; let choice = filter
             let worker = Task.detached(priority: .userInitiated) { UnifiedSearch.matches(snapshot, query: term, filter: choice) }
             let found = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
             guard !Task.isCancelled else { return }; results = found
         }
         .fullScreenCover(item: $playing) {
-            TVPlayerView(item: $0, provider: model.provider, channels: catalog.searchable[.live] ?? [])
+            CatalogDestination(item: $0, channels: catalog.searchable[.live] ?? [])
         }
     }
     private func load(_ kind: LibraryKind) async {

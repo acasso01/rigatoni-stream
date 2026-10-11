@@ -198,13 +198,14 @@ enum CategoryPins {
 
 // Shared native visual language; playback and credential handling stay separate.
 enum StreamTheme {
-    static let background = Color(red: 0.055, green: 0.06, blue: 0.08)
-    static let panel = Color(red: 0.11, green: 0.12, blue: 0.15)
+    static var background: Color { AppAppearance(rawValue: UserDefaults.standard.string(forKey: "rigatoni-appearance") ?? "dark") == .netflix ? .black : Color(uiColor: .systemBackground) }
+    static var panel: Color { Color(uiColor: .secondarySystemBackground) }
     static let accent = Color(red: 0.9, green: 0.035, blue: 0.08)
     static let corner: CGFloat = 18
 }
 
 struct StreamBackdrop: View {
+    @AppStorage("rigatoni-appearance") private var appearance = "dark"
     var body: some View {
         LinearGradient(colors: [StreamTheme.panel, StreamTheme.background],
                        startPoint: .topLeading, endPoint: .bottomTrailing).ignoresSafeArea()
@@ -245,7 +246,10 @@ struct LibraryView: View {
     @State private var page = 0
     @State private var playing: CatalogItem?
     @State private var retry = 0
-    private var orderedCategories: [CatalogCategory] { kind == .live ? CategoryPins.ordered(categories, pins: pinnedIDs) : categories }
+    private var orderedCategories: [CatalogCategory] {
+        let shown = categories.filter { model.preferences.categoryVisible($0.id, kind: kind) }
+        return kind == .live ? CategoryPins.ordered(shown, pins: pinnedIDs) : shown
+    }
     private var pinKey: String? {
         guard let accountID = model.account.session?.user.id, let host = try? model.provider.baseURL().host else { return nil }
         return CategoryPins.key(accountID: accountID, host: host)
@@ -262,15 +266,21 @@ struct LibraryView: View {
                         .padding(.vertical, 12)
                     if !model.providerReady {
                         Text("Add or restore your provider settings to browse.")
-                        Button("Provider settings") { model.settingsVisible = true }.buttonStyle(.borderedProminent).foregroundStyle(.black)
+                        Button("Provider settings") { model.settingsVisible = true }.buttonStyle(.borderedProminent).foregroundStyle(.white)
                     } else {
+                        if kind == .movies {
+                            Picker("Browse movies", selection: $scope) {
+                                Text("All titles").tag(CatalogSearchScope.all)
+                                Text("Categories").tag(CatalogSearchScope.category)
+                            }.pickerStyle(.segmented)
+                        }
                         if !categories.isEmpty && scope == .category {
                             HStack {
                                 Picker("Category", selection: $selected) {
                                     ForEach(orderedCategories) { category in
                                         Text((pinnedIDs.contains(category.id) && kind == .live ? "★ " : "") + category.name).tag(category.id)
                                     }
-                                }.pickerStyle(.menu).tint(.white)
+                                }.pickerStyle(.menu)
                                 .padding(.horizontal, 8).padding(.vertical, 4)
                                 .background(.thinMaterial, in: Capsule())
                                 if kind == .live {
@@ -289,7 +299,7 @@ struct LibraryView: View {
                                     ForEach(orderedCategories.filter { pinnedIDs.contains($0.id) }) { category in
                                         Button { scope = .category; selected = category.id } label: {
                                             Label(category.name, systemImage: "pin.fill")
-                                        }.buttonStyle(.bordered).tint(.white)
+                                        }.buttonStyle(.bordered)
                                     }
                                 }
                             }
@@ -310,7 +320,7 @@ struct LibraryView: View {
                                             Text(item.name).font(.headline).lineLimit(2)
                                                 .frame(maxWidth: .infinity, alignment: .leading)
                                             Image(systemName: "play.circle.fill").font(.title2).foregroundStyle(.secondary)
-                                        }.padding(12).foregroundStyle(.white)
+                                        }.padding(12).foregroundStyle(.primary)
                                             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: StreamTheme.corner))
                                     }.buttonStyle(.plain)
                                 }
@@ -339,7 +349,7 @@ struct LibraryView: View {
             .task(id: "\(model.libraryRevision)-\(retry)") { await loadCategories() }
             .task(id: "\(scope.rawValue)-\(selected)-\(model.libraryRevision)-\(retry)") { await loadItems() }
             .task(id: "\(query)-\(searchRevision)") { await filterItems() }
-            .fullScreenCover(item: $playing) { PlayerView(item: $0, provider: model.provider, channels: kind == .live ? items : []) }
+            .fullScreenCover(item: $playing) { CatalogDestination(item: $0, channels: kind == .live ? items : []) }
     }
     private func rows(action: String, category: String? = nil) async throws -> [[String: Any]] {
         if model.provider.requiresGateway { return try await model.gatewayRows(kind: kind, category: category) }
@@ -361,13 +371,14 @@ struct LibraryView: View {
                 guard !id.isEmpty, id.allSatisfy(\.isNumber) else { return nil }
                 return CatalogCategory(id: id, name: row["category_name"] as? String ?? "Category")
             }
-            selected = categories.first { $0.id == initialCategoryID }?.id ?? orderedCategories.first?.id ?? ""
+            selected = orderedCategories.first { $0.id == initialCategoryID }?.id ?? orderedCategories.first?.id ?? ""
+            if initialCategoryID == "all" { scope = .all }
             if selected.isEmpty { loading = false }
         } catch { if !Task.isCancelled { self.error = error.localizedDescription; loading = false } }
     }
     private func replaceItems(_ value: [CatalogItem]) {
-        items = value; searchRevision += 1; page = 0
-        if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { filtered = value }
+        items = value.filter(model.preferences.visible); searchRevision += 1; page = 0
+        if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { filtered = items }
     }
     private func filterItems() async {
         let snapshot = items; let term = query

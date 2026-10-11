@@ -15,10 +15,19 @@ struct TVMoviesView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 42) {
+                LazyVStack(alignment: .leading, spacing: 24) {
                     StreamHeading(title: "Movies", subtitle: "Make tonight a movie night.")
                     if !categories.isEmpty { categoryStrip }
-                    if let featured { hero(featured) }
+                    if let featured {
+                        HStack(spacing: 22) {
+                            ProviderPoster(url: featured.poster, kind: .movies).frame(width: 96, height: 144).clipShape(RoundedRectangle(cornerRadius: 12))
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text("IN THE SPOTLIGHT").font(.caption).foregroundStyle(.secondary)
+                                Text(featured.name).font(.title2.bold()).lineLimit(2)
+                                Button("Movie details") { playing = featured }.buttonStyle(.bordered)
+                            }
+                        }
+                    }
                     else if loading { ProgressView("Loading movies…").padding(40) }
                     if !model.providerReady { Text("Save your provider in Settings to browse movies.").foregroundStyle(.secondary) }
                     if !error.isEmpty {
@@ -30,7 +39,7 @@ struct TVMoviesView: View {
                     if count < categories.count {
                         Button("More categories") { count += 4 }.buttonStyle(.bordered)
                     }
-                }.padding(.horizontal, 64).padding(.vertical, 40)
+                }.padding(.horizontal, 30).padding(.vertical, 20)
             }
             .background { StreamBackdrop() }
             .task(id: "\(model.libraryRevision)-\(retry)") {
@@ -39,21 +48,22 @@ struct TVMoviesView: View {
                 loading = true; defer { loading = false }
                 do {
                     let loaded = try await catalog.categories(kind: .movies, model: model)
-                    try Task.checkCancellation(); categories = loaded
-                    if let first = loaded.first {
+                    try Task.checkCancellation(); categories = loaded.filter { model.preferences.categoryVisible($0.id, kind: .movies) }
+                    if let first = categories.first {
                         let items = try await catalog.items(kind: .movies, category: first.id, model: model)
                         try Task.checkCancellation(); featured = items.first { $0.poster != nil } ?? items.first
                     }
                     if loaded.isEmpty { error = "No movie categories are available." }
                 } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
             }
-            .fullScreenCover(item: $playing) { TVPlayerView(item: $0, provider: model.provider) }
+            .fullScreenCover(item: $playing) { CatalogDestination(item: $0) }
         }
     }
 
     private var categoryStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 20) {
+                NavigationLink("All titles") { TVCatalogBrowser(kind: .movies, allowPins: false, initialCategoryID: "all") }.buttonStyle(.bordered)
                 ForEach(categories) { category in
                     NavigationLink { TVCatalogBrowser(kind: .movies, allowPins: false, initialCategoryID: category.id) } label: {
                         Text(category.name).font(.headline).padding(.horizontal, 22).padding(.vertical, 12)
@@ -113,7 +123,7 @@ private struct TVMovieShelf: View {
             defer { loading = false }
             do {
                 let loaded = try await catalog.items(kind: .movies, category: category.id, model: model)
-                try Task.checkCancellation(); items = Array(loaded.prefix(20))
+                try Task.checkCancellation(); items = Array(loaded.filter(model.preferences.visible).prefix(20))
                 if items.isEmpty { error = "No movies in this category." }
             } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
         }
