@@ -1,0 +1,16 @@
+platform :tvos, '17.0'
+use_frameworks!
+project 'RigatoniStreamTV.xcodeproj'
+target 'RigatoniStreamTV' do
+  # Local podspec; it declares a tvOS deployment target and ships an xcframework.
+  pod 'VLCKit', :podspec => '../ios/VLCKit.podspec'
+end
+
+# Keep the dependency compatible with SDKs that reject VLCKit's old tvOS 11 minimum.
+post_install do |installer|
+  installer.pods_project.targets.each do |target|
+    target.build_configurations.each do |config|
+      config.build_settings['TVOS_DEPLOYMENT_TARGET'] = '17.0'
+    end
+  end
+end
