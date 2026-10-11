@@ -16,7 +16,7 @@ struct TVSearchView: View {
 
     var body: some View {
         Group {
-            if let store { TVObservedStore(store: store) { content($0) } }
+            if let store { TVObservedStore(store: store) { content($0) }.id(ObjectIdentifier(store)) }
             else { ProgressView("Loading…").frame(maxWidth: .infinity, maxHeight: .infinity) }
         }
         .onAppear {

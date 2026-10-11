@@ -68,7 +68,7 @@ final class TVNativePlayer: ObservableObject {
     func toggle() { if engine.isPlaying { engine.pause() } else { engine.play() } }
 
     func seek(to value: Double) {
-        if engine.isSeekable { engine.position = Float32(value) }
+        if engine.isSeekable { engine.position = value }
     }
 
     func skip(seconds: Double) {

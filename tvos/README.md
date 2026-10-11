@@ -33,8 +33,10 @@ Use the workspace rather than the `.xcodeproj`.
 2. On Apple TV, open **Settings > Remotes and Devices > Remote App and Devices**.
 3. In Xcode, open **Device Hub** (run destination > Manage Devices, or
    Xcode > Open Developer Tool > Device Hub). Older Xcode versions use
-   **Window > Devices and Simulators**. Select the discovered Apple TV, pair,
-   and enter its on-screen verification code.
+   **Window > Devices and Simulators**. In Device Hub click **+ > Pair Nearby
+   Device**, choose **Apple TV**, select the discovered TV and enter its
+   on-screen verification code. Allow local network access if asked. If discovery
+   fails, check that your network has IPv6 enabled as Apple requires.
 4. Select the **RigatoniStreamTV** target's **Signing & Capabilities**.
    Enable automatic signing and select your Apple account / Personal Team.
    Keep the Apple TV app's bundle identifier distinct from the iPhone app.
