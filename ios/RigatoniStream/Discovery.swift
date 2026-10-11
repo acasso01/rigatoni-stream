@@ -117,11 +117,11 @@ final class SessionCatalog: ObservableObject {
 struct MovieCard: View {
     let item: CatalogItem
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 10) {
             ProviderPoster(url: item.poster, kind: .movies)
                 .aspectRatio(2.0 / 3.0, contentMode: .fit)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-            Text(item.name).font(.caption.weight(.semibold)).lineLimit(2)
+                .clipShape(RoundedRectangle(cornerRadius: StreamTheme.corner))
+            Text(item.name).font(.subheadline.weight(.medium)).lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }.foregroundStyle(.white)
     }
@@ -140,18 +140,34 @@ struct MoviesHomeView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 24) {
+                LazyVStack(alignment: .leading, spacing: 28) {
+                    StreamHeading(title: "Movies", subtitle: "Something great to watch.")
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 22).padding(.top, 20)
+                    if !categories.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 10) {
+                                ForEach(categories) { category in
+                                    NavigationLink { LibraryView(kind: .movies, initialCategoryID: category.id, embedded: true) } label: {
+                                        Text(category.name).font(.subheadline.weight(.semibold))
+                                            .padding(.horizontal, 18).padding(.vertical, 11)
+                                            .background(.thinMaterial, in: Capsule())
+                                    }.buttonStyle(.plain)
+                                }
+                            }.padding(.horizontal, 22)
+                        }
+                    }
                     if let featured {
                         ZStack(alignment: .bottomLeading) {
-                            ProviderPoster(url: featured.poster, kind: .movies).frame(height: 470).clipped()
+                            ProviderPoster(url: featured.poster, kind: .movies).frame(height: 360).clipped()
                             LinearGradient(colors: [.clear, .black.opacity(0.35), .black], startPoint: .top, endPoint: .bottom)
                             VStack(alignment: .leading, spacing: 12) {
-                                Text("FEATURED MOVIE").font(.caption.weight(.bold)).tracking(3)
-                                Text(featured.name).font(.largeTitle.weight(.heavy)).lineLimit(3)
+                                Text("IN THE SPOTLIGHT").font(.caption.weight(.bold)).tracking(3)
+                                Text(featured.name).font(.largeTitle.weight(.bold)).lineLimit(3)
                                 Button { playing = featured } label: { Label("Play", systemImage: "play.fill").font(.headline).padding(.horizontal, 24).padding(.vertical, 10) }
                                     .buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black)
                             }.padding(22)
-                        }.frame(height: 470)
+                        }.frame(height: 360)
+                            .clipShape(RoundedRectangle(cornerRadius: 24)).padding(.horizontal, 16)
                     } else if featuredLoading && model.providerReady {
                         ProgressView("Loading movies…").frame(maxWidth: .infinity).padding(40)
                     }
@@ -169,10 +185,10 @@ struct MoviesHomeView: View {
                     }
                 }.padding(.bottom, 24)
             }
-            .background(Color.black)
+            .background { StreamBackdrop() }
             .navigationTitle("Movies").navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Text("RIGATONI").font(.caption.weight(.black)).foregroundStyle(.red) }
+                ToolbarItem(placement: .topBarLeading) { Text("RS").font(.caption.weight(.black)).foregroundStyle(StreamTheme.accent) }
                 ToolbarItem(placement: .topBarTrailing) { Button { model.settingsVisible = true } label: { Image(systemName: "person.crop.circle") }.accessibilityLabel("Account settings") }
             }
             .task(id: "\(model.libraryRevision)-\(retry)") {
@@ -216,9 +232,9 @@ struct MovieShelf: View {
                 HStack { Text(error).font(.caption); Button("Retry") { retry += 1 } }.padding(.horizontal)
             } else if items.isEmpty { ProgressView().padding(.horizontal) }
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: 12) {
+                LazyHStack(alignment: .top, spacing: 16) {
                     ForEach(Array(items.prefix(20))) { item in
-                        Button { play(item) } label: { MovieCard(item: item).frame(width: 140) }.buttonStyle(.plain)
+                        Button { play(item) } label: { MovieCard(item: item).frame(width: 156) }.buttonStyle(.plain)
                     }
                 }.padding(.horizontal)
             }
@@ -234,6 +250,8 @@ struct MovieShelf: View {
     }
 }
 
+#endif
+
 struct SearchHit: Identifiable {
     let item: CatalogItem
     var id: String { "\(item.kind.rawValue):\(item.id)" }
@@ -245,6 +263,7 @@ enum UnifiedSearch {
     }
 }
 
+#if os(iOS)
 struct GlobalSearchView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var catalog: SessionCatalog
@@ -263,7 +282,12 @@ struct GlobalSearchView: View {
                     Picker("Search in", selection: $filter) {
                         Text("All").tag("all"); Text("Movies").tag(LibraryKind.movies.rawValue); Text("Live TV").tag(LibraryKind.live.rawValue)
                     }.pickerStyle(.segmented)
-                    if !hasQuery { Text("Find movies and channels across every category. Enter at least two characters.").foregroundStyle(.secondary) }
+                    if !hasQuery {
+                        StreamHeading(title: "Find your next favorite", subtitle: "Search movies and live channels together. Enter at least two characters.").padding(.vertical, 20)
+                        Label("Every category. One search.", systemImage: "sparkle.magnifyingglass")
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(24)
+                            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: StreamTheme.corner))
+                    }
                     if hasQuery {
                         ForEach(LibraryKind.allCases) { kind in
                             if let progress = catalog.progress[kind] { ProgressView("\(kind.title): \(progress)").font(.caption) }
@@ -286,7 +310,7 @@ struct GlobalSearchView: View {
                         if catalog.progress.isEmpty && results.isEmpty { Text("No matching titles in the loaded catalogs.").foregroundStyle(.secondary) }
                     }
                 }.padding()
-            }.background(Color.black)
+            }.background { StreamBackdrop() }
             .navigationTitle("Search")
             .searchable(text: $query, prompt: "Movies and Live TV")
             .task(id: "\(hasQuery)-\(model.libraryRevision)-\(retry)") {

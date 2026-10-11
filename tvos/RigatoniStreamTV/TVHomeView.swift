@@ -39,10 +39,7 @@ private struct TVHomeBody: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 36) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("🍝 RIGATONI STREAM")
-                        .font(.title.weight(.black))
-                    Text("Your channels, your favorites, one familiar place.")
-                        .foregroundStyle(TVTheme.muted)
+                    StreamHeading(title: "Welcome home", subtitle: "Your pinned channels, always within reach.")
                 }
                 .padding(.top, 40)
 
@@ -67,7 +64,7 @@ private struct TVHomeBody: View {
             .padding(.horizontal, 60)
             .padding(.bottom, 60)
         }
-        .background(TVTheme.background)
+        .background { StreamBackdrop() }
         .task(id: model.libraryRevision) {
             await store.loadCategories()
         }

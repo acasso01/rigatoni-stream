@@ -10,7 +10,8 @@ struct RigatoniStreamTVApp: App {
         WindowGroup {
             TVRootView()
                 .environmentObject(model)
-                .tint(TVTheme.red)
+                .environmentObject(model.catalog)
+                .tint(.white)
                 .preferredColorScheme(.dark)
                 .task { await model.restore() }
         }

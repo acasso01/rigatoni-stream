@@ -7,7 +7,7 @@ struct TVRootView: View {
 
     var body: some View {
         ZStack {
-            TVTheme.background.ignoresSafeArea()
+            StreamBackdrop()
             Group {
                 if model.starting {
                     ProgressView("Opening Rigatoni Stream…")
@@ -15,10 +15,10 @@ struct TVRootView: View {
                     TabView {
                         TVHomeView()
                             .tabItem { Label("Home", systemImage: "house") }
-                        TVLiveView()
-                            .tabItem { Label("Live TV", systemImage: "tv") }
                         TVMoviesView()
                             .tabItem { Label("Movies", systemImage: "film") }
+                        TVLiveView()
+                            .tabItem { Label("Live TV", systemImage: "tv") }
                         TVSearchView()
                             .tabItem { Label("Search", systemImage: "magnifyingglass") }
                         TVSettingsView()

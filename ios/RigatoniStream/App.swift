@@ -16,7 +16,7 @@ struct RigatoniStreamApp: App {
                     .sheet(isPresented: $model.settingsVisible) { SettingsView() }
                 } else { LoginView() }
             }
-            .environmentObject(model).environmentObject(model.catalog).tint(Color(red: 0.90, green: 0.035, blue: 0.08))
+            .environmentObject(model).environmentObject(model.catalog).tint(.white)
             .preferredColorScheme(.dark).task { await model.restore() }
         }
     }
@@ -32,8 +32,8 @@ struct LoginView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    Text("🍝 RIGATONI").font(.largeTitle.weight(.black))
-                    Text("STREAM").font(.largeTitle.weight(.black)).foregroundStyle(.red)
+                    Image(systemName: "play.tv.fill").font(.system(size: 46)).foregroundStyle(.white)
+                    Text("Rigatoni Stream").font(.largeTitle.weight(.bold))
                     Text(createAccount ? "Create your account" : "Welcome back").font(.title.bold())
                     Text("Your TV and movies, in your pocket.").foregroundStyle(.secondary)
                     TextField("Email", text: $email).textContentType(.emailAddress).keyboardType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -59,7 +59,7 @@ struct LoginView: View {
                     if !model.notice.isEmpty { Text(model.notice).font(.callout).foregroundStyle(.secondary).accessibilityAddTraits(.updatesFrequently) }
                     Text("Use your existing Rigatoni account. Your provider login stays in the encrypted account vault.").font(.footnote).foregroundStyle(.secondary)
                 }.textFieldStyle(.roundedBorder).padding(28).padding(.top, 35)
-            }.background(Color(red: 0.035, green: 0.035, blue: 0.045))
+            }.background { StreamBackdrop() }
         }
     }
     private func authenticate() async {

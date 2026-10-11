@@ -1,140 +1,84 @@
 import SwiftUI
 
-// Search tab: kind selector (Live TV / Movies), search field, results grid.
-// Uses the same full-catalog fast path + category fallback as the iPhone
-// build (shared CatalogLoader), with the same 200 ms debounce and
-// off-main-thread filtering.
+// Shared memory-only catalogs: one search across Movies and Live TV.
 struct TVSearchView: View {
     @EnvironmentObject private var model: AppModel
-    @State private var kind: LibraryKind = .live
+    @EnvironmentObject private var catalog: SessionCatalog
     @State private var query = ""
-    @State private var store: TVLibraryStore?
-    @State private var allItems: [CatalogItem] = []
-    @State private var filtered: [CatalogItem] = []
+    @State private var filter = "all"
+    @State private var results: [SearchHit] = []
+    @State private var notices: [String] = []
     @State private var playing: CatalogItem?
-    @State private var visibleCount = 60
+    @State private var limit = 60
+    @State private var retry = 0
+    private var hasQuery: Bool { query.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 }
 
     var body: some View {
-        Group {
-            if let store { TVObservedStore(store: store) { content($0) }.id(ObjectIdentifier(store)) }
-            else { ProgressView("Loading…").frame(maxWidth: .infinity, maxHeight: .infinity) }
-        }
-        .onAppear {
-            if store == nil { store = TVLibraryStore(kind: kind, model: model) }
-        }
-    }
-
-    @ViewBuilder
-    private func content(_ store: TVLibraryStore) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                Text("Search")
-                    .font(.largeTitle.bold())
-                    .padding(.top, 40)
-
-                if !model.providerReady {
-                    Text("Save your provider in Settings to search.")
-                        .foregroundStyle(TVTheme.muted)
+            LazyVStack(alignment: .leading, spacing: 32) {
+                StreamHeading(title: "Search", subtitle: "Movies and live channels. Every category. One place.")
+                HStack(spacing: 30) {
+                    TextField("Search movies and Live TV", text: $query).frame(maxWidth: 850)
+                    Picker("Search in", selection: $filter) {
+                        Text("All").tag("all")
+                        Text("Movies").tag(LibraryKind.movies.rawValue)
+                        Text("Live TV").tag(LibraryKind.live.rawValue)
+                    }.pickerStyle(.segmented).frame(maxWidth: 580)
+                }
+                if !hasQuery {
+                    Label("Enter at least two characters to explore your library", systemImage: "sparkle.magnifyingglass")
+                        .foregroundStyle(.secondary).padding(36).frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 24))
                 } else {
-                    Picker("Library", selection: $kind) {
-                        ForEach(LibraryKind.allCases) { kind in
-                            Text(kind.title).tag(kind)
-                        }
+                    ForEach(LibraryKind.allCases) { kind in
+                        if let progress = catalog.progress[kind] { ProgressView("\(kind.title): \(progress)") }
                     }
-                    .pickerStyle(.segmented)
-                    .frame(maxWidth: 480)
-
-                    TextField(kind == .movies ? "Search movies" : "Search channels", text: $query)
-                        .frame(maxWidth: 640)
-
-                    if store.loading && allItems.isEmpty {
-                        ProgressView(store.progress.isEmpty ? "Loading catalog…" : store.progress)
-                    } else if !store.error.isEmpty && allItems.isEmpty {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text(store.error).foregroundStyle(TVTheme.muted)
-                            Button("Retry") { store.revision += 1 }.buttonStyle(.card)
+                    ForEach(notices, id: \.self) { Text($0).font(.callout).foregroundStyle(.secondary) }
+                    if !notices.isEmpty { Button("Retry unavailable catalogs") { retry += 1 } }
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 32)], alignment: .leading, spacing: 36) {
+                        ForEach(Array(results.prefix(limit))) { hit in
+                            Button { playing = hit.item } label: {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    TVCatalogCard(item: hit.item)
+                                    Label(hit.item.kind.title, systemImage: hit.item.kind.symbol)
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                            }.buttonStyle(.card)
                         }
-                    } else {
-                        resultsGrid
+                    }.padding(.vertical, 20)
+                    if results.count > limit { Button("More results") { limit += 60 } }
+                    if catalog.progress.isEmpty && results.isEmpty {
+                        Text("No matching titles in the loaded catalogs.").foregroundStyle(.secondary)
                     }
                 }
-            }
-            .padding(.horizontal, 60)
-            .padding(.bottom, 60)
+            }.padding(.horizontal, 64).padding(.vertical, 40)
         }
-        .background(TVTheme.background)
-        .task(id: "\(kind.rawValue)-\(model.libraryRevision)-\(store.revision)") {
-            if store.kind != kind {
-                self.store = TVLibraryStore(kind: kind, model: model)
-                return
-            }
-            store.reset()
-            allItems = []; filtered = []; visibleCount = 60
-            await store.loadCategories()
-            guard !Task.isCancelled else { return }
-            await store.loadAllForSearch { partial, message in
-                allItems = partial
-                applyFilter(items: partial)
-                if !message.isEmpty { store.progress = message }
-            }
+        .background { StreamBackdrop() }
+        .task(id: "\(hasQuery)-\(model.libraryRevision)-\(retry)") {
+            guard hasQuery, model.signedIn, model.providerReady else { return }
+            notices = []
+            async let movies: Void = load(.movies)
+            async let live: Void = load(.live)
+            _ = await (movies, live)
         }
-        .task(id: query) {
+        .task(id: "\(query)-\(filter)-\(catalog.revision)") {
+            limit = 60
+            guard hasQuery else { results = []; return }
             do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
-            guard !Task.isCancelled else { return }
-            applyFilter(items: allItems)
+            let snapshot = LibraryKind.allCases.flatMap { catalog.searchable[$0] ?? [] }
+            let term = query; let choice = filter
+            let worker = Task.detached(priority: .userInitiated) { UnifiedSearch.matches(snapshot, query: term, filter: choice) }
+            let found = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
+            guard !Task.isCancelled else { return }; results = found
         }
-        .fullScreenCover(item: $playing) { item in
-            TVPlayerView(item: item, provider: model.provider, channels: kind == .live ? filtered : [])
-        }
-    }
-
-    @ViewBuilder
-    private var resultsGrid: some View {
-        let visible = Array(filtered.prefix(visibleCount))
-        if filtered.isEmpty {
-            Text(query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                 ? "Catalog is empty." : "No matching titles.")
-                .foregroundStyle(TVTheme.muted)
-        } else {
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: kind == .movies ? 220 : 260), spacing: 28)],
-                spacing: 32
-            ) {
-                ForEach(visible) { item in
-                    Button { playing = item } label: {
-                        TVCatalogCard(item: item)
-                    }
-                    .buttonStyle(.card)
-                }
-            }
-            if filtered.count > visibleCount {
-                Button("Show more (\(filtered.count - visibleCount) remaining)") {
-                    visibleCount += 60
-                }
-                .buttonStyle(.card)
-                .padding(.top, 8)
-            }
-            Text("\(filtered.count) titles")
-                .font(.caption)
-                .foregroundStyle(TVTheme.muted)
-                .padding(.top, 8)
+        .fullScreenCover(item: $playing) {
+            TVPlayerView(item: $0, provider: model.provider, channels: catalog.searchable[.live] ?? [])
         }
     }
-
-    private func applyFilter(items: [CatalogItem]) {
-        let term = query
-        visibleCount = 60
-        if term.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            filtered = items
-            return
-        }
-        let snapshot = items
-        Task.detached(priority: .userInitiated) {
-            let result = CatalogIndex.matches(snapshot, query: term)
-            await MainActor.run {
-                guard !Task.isCancelled else { return }
-                self.filtered = result
-            }
-        }
+    private func load(_ kind: LibraryKind) async {
+        do {
+            let result = try await catalog.loadAll(kind: kind, model: model)
+            if !Task.isCancelled && !result.notice.isEmpty { notices.append("\(kind.title): \(result.notice)") }
+        } catch { if !Task.isCancelled { notices.append("\(kind.title): \(error.localizedDescription)") } }
     }
 }

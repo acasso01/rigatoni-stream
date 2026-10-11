@@ -14,8 +14,8 @@ struct TVLoginView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text("🍝 RIGATONI STREAM")
-                    .font(.largeTitle.weight(.black))
+                Text("Rigatoni Stream")
+                    .font(.largeTitle.weight(.bold))
                 Text(createAccount ? "Create your account" : "Welcome back")
                     .font(.title.bold())
                 Text("Your channels and movies, on the big screen.")
@@ -39,7 +39,7 @@ struct TVLoginView: View {
                     Task { await authenticate() }
                 }
                 .buttonStyle(.card)
-                .tint(TVTheme.red)
+                .tint(.white)
                 .disabled(model.busy || email.isEmpty || password.isEmpty)
 
                 Button(createAccount ? "Already have an account? Sign in" : "Create an account") {
@@ -67,7 +67,7 @@ struct TVLoginView: View {
             .frame(maxWidth: 720)
             .padding(60)
         }
-        .background(TVTheme.background)
+        .background { StreamBackdrop() }
     }
 
     private func authenticate() async {
@@ -135,7 +135,7 @@ struct TVSettingsView: View {
                         .font(.footnote).foregroundStyle(TVTheme.muted)
                     HStack(spacing: 16) {
                         Button("Save provider & gateway") { Task { await model.saveSettings() } }
-                            .buttonStyle(.card).tint(TVTheme.red).disabled(model.busy)
+                            .buttonStyle(.card).tint(.white).disabled(model.busy)
                         Button("Reload saved settings") {
                             Task {
                                 model.busy = true; defer { model.busy = false }
@@ -182,7 +182,7 @@ struct TVSettingsView: View {
             .padding(.horizontal, 60)
             .padding(.bottom, 60)
         }
-        .background(TVTheme.background)
+        .background { StreamBackdrop() }
         .confirmationDialog(
             "Delete your saved provider and gateway from your account?",
             isPresented: $deleting, titleVisibility: .visible

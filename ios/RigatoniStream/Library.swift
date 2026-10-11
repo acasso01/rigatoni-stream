@@ -196,6 +196,33 @@ enum CategoryPins {
     }
 }
 
+// Shared native visual language; playback and credential handling stay separate.
+enum StreamTheme {
+    static let background = Color(red: 0.055, green: 0.06, blue: 0.08)
+    static let panel = Color(red: 0.11, green: 0.12, blue: 0.15)
+    static let accent = Color(red: 0.9, green: 0.035, blue: 0.08)
+    static let corner: CGFloat = 18
+}
+
+struct StreamBackdrop: View {
+    var body: some View {
+        LinearGradient(colors: [StreamTheme.panel, StreamTheme.background],
+                       startPoint: .topLeading, endPoint: .bottomTrailing).ignoresSafeArea()
+    }
+}
+
+struct StreamHeading: View {
+    let title: String
+    let subtitle: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("RIGATONI STREAM").font(.caption.weight(.semibold)).tracking(3).foregroundStyle(.secondary)
+            Text(title).font(.largeTitle.weight(.bold))
+            Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
+        }
+    }
+}
+
 #if os(iOS)
 struct LibraryView: View {
     @EnvironmentObject private var model: AppModel
@@ -231,9 +258,8 @@ struct LibraryView: View {
     private var libraryContent: some View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    Text(kind == .movies ? "Movie night, made yours." : "Live TV, made yours.")
-                        .font(.largeTitle.bold()).padding(.top, 10)
-                    Text(kind == .movies ? "Your provider’s movies. Original quality, native playback." : "Your channels. Your sports. Straight from your provider.").foregroundStyle(.secondary)
+                    StreamHeading(title: kind.title, subtitle: kind == .movies ? "Find your next movie night." : "Your channels. Your front row seat.")
+                        .padding(.vertical, 12)
                     if !model.providerReady {
                         Text("Add or restore your provider settings to browse.")
                         Button("Provider settings") { model.settingsVisible = true }.buttonStyle(.borderedProminent)
@@ -245,6 +271,8 @@ struct LibraryView: View {
                                         Text((pinnedIDs.contains(category.id) && kind == .live ? "★ " : "") + category.name).tag(category.id)
                                     }
                                 }.pickerStyle(.menu).tint(.white)
+                                .padding(.horizontal, 8).padding(.vertical, 4)
+                                .background(.thinMaterial, in: Capsule())
                                 if kind == .live {
                                     Button {
                                         pinnedIDs = CategoryPins.toggled(selected, in: pinnedIDs)
@@ -261,7 +289,7 @@ struct LibraryView: View {
                                     ForEach(orderedCategories.filter { pinnedIDs.contains($0.id) }) { category in
                                         Button { scope = .category; selected = category.id } label: {
                                             Label(category.name, systemImage: "pin.fill")
-                                        }.buttonStyle(.bordered).tint(selected == category.id ? .red : .white)
+                                        }.buttonStyle(.bordered).tint(.white)
                                     }
                                 }
                             }
@@ -271,14 +299,27 @@ struct LibraryView: View {
                             Text(error).foregroundStyle(.secondary)
                             Button("Retry") { model.resetGateway(); retry += 1 }.buttonStyle(.bordered)
                         } else if !loading && filtered.isEmpty { Text(query.isEmpty ? "No titles available." : "No matching titles.").foregroundStyle(.secondary) }
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 12)], spacing: 16) {
-                            ForEach(visible) { item in
-                                Button { playing = item } label: {
-                                    VStack(alignment: .leading, spacing: 8) {
-                                        ProviderPoster(url: item.poster, kind: kind).aspectRatio(kind == .movies ? 2.0 / 3.0 : 1.7, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 10))
-                                        Text(item.name).font(.subheadline.weight(.semibold)).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
-                                    }.foregroundStyle(.white)
-                                }.buttonStyle(.plain)
+                        if kind == .live {
+                            LazyVStack(spacing: 10) {
+                                ForEach(visible) { item in
+                                    Button { playing = item } label: {
+                                        HStack(spacing: 16) {
+                                            ProviderPoster(url: item.poster, kind: .live)
+                                                .frame(width: 86, height: 56)
+                                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                                            Text(item.name).font(.headline).lineLimit(2)
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                            Image(systemName: "play.circle.fill").font(.title2).foregroundStyle(.secondary)
+                                        }.padding(12).foregroundStyle(.white)
+                                            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: StreamTheme.corner))
+                                    }.buttonStyle(.plain)
+                                }
+                            }
+                        } else {
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 16)], spacing: 22) {
+                                ForEach(visible) { item in
+                                    Button { playing = item } label: { MovieCard(item: item) }.buttonStyle(.plain)
+                                }
                             }
                         }
                         if filtered.count > 120 {
@@ -292,8 +333,8 @@ struct LibraryView: View {
                     }
                 }.padding()
             }
-            .background(Color(red: 0.035, green: 0.035, blue: 0.045))
-            .navigationTitle("🍝 Rigatoni Stream").navigationBarTitleDisplayMode(.inline)
+            .background { StreamBackdrop() }
+            .navigationTitle(kind.title).navigationBarTitleDisplayMode(.inline)
             .toolbar { Button { model.settingsVisible = true } label: { Image(systemName: "person.crop.circle") }.accessibilityLabel("Account and provider settings") }
             .task(id: "\(model.libraryRevision)-\(retry)") { await loadCategories() }
             .task(id: "\(scope.rawValue)-\(selected)-\(model.libraryRevision)-\(retry)") { await loadItems() }
