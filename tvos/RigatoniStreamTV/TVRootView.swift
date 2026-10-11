@@ -1,7 +1,7 @@
 import SwiftUI
 
 // Root of the tvOS app: sign-in gate, then a top tab bar with
-// Home, Live TV, Movies, Search and Settings.
+// Home, Live TV, TV Shows, Movies, Search and Settings.
 struct TVRootView: View {
     @EnvironmentObject private var model: AppModel
 
@@ -17,6 +17,8 @@ struct TVRootView: View {
                             .tabItem { Label("Home", systemImage: "house") }
                         TVLiveView()
                             .tabItem { Label("Live TV", systemImage: "tv") }
+                        TVShowsView()
+                            .tabItem { Label("TV Shows", systemImage: "play.tv") }
                         TVMoviesView()
                             .tabItem { Label("Movies", systemImage: "film") }
                         TVSearchView()

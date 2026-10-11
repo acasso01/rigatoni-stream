@@ -112,6 +112,10 @@ struct TVPlayerView: View {
     let item: CatalogItem
     let provider: Provider
     var channels: [CatalogItem] = []
+    /// Override for last-watched recording (e.g. "series" for TV show
+    /// episodes, whose CatalogItem kind is .movies). Nil records the
+    /// item's own kind.
+    var lastWatchedKind: String? = nil
 
     @Environment(\.dismiss) private var dismiss
     @StateObject private var player = TVNativePlayer()
@@ -123,10 +127,11 @@ struct TVPlayerView: View {
     @AppStorage("rigatoni-live-buffer-ms") private var liveBuffer = 1500
     @AppStorage("rigatoni-movie-buffer-ms") private var movieBuffer = 4000
 
-    init(item: CatalogItem, provider: Provider, channels: [CatalogItem] = []) {
+    init(item: CatalogItem, provider: Provider, channels: [CatalogItem] = [], lastWatchedKind: String? = nil) {
         self.item = item
         self.provider = provider
         self.channels = channels
+        self.lastWatchedKind = lastWatchedKind
         _currentID = State(initialValue: item.id)
     }
 
@@ -228,11 +233,27 @@ struct TVPlayerView: View {
             player.toggle()
             showControls()
         }
+        // Siri Remote left/right arrows switch live channels, following the
+        // loaded channel list (same prev/next semantics as the on-screen
+        // buttons). Up/down are left to the default focus behavior.
+        .onMoveCommand { direction in
+            guard currentItem.kind == .live, !channels.isEmpty else { return }
+            switch direction {
+            case .left: changeChannel(-1)
+            case .right: changeChannel(1)
+            default: break
+            }
+        }
         .onAppear {
             player.title = currentItem.name
             player.isLive = currentItem.kind == .live
             if let url = playbackURL { player.play(url: url, cache: cache) }
             showControls()
+            TVLastWatched.record(
+                kind: lastWatchedKind ?? (currentItem.kind == .live ? "live" : "movie"),
+                item: currentItem,
+                provider: provider
+            )
         }
         .onChange(of: currentID) { _, _ in
             guard let url = playbackURL else { player.stop(); return }
@@ -240,6 +261,11 @@ struct TVPlayerView: View {
             player.isLive = currentItem.kind == .live
             player.play(url: url, cache: cache)
             showControls()
+            TVLastWatched.record(
+                kind: lastWatchedKind ?? (currentItem.kind == .live ? "live" : "movie"),
+                item: currentItem,
+                provider: provider
+            )
         }
         .onDisappear { hideTask?.cancel(); player.stop() }
         .onChange(of: player.playing) { _, playing in

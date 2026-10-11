@@ -11,19 +11,22 @@ This work lives on the `tvos` branch and is **additive only**: nothing under
 | File | What it is |
 |---|---|
 | `project.yml` | XcodeGen spec for the `RigatoniStreamTV` tvOS target |
+| `configure_http.py` | Optional one-host ATS exception for a direct HTTP provider (streams + logo artwork); mirrors the iPhone build's script |
 | `RigatoniStreamTV/TVApp.swift` | `@main` app entry; owns the shared `AppModel` |
-| `RigatoniStreamTV/TVRootView.swift` | Sign-in gate → top tab bar (Home, Live TV, Movies, Search, Settings) |
-| `RigatoniStreamTV/TVHomeView.swift` | Quick-access rows for pinned Live TV categories |
-| `RigatoniStreamTV/TVLiveView.swift` | Live TV tab (thin wrapper) |
+| `RigatoniStreamTV/TVRootView.swift` | Sign-in gate → top tab bar (Home, Live TV, TV Shows, Movies, Search, Settings) |
+| `RigatoniStreamTV/TVHomeView.swift` | "Welcome back" greeting + "Last watched" rail |
+| `RigatoniStreamTV/TVLastWatched.swift` | Last-watched persistence (UserDefaults, per provider host, no credentials/URLs stored) |
+| `RigatoniStreamTV/TVLiveView.swift` | Live TV tab: full-height category sidebar + channel list, long-press pin/unpin, channel logos |
+| `RigatoniStreamTV/TVShowsView.swift` | TV Shows tab: series categories → poster grid → seasons/episodes → VLC playback |
 | `RigatoniStreamTV/TVMoviesView.swift` | Movies tab (thin wrapper) |
 | `RigatoniStreamTV/TVCatalogBrowser.swift` | Shared focus-engine catalog browser: category bar, pin/unpin, card grid |
 | `RigatoniStreamTV/TVSearchView.swift` | Full-catalog search with the same fast path + fallback as iOS |
 | `RigatoniStreamTV/TVSettingsView.swift` | Sign-in screen + provider/gateway/buffer settings, sign out |
-| `RigatoniStreamTV/TVPlayerView.swift` | VLC playback, Siri Remote controls, auto-hiding overlay |
+| `RigatoniStreamTV/TVPlayerView.swift` | VLC playback, Siri Remote controls, left/right channel zapping, auto-hiding overlay |
 | `RigatoniStreamTV/TVTheme.swift` | Design tokens from the web app (`#09090b`, `#fafafa`, `#e50914`) |
 | `RigatoniStreamTV/TVLibraryStore.swift` | tvOS catalog store mirroring the iPhone `LibraryView` data flow |
 | `Podfile` / `Gemfile` | CocoaPods setup; VLCKit via the existing `ios/VLCKit.podspec` (declares a tvOS target) |
-| `setup.sh` | `xcodegen generate` → `pod install` → open the workspace |
+| `setup.sh` | `xcodegen generate` → optional `configure_http.py` → `pod install` → open the workspace |
 
 ### Reused from the iPhone build (by relative path, not copied)
 
@@ -77,19 +80,46 @@ name.
 
 - **Siri Remote:** move focus with swipes/clicks, press **Play/Pause** to
   toggle playback, press **Menu** to go back out of the player.
-- **Live TV:** pick a category from the bar, open a channel, use the
-  on-screen Previous/Next buttons to zap. Pin categories for quick access
-  from Home.
+- **Live TV:** the sidebar and channel list each fill the screen
+  top-to-bottom. Long-press a category row (or use the Pin button) to
+  pin/unpin it — pins sync with the iPhone build. Open a channel, then use
+  the **left/right arrows** to zap to the previous/next channel.
+- **TV Shows:** series categories → poster grid → pick a season →
+  episode list → plays through VLC. Needs a direct provider connection
+  (not available through the gateway yet).
+- **Home:** "Welcome back" plus a "Last watched" rail that picks up
+  channels, movies and episodes across tabs.
 - **Movies:** poster wall; the slider seeks when the provider serves
   seekable content. Controls hide after 4 seconds.
 - **Search:** Live TV / Movies switch, full-catalog fast path with
   per-category fallback, same as the iPhone build.
 
+## Channel logos (why they were blank, and the fix)
+
+Two paths, two causes:
+
+1. **Direct provider:** logos load straight from the provider's
+   `stream_icon` URL via `ProviderPoster` (same bounded fetch as the
+   iPhone build). HTTP icon URLs are blocked by tvOS unless you allow the
+   one provider hostname at build time: `setup.sh` now runs
+   `tvos/configure_http.py` (twin of the iPhone build's script). Blank
+   keeps gateway-only.
+2. **Gateway provider:** the gateway deliberately strips live channel
+   icons (`stream_icon:''` in `gateway/server.mjs`, `/api/connect` —
+   "Provider icons can be HTTP or carry provider credentials"), so the app
+   never receives a logo URL and no client-side change can restore it.
+   The follow-up (outside this branch's scope) is a gateway change:
+   relay channel icons through `session.register(...)` opaque `/media`
+   tickets the same way movie posters already are, e.g.
+   `stream_icon: c.stream_icon ? register(new URL(c.stream_icon)) : ''`
+   inside a try/catch. Logos then load over HTTPS with no provider
+   credentials in any URL.
+
 ## Notes and limits
 
-- **tvOS parity target is the iPhone v1:** Live TV + Movies + pins +
-  search. EPG, series, AirPlay and downloads are out of scope here, same as
-  on iOS.
+- **tvOS parity target is the iPhone v1 plus TV shows:** Live TV + TV Shows
+  + Movies + pins + search + last-watched. EPG, AirPlay and downloads are
+  out of scope here, same as on iOS.
 - **No secrets in this repo.** Sign-in tokens go to the tvOS Keychain;
   provider credentials stay in memory and the encrypted account vault.
 - **First-build caveat:** `Library.swift` is shared with the iPhone target
