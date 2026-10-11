@@ -30,7 +30,7 @@ struct TVCatalogBrowser: View {
 
     var body: some View {
         Group {
-            if let store { content(store) }
+            if let store { TVObservedStore(store: store) { content($0) } }
             else { ProgressView("Loading…").frame(maxWidth: .infinity, maxHeight: .infinity) }
         }
         .onAppear {
@@ -70,11 +70,16 @@ struct TVCatalogBrowser: View {
             .padding(.bottom, 60)
         }
         .background(TVTheme.background)
-        .task(id: model.libraryRevision) {
+        .task(id: "\(model.libraryRevision)-\(store.revision)") {
+            let previous = selectedCategory
             await store.loadCategories()
+            guard !Task.isCancelled else { return }
             pinnedIDs = store.pinnedIDs()
             if selectedCategory.isEmpty || !orderedCategories.contains(where: { $0.id == selectedCategory }) {
                 selectedCategory = orderedCategories.first?.id ?? ""
+            }
+            if selectedCategory == previous, !selectedCategory.isEmpty {
+                await store.loadItems(categoryID: selectedCategory)
             }
         }
         .task(id: selectedCategory) {
@@ -100,7 +105,12 @@ struct TVCatalogBrowser: View {
                         Button {
                             selectedCategory = category.id
                         } label: {
-                            Text((allowPins && pinnedIDs.con…65 tokens truncated…                   .buttonStyle(.bordered)
+                            Text((allowPins && pinnedIDs.contains(category.id) ? "★ " : "") + category.name)
+                                .font(.headline)
+                                .padding(.horizontal, 24)
+                                .padding(.vertical, 14)
+                        }
+                        .buttonStyle(.bordered)
                         .tint(selectedCategory == category.id ? TVTheme.red : TVTheme.muted)
                     }
                 }

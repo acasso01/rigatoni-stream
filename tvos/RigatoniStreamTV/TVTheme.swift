@@ -10,3 +10,10 @@ enum TVTheme {
     static let muted = Color.gray
     static let corner: CGFloat = 16
 }
+
+// Observe mutations inside the reference store held by each tab.
+struct TVObservedStore<Content: View>: View {
+    @ObservedObject var store: TVLibraryStore
+    @ViewBuilder var content: (TVLibraryStore) -> Content
+    var body: some View { content(store) }
+}
