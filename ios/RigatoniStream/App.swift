@@ -9,14 +9,14 @@ struct RigatoniStreamApp: App {
                 if model.starting { ProgressView("Opening Rigatoni Stream…") }
                 else if model.signedIn {
                     TabView {
-                        ForEach(LibraryKind.allCases) { kind in
-                            LibraryView(kind: kind).tabItem { Label(kind.title, systemImage: kind.symbol) }
-                        }
+                        MoviesHomeView().tabItem { Label("Movies", systemImage: "film") }
+                        LibraryView(kind: .live).tabItem { Label("Live TV", systemImage: "tv") }
+                        GlobalSearchView().tabItem { Label("Search", systemImage: "magnifyingglass") }
                     }
                     .sheet(isPresented: $model.settingsVisible) { SettingsView() }
                 } else { LoginView() }
             }
-            .environmentObject(model).tint(Color(red: 0.90, green: 0.035, blue: 0.08))
+            .environmentObject(model).environmentObject(model.catalog).tint(Color(red: 0.90, green: 0.035, blue: 0.08))
             .preferredColorScheme(.dark).task { await model.restore() }
         }
     }
@@ -122,7 +122,7 @@ struct SettingsView: View {
                     Button("Sign out", role: .destructive) { Task { await model.signOut() } }.disabled(model.busy)
                 }
                 Section("About this test build") {
-                    Text("Rigatoni Stream 0.1 · Native player powered by MobileVLCKit / VideoLAN (LGPL 2.1).")
+                    Text("Rigatoni Stream 0.1 · Native player powered by VLCKit / VideoLAN (LGPL 2.1).")
                     Link("VideoLAN and VLCKit source", destination: URL(string: "https://code.videolan.org/videolan/VLCKit")!)
                 }
             }

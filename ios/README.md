@@ -24,7 +24,7 @@ The app reuses your existing Supabase account and encrypted `provider-vault`. Pr
 4. Open **RigatoniStream.xcworkspace**, not the `.xcodeproj`. Select the RigatoniStream application target → Signing & Capabilities. Enable automatic signing and choose your Personal Team. Add your Apple account in Xcode Settings → Accounts if necessary. If the bundle identifier is unavailable, change it to a unique identifier under your name.
 5. Connect and unlock your iPhone, trust your Mac, and select your iPhone as the run destination. Enable Developer Mode on the iPhone when prompted (Settings → Privacy & Security → Developer Mode), then restart and confirm.
 6. Press Run (⌘R). If iOS asks you to trust the developer, use Settings → General → VPN & Device Management.
-7. Sign in with your existing Rigatoni account. Your saved provider and gateway should populate automatically. The app's Live TV and Movies tabs browse by category; choose This category or All categories for search.
+7. Sign in with your existing Rigatoni account. Your saved provider and gateway should populate automatically. Movies opens a featured movie and lazy category shelves with filled portrait posters. Live TV retains category browsing and pins. The Search tab searches movies and channels together, with All / Movies / Live TV filters.
 
 With a free Personal Team, the provisioning expires after seven days. Run the project again from Xcode to renew it. A paid developer account is not required for this initial on-device test. CI builds an ad hoc signed simulator app and an unsigned physical iPhone build; neither is an installable, personally signed iPhone IPA.
 
@@ -46,7 +46,7 @@ Then select your iPhone and press Run (⌘R). Keep the same signing team and bun
 
 ## Playback and test scope
 
-- The video uses the whole player surface. Controls overlay the picture and hide after four seconds of playback; tap the video to show or hide them. Fit preserves the whole picture, Fill crops to cover the screen, and Zoom crops further by 1.25×. The source aspect ratio is preserved in every mode.
+- The video uses the whole player surface. Controls overlay the picture and hide after four seconds of playback; tap the video to show them. Fit preserves the whole picture, Fill crops to cover the screen, and Zoom crops further by 1.25×. The source aspect ratio is preserved in every mode.
 - Tap the video to reveal a large Play/Pause button for movies and Live TV. Live TV also has Previous/Next buttons, following the loaded channel list across catalog pages without wrapping at the ends. Changing channel stops the previous stream before starting the next.
 - All categories search first tries a single full-catalog request for direct providers (32 MiB, 100,000 titles, 20-second total timeout). If unsupported or oversized, it falls back to category requests and displays partial results as they arrive. Loaded global results and the most recent category stay in memory during the session; Retry, settings changes and sign-out clear them. Gateway providers use the category fallback. No catalog or credentials are written to disk. Search is debounced by 200 ms and filtered off the main thread. The provider still must supply catalog data before complete local search; no undocumented server-side title search is assumed.
 - VLC handles MKV/MP4/TS directly, with full movie seeking when the provider serves seekable content. There is no rolling Pi movie conversion.
@@ -62,3 +62,11 @@ Then select your iPhone and press Run (⌘R). Keep the same signing team and bun
 ## Dependency license
 
 VLCKit 4.0.0a25 is pinned using VideoLAN's official podspec (source commit 2e0868f5ed40fe59cd92f377645fdcc260c6e759) and SHA-256-verified download. Version 4 is a prerelease required for native VLC PiP; recheck live/movie playback on device after upgrading. Its license is LGPL 2.1; its downloaded framework includes the license material. [VLCKit source](https://code.videolan.org/videolan/VLCKit). Review notices and LGPL distribution/relinking requirements before distributing release builds. This repository does not redistribute the binary or claim to copy Chillio's proprietary player implementation.
+
+## Movies home and shared search
+
+- The supplied RS artwork is the app icon. Existing Mac installs must run `bundle exec ruby update_project.rb` before `bundle exec pod install` to add the asset catalog and Discovery.swift without resetting signing.
+- Movie posters fill 2:3 cards. The featured artwork uses aspect-fill with a title/Play overlay; rows show actual provider categories, with See all for complete category browsing. No invented ratings, dates, or viewing history are displayed.
+- The Search tab starts loading only after two characters, with one shared full-catalog job per media type. It retains completed catalogs for this account session, debounces filtering, displays results progressively and separates movie/channel IDs. Partial catalog errors remain retryable. Settings changes and sign-out clear catalogs. Initial complete search still needs the provider's metadata.
+- Category metadata is bounded to 100,000 titles across at most six cached categories; complete search is bounded to 100,000 titles per media type. Shelves retain only 20 items. Images are downsampled and cached only in memory (48 MiB / 100 images).
+- A video tap reveals controls only. Play/Pause remains an explicit button action; no tap reaches VLC's internal controls.

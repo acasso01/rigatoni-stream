@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 import SwiftUI
 import CryptoKit
 
@@ -66,20 +67,46 @@ final class BoundedTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendab
     }
 }
 
+@MainActor
+final class PosterMemory {
+    static let shared = NSCache<NSURL, UIImage>()
+    static func configure() { shared.totalCostLimit = 48 * 1024 * 1024; shared.countLimit = 100 }
+}
+
 struct ProviderPoster: View {
     let url: URL?
     let kind: LibraryKind
     @State private var image: UIImage?
     var body: some View {
-        ZStack {
-            Color.white.opacity(0.06)
-            if let image { Image(uiImage: image).resizable().scaledToFit() }
-            else { Image(systemName: kind.symbol).font(.largeTitle).foregroundStyle(.gray) }
+        GeometryReader { geometry in
+            ZStack {
+                Color.white.opacity(0.06)
+                if let image {
+                    Image(uiImage: image).resizable()
+                        .aspectRatio(contentMode: kind == .movies ? .fill : .fit)
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                } else { Image(systemName: kind.symbol).font(.largeTitle).foregroundStyle(.gray).frame(maxWidth: .infinity, maxHeight: .infinity) }
+            }.frame(width: geometry.size.width, height: geometry.size.height).clipped()
         }
         .task(id: url) {
             image = nil
             guard let url else { return }
-            if let data = try? await BoundedTransfer(limit: 2 * 1024 * 1024).fetch(url), !Task.isCancelled { image = UIImage(data: data) }
+            PosterMemory.configure()
+            if let cached = PosterMemory.shared.object(forKey: url as NSURL) { image = cached; return }
+            guard let data = try? await BoundedTransfer(limit: 2 * 1024 * 1024).fetch(url), !Task.isCancelled else { return }
+            let worker = Task.detached(priority: .utility) { () -> UIImage? in
+                guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+                      let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                        kCGImageSourceCreateThumbnailFromImageAlways: true,
+                        kCGImageSourceCreateThumbnailWithTransform: true,
+                        kCGImageSourceThumbnailMaxPixelSize: 1000
+                      ] as CFDictionary) else { return nil }
+                return UIImage(cgImage: thumbnail)
+            }
+            let decoded = await worker.value
+            guard !Task.isCancelled, let decoded else { return }
+            PosterMemory.shared.setObject(decoded, forKey: url as NSURL, cost: (decoded.cgImage?.bytesPerRow ?? 0) * (decoded.cgImage?.height ?? 0))
+            image = decoded
         }
     }
 }
@@ -172,6 +199,7 @@ enum CategoryPins {
 struct LibraryView: View {
     @EnvironmentObject private var model: AppModel
     let kind: LibraryKind
+    var initialCategoryID: String? = nil
     @State private var pinnedIDs: [String] = []
     @State private var categories: [CatalogCategory] = []
     @State private var selected = ""
@@ -233,11 +261,6 @@ struct LibraryView: View {
                                 }
                             }
                         }
-                        Picker("Search scope", selection: $scope) {
-                            ForEach(CatalogSearchScope.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                        }.pickerStyle(.segmented)
-                        TextField(kind == .movies ? "Search movies" : "Search channels", text: $query)
-                            .textFieldStyle(.roundedBorder).onChange(of: query) { _, _ in page = 0 }
                         if loading { ProgressView(progress.isEmpty ? "Loading \(kind.title.lowercased())…" : progress).frame(maxWidth: .infinity) }
                         if !error.isEmpty {
                             Text(error).foregroundStyle(.secondary)
@@ -247,7 +270,7 @@ struct LibraryView: View {
                             ForEach(visible) { item in
                                 Button { playing = item } label: {
                                     VStack(alignment: .leading, spacing: 8) {
-                                        ProviderPoster(url: item.poster, kind: kind).frame(height: kind == .movies ? 190 : 100).clipShape(RoundedRectangle(cornerRadius: 10))
+                                        ProviderPoster(url: item.poster, kind: kind).aspectRatio(kind == .movies ? 2.0 / 3.0 : 1.7, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 10))
                                         Text(item.name).font(.subheadline.weight(.semibold)).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
                                     }.foregroundStyle(.white)
                                 }.buttonStyle(.plain)
@@ -293,7 +316,7 @@ struct LibraryView: View {
                 guard !id.isEmpty, id.allSatisfy(\.isNumber) else { return nil }
                 return CatalogCategory(id: id, name: row["category_name"] as? String ?? "Category")
             }
-            selected = orderedCategories.first?.id ?? ""
+            selected = categories.first { $0.id == initialCategoryID }?.id ?? orderedCategories.first?.id ?? ""
             if selected.isEmpty { loading = false }
         } catch { if !Task.isCancelled { self.error = error.localizedDescription; loading = false } }
     }
@@ -312,38 +335,7 @@ struct LibraryView: View {
         filtered = result
     }
     private func fetchItems(category: String?) async throws -> [CatalogItem] {
-        if !model.provider.requiresGateway, let category, let cached = categoryCache[category] { return cached }
-        let raw: [[String: Any]]
-        if model.provider.requiresGateway {
-            raw = try await model.gatewayRows(kind: kind, category: category)
-        } else {
-            let url = try model.provider.apiURL(action: kind.streamAction, category: category)
-            let data = try await BoundedTransfer(limit: 32 * 1024 * 1024, timeout: category == nil ? 10 : 30).fetch(url)
-            let worker = Task.detached(priority: .userInitiated) {
-                guard let result = try JSONSerialization.jsonObject(with: data) as? [[String: Any]], result.count <= CatalogIndex.maximumItems else {
-                    throw AppFailure("The provider returned an invalid or oversized catalog.")
-                }
-                return result
-            }
-            raw = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
-        }
-        try Task.checkCancellation()
-        let libraryKind = kind
-        let worker = Task.detached(priority: .userInitiated) { raw.compactMap { CatalogItem.parse($0, kind: libraryKind) } }
-        var result = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
-        try Task.checkCancellation()
-        if model.provider.requiresGateway {
-            result = result.map { item in
-                var item = item
-                item.playbackURL = try? model.gatewayPlaybackURL(id: item.id, kind: kind)
-                return item
-            }
-        } else if let category {
-            // Category and full-catalog arrays share item values; retain only the full result
-            // after a successful global load to keep memory bounded.
-            categoryCache = [category: result]
-        }
-        return result
+        try await model.catalog.items(kind: kind, category: category, model: model)
     }
     private func loadItems() async {
         guard !selected.isEmpty, !categories.isEmpty, model.signedIn, model.providerReady else { return }

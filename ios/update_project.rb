@@ -7,13 +7,16 @@ target = project.targets.find { |candidate| candidate.name == 'RigatoniStream' }
 abort 'RigatoniStream application target missing' unless target
 group = project.main_group.children.find { |candidate| candidate.respond_to?(:path) && candidate.path == 'RigatoniStream' }
 group ||= project.main_group.new_group('RigatoniStream', 'RigatoniStream')
-%w[PictureInPictureBridge.h PictureInPictureBridge.m RigatoniStream-Bridging-Header.h].each do |name|
+%w[PictureInPictureBridge.h PictureInPictureBridge.m RigatoniStream-Bridging-Header.h Discovery.swift].each do |name|
   file = group.files.find { |candidate| candidate.path == name } || group.new_file(name)
-  if name.end_with?('.m') && !target.source_build_phase.files_references.include?(file)
+  if (name.end_with?('.m') || name.end_with?('.swift')) && !target.source_build_phase.files_references.include?(file)
     target.source_build_phase.add_file_reference(file)
   end
 end
+asset = group.files.find { |candidate| candidate.path == 'Assets.xcassets' } || group.new_file('Assets.xcassets')
+target.resources_build_phase.add_file_reference(asset) unless target.resources_build_phase.files_references.include?(asset)
 target.build_configurations.each do |config|
+  config.build_settings['ASSETCATALOG_COMPILER_APPICON_NAME'] = 'AppIcon'
   config.build_settings['SWIFT_OBJC_BRIDGING_HEADER'] = 'RigatoniStream/RigatoniStream-Bridging-Header.h'
   path = config.build_settings['INFOPLIST_FILE']
   abort 'Expected local generated Info.plist' unless path && !path.include?('$')

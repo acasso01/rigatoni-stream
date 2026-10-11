@@ -255,11 +255,13 @@ final class AppModel: ObservableObject {
     @Published var settingsVisible = false
     @Published var libraryRevision = 0
     let account = AccountAPI()
+    let catalog = SessionCatalog()
     var gatewayConnection: [String: Any]?
     var gatewayConnectTask: Task<[String: Any], Error>?
     var gatewayMovieCatalog: [String: Any]?
     var gatewayMedia: [LibraryKind: [String: String]] = [:]
     func resetGateway() {
+        catalog.reset()
         gatewayConnectTask?.cancel(); gatewayConnectTask = nil; gatewayConnection = nil
         gatewayMovieCatalog = nil; gatewayMedia = [:]
     }

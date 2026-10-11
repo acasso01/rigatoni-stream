@@ -159,9 +159,10 @@ enum VideoDisplayMode: String, CaseIterable {
     }
 }
 
-final class VideoCanvas: UIView, UIGestureRecognizerDelegate {
+final class VideoCanvas: UIView {
     var onTap: (() -> Void)?
     let drawable = UIView()
+    let touchSurface = UIView()
     var mode = VideoDisplayMode.fit
     var videoSize = CGSize.zero
     override init(frame: CGRect) {
@@ -170,15 +171,18 @@ final class VideoCanvas: UIView, UIGestureRecognizerDelegate {
         drawable.backgroundColor = .black
         addSubview(drawable)
         let tap = UITapGestureRecognizer(target: self, action: #selector(tapped))
-        tap.cancelsTouchesInView = false; tap.delegate = self
-        addGestureRecognizer(tap)
+        // Touches land here, never on VLC's internal video controls.
+        touchSurface.backgroundColor = .clear
+        addSubview(touchSurface)
+        touchSurface.addGestureRecognizer(tap)
     }
     @objc func tapped() { onTap?() }
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     override func layoutSubviews() {
         super.layoutSubviews()
         drawable.frame = mode.frame(in: bounds, video: videoSize)
+        touchSurface.frame = bounds
+        bringSubviewToFront(touchSurface)
     }
 }
 
@@ -228,9 +232,9 @@ struct PlayerView: View {
         ZStack {
             Color.black.ignoresSafeArea()
             if let url = currentItem.playbackURL ?? (provider.requiresGateway ? nil : try? provider.streamURL(item: currentItem)) {
-                PlayerSurface(player: player, url: url, cache: currentItem.kind == .live ? liveBuffer : movieBuffer, mode: displayMode, onTap: toggleControls)
+                PlayerSurface(player: player, url: url, cache: currentItem.kind == .live ? liveBuffer : movieBuffer, mode: displayMode, onTap: showControls)
                     .ignoresSafeArea()
-                    .accessibilityLabel("Video. Tap to show or hide playback controls.")
+                    .accessibilityLabel("Video. Tap to show playback controls.")
             } else { Text("Invalid provider settings.") }
             if controlsVisible {
                 HStack(spacing: 40) {
@@ -300,10 +304,6 @@ struct PlayerView: View {
             if playing { if controlsVisible { showControls() } }
             else { hideTask?.cancel(); controlsVisible = true }
         }
-    }
-    private func toggleControls() {
-        if controlsVisible { hideTask?.cancel(); controlsVisible = false }
-        else { showControls() }
     }
     private func adjacentChannel(_ offset: Int) -> CatalogItem? {
         ChannelNavigation.adjacent(in: channels, currentID: currentItem.id, offset: offset)

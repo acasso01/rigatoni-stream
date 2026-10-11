@@ -25,6 +25,7 @@ targets:
         INFOPLIST_KEY_NSHumanReadableCopyright: 'Rigatoni Stream; VLCKit licensed under LGPL 2.1'
         INFOPLIST_KEY_NSSupportsLiveActivities: NO
         SWIFT_OBJC_BRIDGING_HEADER: RigatoniStream/RigatoniStream-Bridging-Header.h
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         MARKETING_VERSION: '0.1.0'
         CURRENT_PROJECT_VERSION: '1'
     info:

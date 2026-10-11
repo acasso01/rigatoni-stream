@@ -17,11 +17,32 @@ final class CoreTests: XCTestCase {
         let canvas = VideoCanvas()
         var taps = 0
         canvas.onTap = { taps += 1 }
-        XCTAssertEqual(canvas.gestureRecognizers?.count, 1)
-        XCTAssertFalse(canvas.gestureRecognizers!.first!.cancelsTouchesInView)
-        canvas.drawable.addSubview(UIView())
+        canvas.frame = CGRect(x: 0, y: 0, width: 400, height: 250)
+        let vlcControls = UIButton(frame: canvas.bounds)
+        canvas.drawable.addSubview(vlcControls)
+        canvas.layoutIfNeeded()
+        XCTAssertEqual(canvas.touchSurface.gestureRecognizers?.count, 1)
+        XCTAssertTrue(canvas.hitTest(CGPoint(x: 200, y: 125), with: nil) === canvas.touchSurface)
+        XCTAssertFalse(canvas.hitTest(CGPoint(x: 200, y: 125), with: nil) === vlcControls)
         canvas.tapped(); canvas.tapped()
         XCTAssertEqual(taps, 2)
+    }
+    func testUnifiedSearchKeepsMovieAndChannelWithSameProviderID() {
+        let movie = CatalogItem(id: "7", name: "Sports movie", kind: .movies, fileExtension: "mkv", poster: nil)
+        let channel = CatalogItem(id: "7", name: "Sports channel", kind: .live, fileExtension: "ts", poster: nil)
+        let all = UnifiedSearch.matches([movie, channel], query: "SPORTS", filter: "all")
+        XCTAssertEqual(all.count, 2)
+        XCTAssertEqual(Set(all.map(\.id)).count, 2)
+        XCTAssertEqual(UnifiedSearch.matches([movie, channel], query: "sports", filter: "movies").map(\.item.kind), [.movies])
+        XCTAssertTrue(UnifiedSearch.matches([movie, channel], query: "missing", filter: "all").isEmpty)
+    }
+    @MainActor func testCatalogResetClearsSearchResults() {
+        let catalog = SessionCatalog()
+        let before = catalog.revision
+        catalog.reset()
+        XCTAssertTrue(catalog.searchable.isEmpty)
+        XCTAssertTrue(catalog.progress.isEmpty)
+        XCTAssertGreaterThan(catalog.revision, before)
     }
     func testBackgroundAudioIsEnabledInInstalledBuild() {
         XCTAssertTrue((Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String] ?? []).contains("audio"))
