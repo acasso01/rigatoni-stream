@@ -54,4 +54,47 @@ final class CoreTests: XCTestCase {
         XCTAssertTrue(other.requiresGateway)
     }
 
+    func testPictureModesPreserveAspectAndCoverScreen() {
+        let bounds = CGRect(x: 0, y: 0, width: 1500, height: 700)
+        let video = CGSize(width: 1920, height: 1080)
+        let fit = VideoDisplayMode.fit.frame(in: bounds, video: video)
+        XCTAssertEqual(fit.height, 700, accuracy: 0.01)
+        XCTAssertLessThan(fit.width, bounds.width)
+        let fill = VideoDisplayMode.fill.frame(in: bounds, video: video)
+        XCTAssertEqual(fill.width, 1500, accuracy: 0.01)
+        XCTAssertGreaterThan(fill.height, bounds.height)
+        let zoom = VideoDisplayMode.zoom.frame(in: bounds, video: video)
+        XCTAssertEqual(zoom.width, fill.width * 1.25, accuracy: 0.01)
+        for frame in [fit, fill, zoom] {
+            XCTAssertEqual(frame.midX, bounds.midX, accuracy: 0.01)
+            XCTAssertEqual(frame.midY, bounds.midY, accuracy: 0.01)
+            XCTAssertEqual(frame.width / frame.height, video.width / video.height, accuracy: 0.001)
+        }
+        XCTAssertEqual(VideoDisplayMode.fit.frame(in: bounds, video: .zero), bounds)
+        XCTAssertEqual(VideoDisplayMode.zoom.next, .fit)
+        let portrait = CGRect(x: 0, y: 0, width: 400, height: 850)
+        XCTAssertGreaterThanOrEqual(VideoDisplayMode.fill.frame(in: portrait, video: video).width, portrait.width)
+    }
+    func testSearchCombinesCategoriesWithoutDuplicateTitles() throws {
+        let first = CatalogItem(id: "1", name: "Sports HD", kind: .live, fileExtension: "ts", poster: nil)
+        let second = CatalogItem(id: "2", name: "News HD", kind: .live, fileExtension: "ts", poster: nil)
+        var index = CatalogIndex()
+        try index.append([first])
+        try index.append([first, second])
+        XCTAssertEqual(index.items.map(\.id), ["1", "2"])
+        XCTAssertEqual(CatalogIndex.matches(index.items, query: " news ").map(\.id), ["2"])
+        XCTAssertEqual(CatalogIndex.matches(index.items, query: "HD").count, 2)
+        XCTAssertEqual(CatalogIndex.matches(index.items, query: "  ").count, 2)
+    }
+    func testSearchLimitPreservesLoadedResults() throws {
+        var index = CatalogIndex()
+        let batch = (0..<CatalogIndex.maximumItems).map {
+            CatalogItem(id: String($0), name: "Title", kind: .movies, fileExtension: "mkv", poster: nil)
+        }
+        try index.append(batch)
+        try index.append([batch[0]])
+        XCTAssertThrowsError(try index.append([CatalogItem(id: "extra", name: "Extra", kind: .movies, fileExtension: "mkv", poster: nil)]))
+        XCTAssertEqual(index.items.count, CatalogIndex.maximumItems)
+    }
+
 }

@@ -68,17 +68,48 @@ private extension Double {
     func clamped(to range: ClosedRange<Double>) -> Double { min(range.upperBound, max(range.lowerBound, self)) }
 }
 
+enum VideoDisplayMode: String, CaseIterable {
+    case fit = "Fit", fill = "Fill", zoom = "Zoom"
+    var next: VideoDisplayMode { Self.allCases[(Self.allCases.firstIndex(of: self)! + 1) % Self.allCases.count] }
+    func frame(in bounds: CGRect, video: CGSize) -> CGRect {
+        guard video.width > 0, video.height > 0, bounds.width > 0, bounds.height > 0 else { return bounds }
+        let scale = (self == .fit ? min(bounds.width / video.width, bounds.height / video.height) : max(bounds.width / video.width, bounds.height / video.height)) * (self == .zoom ? 1.25 : 1)
+        let size = CGSize(width: video.width * scale, height: video.height * scale)
+        return CGRect(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2, width: size.width, height: size.height)
+    }
+}
+
+final class VideoCanvas: UIView {
+    let drawable = UIView()
+    var mode = VideoDisplayMode.fit
+    var videoSize = CGSize.zero
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .black; clipsToBounds = true
+        drawable.backgroundColor = .black
+        addSubview(drawable)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        drawable.frame = mode.frame(in: bounds, video: videoSize)
+    }
+}
+
 struct PlayerSurface: UIViewRepresentable {
     let player: NativePlayer
     let url: URL
     let cache: Int
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView(); view.backgroundColor = .black
-        player.attach(view, url: url, cache: cache)
+    let mode: VideoDisplayMode
+    func makeUIView(context: Context) -> VideoCanvas {
+        let view = VideoCanvas()
+        player.attach(view.drawable, url: url, cache: cache)
         return view
     }
-    func updateUIView(_ uiView: UIView, context: Context) {}
-    static func dismantleUIView(_ uiView: UIView, coordinator: ()) {}
+    func updateUIView(_ view: VideoCanvas, context: Context) {
+        view.mode = mode; view.videoSize = player.engine.videoSize
+        view.setNeedsLayout()
+    }
 }
 
 struct PlayerView: View {
@@ -87,31 +118,75 @@ struct PlayerView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var player = NativePlayer()
+    @State private var controlsVisible = true
+    @State private var displayMode = VideoDisplayMode.fit
+    @State private var hideTask: Task<Void, Never>?
+    @State private var seeking = false
     @AppStorage("rigatoni-live-buffer-ms") private var liveBuffer = 1500
     @AppStorage("rigatoni-movie-buffer-ms") private var movieBuffer = 4000
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Button { player.stop(); dismiss() } label: { Label("Back", systemImage: "chevron.left") }
-                Text(item.name).font(.headline).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-            }.padding()
+        ZStack {
+            Color.black.ignoresSafeArea()
             if let url = item.playbackURL ?? (provider.requiresGateway ? nil : try? provider.streamURL(item: item)) {
-                PlayerSurface(player: player, url: url, cache: item.kind == .live ? liveBuffer : movieBuffer)
-            } else { Text("Invalid provider settings.").frame(maxWidth: .infinity, maxHeight: .infinity) }
-            VStack(spacing: 14) {
-                HStack {
-                    Button { player.toggle() } label: { Image(systemName: player.playing ? "pause.fill" : "play.fill").font(.title2) }.accessibilityLabel(player.playing ? "Pause" : "Play")
-                    Text(player.elapsed).monospacedDigit()
+                PlayerSurface(player: player, url: url, cache: item.kind == .live ? liveBuffer : movieBuffer, mode: displayMode)
+                    .ignoresSafeArea().contentShape(Rectangle())
+                    .onTapGesture {
+                        if controlsVisible { hideTask?.cancel(); controlsVisible = false }
+                        else { showControls() }
+                    }
+                    .accessibilityLabel("Video. Tap to show or hide playback controls.")
+            } else { Text("Invalid provider settings.") }
+            if controlsVisible {
+                VStack {
+                    HStack(spacing: 12) {
+                        Button { player.stop(); dismiss() } label: { Label("Back", systemImage: "chevron.left") }
+                        Text(item.name).font(.headline).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                        Button { displayMode = displayMode.next; showControls() } label: {
+                            Label(displayMode.rawValue, systemImage: displayMode == .fit ? "arrow.up.left.and.arrow.down.right" : "arrow.down.right.and.arrow.up.left")
+                        }.accessibilityLabel("Picture mode: \(displayMode.rawValue). Tap to change fit, fill or zoom.")
+                    }
+                    .padding().background(.black.opacity(0.7))
                     Spacer()
-                    Button("Retry") { player.start() }
-                }
-                if item.kind == .movies && player.seekable {
-                    Slider(value: $player.position, in: 0...1, onEditingChanged: player.seekEditing).accessibilityLabel("Movie position")
-                }
-                Text(player.state).font(.callout).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
-                if !player.resolution.isEmpty { Text(player.resolution).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading) }
-            }.padding()
-        }.background(.black).onDisappear { player.stop() }
-            .onChange(of: scenePhase) { _, phase in if phase != .active && player.playing { player.engine.pause() } }
+                    VStack(spacing: 10) {
+                        HStack {
+                            Button { player.toggle(); showControls() } label: {
+                                Image(systemName: player.playing ? "pause.fill" : "play.fill").font(.title2).frame(width: 44, height: 44)
+                            }.accessibilityLabel(player.playing ? "Pause" : "Play")
+                            Text(player.elapsed).monospacedDigit()
+                            Spacer()
+                            if !player.resolution.isEmpty { Text(player.resolution).font(.caption).foregroundStyle(.white.opacity(0.8)) }
+                            Button("Retry") { player.start(); showControls() }
+                        }
+                        if item.kind == .movies && player.seekable {
+                            Slider(value: $player.position, in: 0...1, onEditingChanged: { editing in
+                                seeking = editing; player.seekEditing(editing)
+                                if editing { hideTask?.cancel() } else { showControls() }
+                            }).accessibilityLabel("Movie position")
+                        }
+                        if player.state != "Playing" && player.state != "Buffering…" {
+                            Text(player.state).font(.callout).frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }.padding(.horizontal).padding(.bottom, 8).background(.black.opacity(0.7))
+                }.foregroundStyle(.white).transition(.opacity)
+            }
+        }
+        .statusBarHidden(!controlsVisible)
+        .persistentSystemOverlays(controlsVisible ? .automatic : .hidden)
+        .onAppear { showControls() }
+        .onDisappear { hideTask?.cancel(); player.stop() }
+        .onChange(of: player.playing) { _, playing in
+            if playing { if controlsVisible { showControls() } }
+            else { hideTask?.cancel(); controlsVisible = true }
+        }
+        .onChange(of: scenePhase) { _, phase in if phase != .active && player.playing { player.engine.pause() } }
+    }
+    private func showControls() {
+        controlsVisible = true; hideTask?.cancel()
+        guard player.playing, !seeking else { return }
+        hideTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled, player.playing, !seeking else { return }
+            withAnimation(.easeOut(duration: 0.2)) { controlsVisible = false }
+        }
     }
 }

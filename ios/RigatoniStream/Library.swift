@@ -82,6 +82,26 @@ struct ProviderPoster: View {
     }
 }
 
+enum CatalogSearchScope: String, CaseIterable {
+    case category = "This category", all = "All categories"
+}
+
+struct CatalogIndex {
+    static let maximumItems = 100000
+    private(set) var items: [CatalogItem] = []
+    private var seen = Set<String>()
+    mutating func append(_ batch: [CatalogItem]) throws {
+        for item in batch where !seen.contains(item.id) {
+            guard items.count < Self.maximumItems else { throw AppFailure("The catalog reached the app's search limit. Search a specific category for additional titles.") }
+            seen.insert(item.id); items.append(item)
+        }
+    }
+    static func matches(_ items: [CatalogItem], query: String) -> [CatalogItem] {
+        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return term.isEmpty ? items : items.filter { $0.name.localizedCaseInsensitiveContains(term) }
+    }
+}
+
 struct LibraryView: View {
     @EnvironmentObject private var model: AppModel
     let kind: LibraryKind
@@ -90,11 +110,13 @@ struct LibraryView: View {
     @State private var items: [CatalogItem] = []
     @State private var query = ""
     @State private var loading = false
+    @State private var scope = CatalogSearchScope.category
+    @State private var progress = ""
     @State private var error = ""
     @State private var page = 0
     @State private var playing: CatalogItem?
     @State private var retry = 0
-    private var filtered: [CatalogItem] { query.isEmpty ? items : items.filter { $0.name.localizedCaseInsensitiveContains(query) } }
+    private var filtered: [CatalogItem] { CatalogIndex.matches(items, query: query) }
     private var visible: [CatalogItem] { Array(filtered.dropFirst(page * 120).prefix(120)) }
     var body: some View {
         NavigationStack {
@@ -107,18 +129,21 @@ struct LibraryView: View {
                         Text("Add or restore your provider settings to browse.")
                         Button("Provider settings") { model.settingsVisible = true }.buttonStyle(.borderedProminent)
                     } else {
-                        if !categories.isEmpty {
+                        if !categories.isEmpty && scope == .category {
                             Picker("Category", selection: $selected) {
                                 ForEach(categories) { Text($0.name).tag($0.id) }
                             }.pickerStyle(.menu).tint(.white)
                         }
-                        TextField(kind == .movies ? "Search movies in this category" : "Search channels in this category", text: $query)
+                        Picker("Search scope", selection: $scope) {
+                            ForEach(CatalogSearchScope.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                        }.pickerStyle(.segmented)
+                        TextField(kind == .movies ? "Search movies" : "Search channels", text: $query)
                             .textFieldStyle(.roundedBorder).onChange(of: query) { _, _ in page = 0 }
-                        if loading { ProgressView("Loading \(kind.title.lowercased())…").frame(maxWidth: .infinity) }
+                        if loading { ProgressView(progress.isEmpty ? "Loading \(kind.title.lowercased())…" : progress).frame(maxWidth: .infinity) }
                         if !error.isEmpty {
                             Text(error).foregroundStyle(.secondary)
                             Button("Retry") { model.resetGateway(); retry += 1 }.buttonStyle(.bordered)
-                        } else if !loading && items.isEmpty { Text("No titles in this category.").foregroundStyle(.secondary) }
+                        } else if !loading && filtered.isEmpty { Text(query.isEmpty ? "No titles available." : "No matching titles.").foregroundStyle(.secondary) }
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 12)], spacing: 16) {
                             ForEach(visible) { item in
                                 Button { playing = item } label: {
@@ -136,7 +161,7 @@ struct LibraryView: View {
                                 Button("Next") { page += 1 }.disabled((page + 1) * 120 >= filtered.count)
                             }
                         }
-                        Text("\(filtered.count) titles · Search covers this category").font(.caption).foregroundStyle(.secondary)
+                        Text("\(filtered.count) titles · \(scope.rawValue)").font(.caption).foregroundStyle(.secondary)
                     }
                 }.padding()
             }
@@ -144,7 +169,7 @@ struct LibraryView: View {
             .navigationTitle("🍝 Rigatoni Stream").navigationBarTitleDisplayMode(.inline)
             .toolbar { Button { model.settingsVisible = true } label: { Image(systemName: "person.crop.circle") }.accessibilityLabel("Account and provider settings") }
             .task(id: "\(model.libraryRevision)-\(retry)") { await loadCategories() }
-            .task(id: "\(selected)-\(model.libraryRevision)-\(retry)") { await loadItems() }
+            .task(id: "\(scope.rawValue)-\(selected)-\(model.libraryRevision)-\(retry)") { await loadItems() }
             .fullScreenCover(item: $playing) { PlayerView(item: $0, provider: model.provider) }
         }
     }
@@ -156,7 +181,7 @@ struct LibraryView: View {
         return rows
     }
     private func loadCategories() async {
-        categories = []; selected = ""; items = []; error = ""; query = ""; page = 0
+        categories = []; selected = ""; items = []; error = ""; query = ""; page = 0; progress = ""
         guard model.signedIn, model.providerReady else { return }
         loading = true
         do {
@@ -172,18 +197,36 @@ struct LibraryView: View {
         } catch { if !Task.isCancelled { self.error = error.localizedDescription; loading = false } }
     }
     private func loadItems() async {
-        guard !selected.isEmpty, model.signedIn, model.providerReady else { return }
-        items = []; query = ""; page = 0; error = ""; loading = true
-        do {
-            let result = try await rows(action: kind.streamAction, category: selected)
+        guard !selected.isEmpty, !categories.isEmpty, model.signedIn, model.providerReady else { return }
+        items = []; page = 0; error = ""; loading = true; progress = ""
+        let requested = scope == .all ? categories.map(\.id) : [selected]
+        var index = CatalogIndex()
+        var failed = 0
+        var limited = false
+        let throughGateway = model.provider.requiresGateway
+        for (offset, category) in requested.enumerated() {
             guard !Task.isCancelled else { return }
-            var seen = Set<String>()
-            items = result.compactMap { row in
-                guard var item = CatalogItem.parse(row, kind: kind) else { return nil }
-                if model.provider.requiresGateway { item.playbackURL = try? model.gatewayPlaybackURL(id: item.id, kind: kind) }
-                return item
-            }.filter { seen.insert($0.id).inserted }
-            loading = false
-        } catch { if !Task.isCancelled { self.error = error.localizedDescription; loading = false } }
+            progress = requested.count > 1 ? "Loading category \(offset + 1) of \(requested.count)…" : ""
+            do {
+                let result = try await rows(action: kind.streamAction, category: category)
+                guard !Task.isCancelled else { return }
+                let batch = result.compactMap { row -> CatalogItem? in
+                    guard var item = CatalogItem.parse(row, kind: kind) else { return nil }
+                    if throughGateway { item.playbackURL = try? model.gatewayPlaybackURL(id: item.id, kind: kind) }
+                    return item
+                }
+                do { try index.append(batch) }
+                catch { self.error = error.localizedDescription; limited = true; break }
+            } catch {
+                guard !Task.isCancelled else { return }
+                if requested.count == 1 { self.error = error.localizedDescription }
+                failed += 1
+            }
+        }
+        guard !Task.isCancelled else { return }
+        items = index.items; loading = false; progress = ""
+        if failed > 0 && requested.count > 1 && !limited {
+            error = "\(failed) categories could not be loaded. Results cover the categories that loaded successfully. Retry to try again."
+        }
     }
 }
