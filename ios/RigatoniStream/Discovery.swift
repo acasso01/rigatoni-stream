@@ -132,6 +132,7 @@ struct MovieCard: View {
 }
 
 struct MoviesHomeView: View {
+    @AppStorage("rigatoni-appearance") private var appearance = "dark"
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var catalog: SessionCatalog
     @State private var categories: [CatalogCategory] = []
@@ -195,6 +196,7 @@ struct MoviesHomeView: View {
                 }.padding(.bottom, 24)
             }
             .background { StreamBackdrop() }
+            .foregroundStyle(StreamTheme.text(for: AppAppearance(rawValue: appearance) ?? .dark))
             .navigationTitle("Movies").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Text("RS").font(.caption.weight(.black)).foregroundStyle(StreamTheme.accent) }

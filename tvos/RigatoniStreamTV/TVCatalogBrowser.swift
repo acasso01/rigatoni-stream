@@ -6,6 +6,7 @@ import SwiftUI
 // pin/unpin for Live TV. Pressing a card plays it full-screen; the Menu
 // button backs out of the player automatically.
 struct TVCatalogBrowser: View {
+    @AppStorage("rigatoni-appearance") private var appearance = "dark"
     let kind: LibraryKind
     let allowPins: Bool
     var initialCategoryID: String? = nil
@@ -35,6 +36,7 @@ struct TVCatalogBrowser: View {
             if let store { TVObservedStore(store: store) { content($0) }.id(ObjectIdentifier(store)) }
             else { ProgressView("Loading…").frame(maxWidth: .infinity, maxHeight: .infinity) }
         }
+        .foregroundStyle(StreamTheme.text(for: AppAppearance(rawValue: appearance) ?? .dark))
         .onAppear {
             if store == nil { store = TVLibraryStore(kind: kind, model: model) }
         }

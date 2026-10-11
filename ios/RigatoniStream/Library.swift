@@ -241,6 +241,7 @@ struct StreamHeading: View {
 
 #if os(iOS)
 struct LibraryView: View {
+    @AppStorage("rigatoni-appearance") private var appearance = "dark"
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var catalog: SessionCatalog
     let kind: LibraryKind
@@ -375,6 +376,7 @@ struct LibraryView: View {
                 }.padding()
             }
             .background { StreamBackdrop() }
+            .foregroundStyle(StreamTheme.text(for: AppAppearance(rawValue: appearance) ?? .dark))
             .navigationTitle(kind.title).navigationBarTitleDisplayMode(.inline)
             .toolbar { Button { model.settingsVisible = true } label: { Image(systemName: "person.crop.circle") }.accessibilityLabel("Account and provider settings") }
             .task(id: "\(model.libraryRevision)-\(retry)") { await loadCategories() }
