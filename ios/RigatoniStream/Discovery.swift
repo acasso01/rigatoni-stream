@@ -323,7 +323,7 @@ struct GlobalSearchView: View {
                 async let live: Void = load(.live)
                 _ = await (movies, live)
             }
-            .task(id: "\(query)-\(filter)-\(catalog.revision)") {
+            .task(id: "\(query)-\(filter)-\(catalog.revision)-\(model.libraryRevision)") {
                 limit = 60
                 guard hasQuery else { results = []; return }
                 do { try await Task.sleep(for: .milliseconds(200)) } catch { return }

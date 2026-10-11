@@ -103,98 +103,97 @@ struct TVSettingsView: View {
 
     var body: some View {
         NavigationStack {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                Text("Settings")
-                    .font(.largeTitle.bold())
-                    .padding(.top, 40)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 28) {
+                    Text("Settings")
+                        .font(.largeTitle.bold())
+                        .padding(.top, 40)
 
-                if let email = model.account.session?.user.email {
-                    Text("Signed in as \(email)")
-                        .foregroundStyle(TVTheme.muted)
-                }
-
-                settingsGroup(title: "Personalize") {
-                    NavigationLink("Themes & hidden categories / channels") { LibraryCustomizationView() }
-                }
-                settingsGroup(title: "Provider") {
-                    Text(model.provider.requiresGateway
-                         ? "Playback route: HTTPS gateway"
-                         : "Playback route: direct provider")
-                        .font(.footnote).foregroundStyle(TVTheme.muted)
-                    TextField("Server URL", text: $model.provider.server)
-                    TextField("Username", text: $model.provider.username)
-                    HStack {
-                        Group {
-                            if visiblePassword { TextField("Provider password", text: $model.provider.password) }
-                            else { SecureField("Provider password", text: $model.provider.password) }
-                        }
-                        Button { visiblePassword.toggle() } label: {
-                            Image(systemName: visiblePassword ? "eye.slash" : "eye")
-                        }
-                        .accessibilityLabel("Show or hide provider password")
+                    if let email = model.account.session?.user.email {
+                        Text("Signed in as \(email)")
+                            .foregroundStyle(TVTheme.muted)
                     }
-                    TextField("HTTPS gateway URL (optional)", text: $model.gateway)
-                    Text("Providers play directly when HTTPS or locally approved HTTP is available. Other HTTP hosts use your saved HTTPS gateway.")
-                        .font(.footnote).foregroundStyle(TVTheme.muted)
-                    HStack(spacing: 16) {
-                        Button("Save provider & gateway") { Task { await model.saveSettings() } }
-                            .buttonStyle(.card).tint(.white).disabled(model.busy)
-                        Button("Reload saved settings") {
-                            Task {
-                                model.busy = true; defer { model.busy = false }
-                                do { try await model.reloadSettings() }
-                                catch { model.notice = error.localizedDescription }
+
+                    settingsGroup(title: "Personalize") {
+                        NavigationLink("Themes & hidden categories / channels") { LibraryCustomizationView() }
+                    }
+                    settingsGroup(title: "Provider") {
+                        Text(model.provider.requiresGateway
+                             ? "Playback route: HTTPS gateway"
+                             : "Playback route: direct provider")
+                            .font(.footnote).foregroundStyle(TVTheme.muted)
+                        TextField("Server URL", text: $model.provider.server)
+                        TextField("Username", text: $model.provider.username)
+                        HStack {
+                            Group {
+                                if visiblePassword { TextField("Provider password", text: $model.provider.password) }
+                                else { SecureField("Provider password", text: $model.provider.password) }
                             }
+                            Button { visiblePassword.toggle() } label: {
+                                Image(systemName: visiblePassword ? "eye.slash" : "eye")
+                            }
+                            .accessibilityLabel("Show or hide provider password")
                         }
-                        .buttonStyle(.card).disabled(model.busy)
+                        TextField("HTTPS gateway URL (optional)", text: $model.gateway)
+                        Text("Providers play directly when HTTPS or locally approved HTTP is available. Other HTTP hosts use your saved HTTPS gateway.")
+                            .font(.footnote).foregroundStyle(TVTheme.muted)
+                        HStack(spacing: 16) {
+                            Button("Save provider & gateway") { Task { await model.saveSettings() } }
+                                .buttonStyle(.card).tint(.white).disabled(model.busy)
+                            Button("Reload saved settings") {
+                                Task {
+                                    model.busy = true; defer { model.busy = false }
+                                    do { try await model.reloadSettings() }
+                                    catch { model.notice = error.localizedDescription }
+                                }
+                            }
+                            .buttonStyle(.card).disabled(model.busy)
+                        }
                     }
-                }
 
-                settingsGroup(title: "Playback buffer") {
-                    Picker("Live TV", selection: $liveBuffer) {
-                        Text("Low delay · 1.5 seconds").tag(1500)
-                        Text("Balanced · 3 seconds").tag(3000)
-                        Text("More stable · 6 seconds").tag(6000)
+                    settingsGroup(title: "Playback buffer") {
+                        Picker("Live TV", selection: $liveBuffer) {
+                            Text("Low delay · 1.5 seconds").tag(1500)
+                            Text("Balanced · 3 seconds").tag(3000)
+                            Text("More stable · 6 seconds").tag(6000)
+                        }
+                        Picker("Movies", selection: $movieBuffer) {
+                            Text("4 seconds").tag(4000)
+                            Text("8 seconds").tag(8000)
+                            Text("12 seconds").tag(12000)
+                        }
+                        Text("These buffers add delay. Streams keep their original resolution; HD and 4K depend on the source, device and connection.")
+                            .font(.footnote).foregroundStyle(TVTheme.muted)
                     }
-                    Picker("Movies", selection: $movieBuffer) {
-                        Text("4 seconds").tag(4000)
-                        Text("8 seconds").tag(8000)
-                        Text("12 seconds").tag(12000)
+
+                    if !model.notice.isEmpty {
+                        Text(model.notice).foregroundStyle(TVTheme.muted)
                     }
-                    Text("These buffers add delay. Streams keep their original resolution; HD and 4K depend on the source, device and connection.")
+
+                    settingsGroup(title: "Account") {
+                        HStack(spacing: 16) {
+                            Button("Delete saved provider & gateway") { deleting = true }
+                                .buttonStyle(.card).disabled(model.busy)
+                            Button("Sign out") { Task { await model.signOut() } }
+                                .buttonStyle(.card).disabled(model.busy)
+                        }
+                    }
+
+                    Text("Rigatoni Stream 0.1 for tvOS · Native playback by VLCKit / VideoLAN (LGPL 2.1).")
                         .font(.footnote).foregroundStyle(TVTheme.muted)
                 }
-
-                if !model.notice.isEmpty {
-                    Text(model.notice).foregroundStyle(TVTheme.muted)
-                }
-
-                settingsGroup(title: "Account") {
-                    HStack(spacing: 16) {
-                        Button("Delete saved provider & gateway") { deleting = true }
-                            .buttonStyle(.card).disabled(model.busy)
-                        Button("Sign out") { Task { await model.signOut() } }
-                            .buttonStyle(.card).disabled(model.busy)
-                    }
-                }
-
-                Text("Rigatoni Stream 0.1 for tvOS · Native playback by VLCKit / VideoLAN (LGPL 2.1).")
-                    .font(.footnote).foregroundStyle(TVTheme.muted)
+                .frame(maxWidth: 900, alignment: .leading)
+                .padding(.horizontal, 60)
+                .padding(.bottom, 60)
             }
-            .frame(maxWidth: 900, alignment: .leading)
-            .padding(.horizontal, 60)
-            .padding(.bottom, 60)
+            .background { StreamBackdrop() }
+            .confirmationDialog(
+                "Delete your saved provider and gateway from your account?",
+                isPresented: $deleting, titleVisibility: .visible
+            ) {
+                Button("Delete settings", role: .destructive) { Task { await model.deleteSettings() } }
+            }
         }
-        .background { StreamBackdrop() }
-        .confirmationDialog(
-            "Delete your saved provider and gateway from your account?",
-            isPresented: $deleting, titleVisibility: .visible
-        ) {
-            Button("Delete settings", role: .destructive) { Task { await model.deleteSettings() } }
-        }
-    }
-
     }
 
     private func settingsGroup<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {

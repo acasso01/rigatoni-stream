@@ -36,6 +36,7 @@ final class TVNativePlayer: ObservableObject {
 
     func start() {
         guard let url else { return }
+        if !isLive { resumeSeconds = max(resumeSeconds, lastSeconds) }
         engine.stop()
         playing = false; seekable = false; position = 0; elapsed = "0:00"
         resolution = ""; state = "Connecting…"
@@ -91,7 +92,9 @@ final class TVNativePlayer: ObservableObject {
     }
 
     func stop() {
-        if !isLive, resumeSeconds == 0 { progressRecorder?(lastSeconds, lastDuration) } timer?.invalidate(); timer = nil; engine.stop() }
+        if !isLive, resumeSeconds == 0 { progressRecorder?(lastSeconds, lastDuration) }
+        timer?.invalidate(); timer = nil; engine.stop()
+    }
 }
 
 // tvOS-local equivalent of the iPhone build's ChannelNavigation helper,

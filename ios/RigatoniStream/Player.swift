@@ -49,6 +49,7 @@ final class NativePlayer: ObservableObject {
     }
     func start() {
         guard let url else { return }
+        if !isLive { resumeSeconds = max(resumeSeconds, lastSeconds) }
         engine.stop()
         playing = false; seekable = false; position = 0; elapsed = "0:00"; resolution = ""; state = "Connecting…"
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)

@@ -147,7 +147,7 @@ struct TVCatalogBrowser: View {
                     }
                 }.padding(.vertical, 12)
             } else {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 22)], spacing: 36) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: 22)], spacing: 36) {
                     ForEach(visible) { item in
                         Button { playing = item } label: { TVCatalogCard(item: item) }
                             .buttonStyle(.card).focused($focusedCard, equals: item.id)
