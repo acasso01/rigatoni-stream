@@ -412,6 +412,16 @@ struct LibraryCustomizationView: View {
                     model.preferences.hiddenLiveCategories = []; model.preferences.hiddenMovieCategories = []; model.preferences.hiddenChannels = []
                     model.savePreferences()
                 }
+                if kind == .live && !categories.isEmpty {
+                    Button("Show only categories marked US / USA") {
+                        for category in categories {
+                            let isUS = category.name.range(of: #"^\s*\[?(US|USA)(\]|\s|\||:|-|$)"#, options: [.regularExpression, .caseInsensitive]) != nil
+                            model.preferences.setCategory(category.id, kind: .live, visible: isUS)
+                        }
+                        model.savePreferences()
+                    }
+                    Text("Uses the provider’s category names. Unmarked categories are hidden too; Show all restores them.").font(.footnote).foregroundStyle(.secondary)
+                }
                 if loading { ProgressView("Loading…") }
                 if !error.isEmpty { Text(error).foregroundStyle(.secondary); Button("Retry") { Task { await load() } } }
                 LazyVStack(alignment: .leading, spacing: 14) {

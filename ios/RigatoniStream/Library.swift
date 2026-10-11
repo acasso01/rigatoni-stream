@@ -227,6 +227,7 @@ struct StreamHeading: View {
 #if os(iOS)
 struct LibraryView: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var catalog: SessionCatalog
     let kind: LibraryKind
     var initialCategoryID: String? = nil
     var embedded = false
@@ -349,6 +350,12 @@ struct LibraryView: View {
             .task(id: "\(model.libraryRevision)-\(retry)") { await loadCategories() }
             .task(id: "\(scope.rawValue)-\(selected)-\(model.libraryRevision)-\(retry)") { await loadItems() }
             .task(id: "\(query)-\(searchRevision)") { await filterItems() }
+            .onChange(of: catalog.revision) { _, _ in
+                if scope == .all && loading {
+                    replaceItems(catalog.searchable[kind] ?? [])
+                    progress = catalog.progress[kind] ?? ""
+                }
+            }
             .fullScreenCover(item: $playing) { CatalogDestination(item: $0, channels: kind == .live ? items : []) }
     }
     private func rows(action: String, category: String? = nil) async throws -> [[String: Any]] {
@@ -402,15 +409,10 @@ struct LibraryView: View {
         replaceItems([]); loading = true
         do {
             if scope == .all {
-                let result = try await CatalogLoader.load(categoryIDs: categories.map(\.id), preferFullCatalog: !model.provider.requiresGateway, fetch: { category in
-                    try await fetchItems(category: category)
-                }, progress: { partial, message in
-                    guard !Task.isCancelled else { return }
-                    replaceItems(partial); progress = message
-                })
+                let result = try await catalog.loadAll(kind: kind, model: model)
                 try Task.checkCancellation()
                 replaceItems(result.items); error = result.notice
-                if !model.provider.requiresGateway { allCache = result; categoryCache = [:] }
+                if result.notice.isEmpty { allCache = result; categoryCache = [:] }
             } else {
                 let result = try await fetchItems(category: selected)
                 try Task.checkCancellation()

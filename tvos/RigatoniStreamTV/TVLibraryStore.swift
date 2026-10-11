@@ -72,38 +72,7 @@ final class TVLibraryStore: ObservableObject {
     }
 
     private func fetchItems(category: String?) async throws -> [CatalogItem] {
-        if !model.provider.requiresGateway, let category, let cached = categoryCache[category] { return cached }
-        let raw: [[String: Any]]
-        if model.provider.requiresGateway {
-            raw = try await model.gatewayRows(kind: kind, category: category)
-        } else {
-            let url = try model.provider.apiURL(action: kind.streamAction, category: category)
-            let data = try await BoundedTransfer(limit: 32 * 1024 * 1024, timeout: category == nil ? 10 : 30).fetch(url)
-            let worker = Task.detached(priority: .userInitiated) {
-                guard let result = try JSONSerialization.jsonObject(with: data) as? [[String: Any]],
-                      result.count <= CatalogIndex.maximumItems else {
-                    throw AppFailure("The provider returned an invalid or oversized catalog.")
-                }
-                return result
-            }
-            raw = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
-        }
-        try Task.checkCancellation()
-        let libraryKind = kind
-        let worker = Task.detached(priority: .userInitiated) { raw.compactMap { CatalogItem.parse($0, kind: libraryKind) } }
-        var result = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
-        try Task.checkCancellation()
-        if model.provider.requiresGateway {
-            result = result.map { item in
-                var item = item
-                item.playbackURL = try? model.gatewayPlaybackURL(id: item.id, kind: kind)
-                return item
-            }
-        } else if let category {
-            categoryCache = [category: result]
-        }
-        if let category { result = result.map { var item = $0; if item.categoryID.isEmpty { item.categoryID = category }; return item } }
-        return result
+        try await model.catalog.items(kind: kind, category: category, model: model)
     }
 
     /// Load one category's items (grid browsing).
@@ -131,17 +100,10 @@ final class TVLibraryStore: ObservableObject {
             if let cached = allCache, !model.provider.requiresGateway {
                 items = cached.items; error = cached.notice; return
             }
-            let result = try await CatalogLoader.load(
-                categoryIDs: categories.map(\.id),
-                preferFullCatalog: !model.provider.requiresGateway,
-                fetch: { try await self.fetchItems(category: $0) },
-                progress: { partial, message in
-                    guard !Task.isCancelled else { return }
-                    update(partial, message)
-                })
+            let result = try await model.catalog.loadAll(kind: kind, model: model)
             try Task.checkCancellation()
             items = result.items; error = result.notice
-            if !model.provider.requiresGateway { allCache = result; categoryCache = [:] }
+            if result.notice.isEmpty { allCache = result; categoryCache = [:] }
             update(result.items, "")
         } catch {
             guard !Task.isCancelled else { return }
