@@ -21,9 +21,15 @@ final class NativePlayer: ObservableObject {
         self.url = url; self.cache = cache
         start()
     }
+    func changeSource(url: URL, cache: Int) {
+        guard self.url != url || self.cache != cache else { return }
+        self.url = url; self.cache = cache
+        start()
+    }
     func start() {
         guard let url else { return }
         engine.stop()
+        playing = false; seekable = false; position = 0; elapsed = "0:00"; resolution = ""; state = "Connecting…"
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         try? AVAudioSession.sharedInstance().setActive(true)
         let media = VLCMedia(url: url)
@@ -112,9 +118,21 @@ struct PlayerSurface: UIViewRepresentable {
     }
 }
 
+enum ChannelNavigation {
+    static func adjacent(in channels: [CatalogItem], currentID: String, offset: Int) -> CatalogItem? {
+        guard let current = channels.firstIndex(where: { $0.id == currentID && $0.kind == .live }) else { return nil }
+        let next = current + offset
+        guard channels.indices.contains(next), channels[next].kind == .live else { return nil }
+        return channels[next]
+    }
+}
+
 struct PlayerView: View {
     let item: CatalogItem
     let provider: Provider
+    var channels: [CatalogItem] = []
+    @State private var selectedChannel: CatalogItem?
+    private var currentItem: CatalogItem { selectedChannel ?? item }
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var player = NativePlayer()
@@ -127,8 +145,8 @@ struct PlayerView: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            if let url = item.playbackURL ?? (provider.requiresGateway ? nil : try? provider.streamURL(item: item)) {
-                PlayerSurface(player: player, url: url, cache: item.kind == .live ? liveBuffer : movieBuffer, mode: displayMode)
+            if let url = currentItem.playbackURL ?? (provider.requiresGateway ? nil : try? provider.streamURL(item: currentItem)) {
+                PlayerSurface(player: player, url: url, cache: currentItem.kind == .live ? liveBuffer : movieBuffer, mode: displayMode)
                     .ignoresSafeArea().contentShape(Rectangle())
                     .onTapGesture {
                         if controlsVisible { hideTask?.cancel(); controlsVisible = false }
@@ -137,10 +155,26 @@ struct PlayerView: View {
                     .accessibilityLabel("Video. Tap to show or hide playback controls.")
             } else { Text("Invalid provider settings.") }
             if controlsVisible {
+                HStack(spacing: 40) {
+                    if currentItem.kind == .live {
+                        Button { changeChannel(-1) } label: { Image(systemName: "backward.end.fill") }
+                            .disabled(adjacentChannel(-1) == nil).accessibilityLabel("Previous channel")
+                    }
+                    Button { player.toggle(); showControls() } label: {
+                        Image(systemName: player.playing ? "pause.fill" : "play.fill")
+                    }.accessibilityLabel(player.playing ? "Pause" : "Play")
+                    if currentItem.kind == .live {
+                        Button { changeChannel(1) } label: { Image(systemName: "forward.end.fill") }
+                            .disabled(adjacentChannel(1) == nil).accessibilityLabel("Next channel")
+                    }
+                }
+                .font(.system(size: 30, weight: .semibold))
+                .buttonStyle(.bordered).controlSize(.large).tint(.white)
+                .padding(12).background(.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 18))
                 VStack {
                     HStack(spacing: 12) {
                         Button { player.stop(); dismiss() } label: { Label("Back", systemImage: "chevron.left") }
-                        Text(item.name).font(.headline).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                        Text(currentItem.name).font(.headline).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                         Button { displayMode = displayMode.next; showControls() } label: {
                             Label(displayMode.rawValue, systemImage: displayMode == .fit ? "arrow.up.left.and.arrow.down.right" : "arrow.down.right.and.arrow.up.left")
                         }.accessibilityLabel("Picture mode: \(displayMode.rawValue). Tap to change fit, fill or zoom.")
@@ -157,7 +191,7 @@ struct PlayerView: View {
                             if !player.resolution.isEmpty { Text(player.resolution).font(.caption).foregroundStyle(.white.opacity(0.8)) }
                             Button("Retry") { player.start(); showControls() }
                         }
-                        if item.kind == .movies && player.seekable {
+                        if currentItem.kind == .movies && player.seekable {
                             Slider(value: $player.position, in: 0...1, onEditingChanged: { editing in
                                 seeking = editing; player.seekEditing(editing)
                                 if editing { hideTask?.cancel() } else { showControls() }
@@ -173,12 +207,27 @@ struct PlayerView: View {
         .statusBarHidden(!controlsVisible)
         .persistentSystemOverlays(controlsVisible ? .automatic : .hidden)
         .onAppear { showControls() }
+        .onChange(of: currentItem.id) { _, _ in
+            guard let url = currentItem.playbackURL ?? (provider.requiresGateway ? nil : try? provider.streamURL(item: currentItem)) else {
+                player.stop(); return
+            }
+            player.changeSource(url: url, cache: liveBuffer)
+            showControls()
+        }
         .onDisappear { hideTask?.cancel(); player.stop() }
         .onChange(of: player.playing) { _, playing in
             if playing { if controlsVisible { showControls() } }
             else { hideTask?.cancel(); controlsVisible = true }
         }
         .onChange(of: scenePhase) { _, phase in if phase != .active && player.playing { player.engine.pause() } }
+    }
+    private func adjacentChannel(_ offset: Int) -> CatalogItem? {
+        ChannelNavigation.adjacent(in: channels, currentID: currentItem.id, offset: offset)
+    }
+    private func changeChannel(_ offset: Int) {
+        guard let next = adjacentChannel(offset) else { return }
+        hideTask?.cancel(); controlsVisible = true; seeking = false
+        selectedChannel = next
     }
     private func showControls() {
         controlsVisible = true; hideTask?.cancel()

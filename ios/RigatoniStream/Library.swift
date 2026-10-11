@@ -4,13 +4,14 @@ import SwiftUI
 // Ephemeral, bounded in-memory requests prevent provider responses or URLs entering disk caches.
 final class BoundedTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let limit: Int
+    private let timeout: TimeInterval
     private let lock = NSLock()
     private var buffer = Data()
     private var continuation: CheckedContinuation<Data, Error>?
     private var session: URLSession?
     private var task: URLSessionDataTask?
     private var finished = false
-    init(limit: Int) { self.limit = limit }
+    init(limit: Int, timeout: TimeInterval = 30) { self.limit = limit; self.timeout = timeout }
     func fetch(_ url: URL, headers: [String: String] = [:], method: String = "GET") async throws -> Data {
         guard TransportPolicy.permits(url) else { throw AppFailure("This HTTP host is not enabled in your app build. Configure your provider hostname on your Mac or use the HTTPS gateway.") }
         return try await withTaskCancellationHandler(operation: {
@@ -21,7 +22,7 @@ final class BoundedTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendab
                 let config = URLSessionConfiguration.ephemeral
                 config.urlCache = nil; config.httpCookieStorage = nil
                 config.requestCachePolicy = .reloadIgnoringLocalCacheData
-                config.timeoutIntervalForRequest = 30; config.timeoutIntervalForResource = 60
+                config.timeoutIntervalForRequest = timeout; config.timeoutIntervalForResource = timeout * 2
                 let connection = URLSession(configuration: config, delegate: self, delegateQueue: nil)
                 session = connection
                 var request = URLRequest(url: url); request.httpMethod = method
@@ -98,7 +99,53 @@ struct CatalogIndex {
     }
     static func matches(_ items: [CatalogItem], query: String) -> [CatalogItem] {
         let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        return term.isEmpty ? items : items.filter { $0.name.localizedCaseInsensitiveContains(term) }
+        return term.isEmpty ? items : items.filter { !Task.isCancelled && $0.name.localizedCaseInsensitiveContains(term) }
+    }
+}
+
+struct CatalogLoadResult {
+    let items: [CatalogItem]
+    let notice: String
+}
+
+// One bounded full-catalog request is the fast path. Category fallback remains cancellable
+// and publishes results as each category arrives, without creating more concurrent requests.
+@MainActor
+enum CatalogLoader {
+    static func load(categoryIDs: [String], preferFullCatalog: Bool,
+                     fetch: (String?) async throws -> [CatalogItem],
+                     progress: ([CatalogItem], String) -> Void) async throws -> CatalogLoadResult {
+        try Task.checkCancellation()
+        if preferFullCatalog {
+            progress([], "Loading full catalog…")
+            do {
+                let batch = try await fetch(nil)
+                try Task.checkCancellation()
+                guard !batch.isEmpty || categoryIDs.isEmpty else { throw AppFailure("Full catalog unavailable.") }
+                var index = CatalogIndex()
+                try index.append(batch)
+                return CatalogLoadResult(items: index.items, notice: "")
+            } catch {
+                try Task.checkCancellation()
+                // Some providers reject the unfiltered API or exceed the memory bounds.
+            }
+        }
+        var index = CatalogIndex()
+        var failed = 0
+        for (offset, category) in categoryIDs.enumerated() {
+            try Task.checkCancellation()
+            do {
+                let batch = try await fetch(category)
+                try Task.checkCancellation()
+                do { try index.append(batch) }
+                catch { return CatalogLoadResult(items: index.items, notice: error.localizedDescription) }
+            } catch {
+                try Task.checkCancellation()
+                failed += 1
+            }
+            progress(index.items, "Loading category \(offset + 1) of \(categoryIDs.count)…")
+        }
+        return CatalogLoadResult(items: index.items, notice: failed == 0 ? "" : "\(failed) categories could not be loaded. Showing available results; Retry will refresh the catalog.")
     }
 }
 
@@ -109,6 +156,10 @@ struct LibraryView: View {
     @State private var selected = ""
     @State private var items: [CatalogItem] = []
     @State private var query = ""
+    @State private var filtered: [CatalogItem] = []
+    @State private var searchRevision = 0
+    @State private var categoryCache: [String: [CatalogItem]] = [:]
+    @State private var allCache: CatalogLoadResult?
     @State private var loading = false
     @State private var scope = CatalogSearchScope.category
     @State private var progress = ""
@@ -116,7 +167,6 @@ struct LibraryView: View {
     @State private var page = 0
     @State private var playing: CatalogItem?
     @State private var retry = 0
-    private var filtered: [CatalogItem] { CatalogIndex.matches(items, query: query) }
     private var visible: [CatalogItem] { Array(filtered.dropFirst(page * 120).prefix(120)) }
     var body: some View {
         NavigationStack {
@@ -170,7 +220,8 @@ struct LibraryView: View {
             .toolbar { Button { model.settingsVisible = true } label: { Image(systemName: "person.crop.circle") }.accessibilityLabel("Account and provider settings") }
             .task(id: "\(model.libraryRevision)-\(retry)") { await loadCategories() }
             .task(id: "\(scope.rawValue)-\(selected)-\(model.libraryRevision)-\(retry)") { await loadItems() }
-            .fullScreenCover(item: $playing) { PlayerView(item: $0, provider: model.provider) }
+            .task(id: "\(query)-\(searchRevision)") { await filterItems() }
+            .fullScreenCover(item: $playing) { PlayerView(item: $0, provider: model.provider, channels: kind == .live ? items : []) }
         }
     }
     private func rows(action: String, category: String? = nil) async throws -> [[String: Any]] {
@@ -181,7 +232,7 @@ struct LibraryView: View {
         return rows
     }
     private func loadCategories() async {
-        categories = []; selected = ""; items = []; error = ""; query = ""; page = 0; progress = ""
+        categories = []; selected = ""; replaceItems([]); error = ""; query = ""; page = 0; progress = ""; categoryCache = [:]; allCache = nil
         guard model.signedIn, model.providerReady else { return }
         loading = true
         do {
@@ -196,37 +247,81 @@ struct LibraryView: View {
             if selected.isEmpty { loading = false }
         } catch { if !Task.isCancelled { self.error = error.localizedDescription; loading = false } }
     }
+    private func replaceItems(_ value: [CatalogItem]) {
+        items = value; searchRevision += 1; page = 0
+        if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { filtered = value }
+    }
+    private func filterItems() async {
+        let snapshot = items; let term = query
+        if term.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { filtered = snapshot; return }
+        do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
+        guard !Task.isCancelled else { return }
+        let worker = Task.detached(priority: .userInitiated) { CatalogIndex.matches(snapshot, query: term) }
+        let result = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
+        guard !Task.isCancelled else { return }
+        filtered = result
+    }
+    private func fetchItems(category: String?) async throws -> [CatalogItem] {
+        if !model.provider.requiresGateway, let category, let cached = categoryCache[category] { return cached }
+        let raw: [[String: Any]]
+        if model.provider.requiresGateway {
+            raw = try await model.gatewayRows(kind: kind, category: category)
+        } else {
+            let url = try model.provider.apiURL(action: kind.streamAction, category: category)
+            let data = try await BoundedTransfer(limit: 32 * 1024 * 1024, timeout: category == nil ? 10 : 30).fetch(url)
+            let worker = Task.detached(priority: .userInitiated) {
+                guard let result = try JSONSerialization.jsonObject(with: data) as? [[String: Any]], result.count <= CatalogIndex.maximumItems else {
+                    throw AppFailure("The provider returned an invalid or oversized catalog.")
+                }
+                return result
+            }
+            raw = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
+        }
+        try Task.checkCancellation()
+        let libraryKind = kind
+        let worker = Task.detached(priority: .userInitiated) { raw.compactMap { CatalogItem.parse($0, kind: libraryKind) } }
+        var result = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
+        try Task.checkCancellation()
+        if model.provider.requiresGateway {
+            result = result.map { item in
+                var item = item
+                item.playbackURL = try? model.gatewayPlaybackURL(id: item.id, kind: kind)
+                return item
+            }
+        } else if let category {
+            // Category and full-catalog arrays share item values; retain only the full result
+            // after a successful global load to keep memory bounded.
+            categoryCache = [category: result]
+        }
+        return result
+    }
     private func loadItems() async {
         guard !selected.isEmpty, !categories.isEmpty, model.signedIn, model.providerReady else { return }
-        items = []; page = 0; error = ""; loading = true; progress = ""
-        let requested = scope == .all ? categories.map(\.id) : [selected]
-        var index = CatalogIndex()
-        var failed = 0
-        var limited = false
-        let throughGateway = model.provider.requiresGateway
-        for (offset, category) in requested.enumerated() {
-            guard !Task.isCancelled else { return }
-            progress = requested.count > 1 ? "Loading category \(offset + 1) of \(requested.count)…" : ""
-            do {
-                let result = try await rows(action: kind.streamAction, category: category)
-                guard !Task.isCancelled else { return }
-                let batch = result.compactMap { row -> CatalogItem? in
-                    guard var item = CatalogItem.parse(row, kind: kind) else { return nil }
-                    if throughGateway { item.playbackURL = try? model.gatewayPlaybackURL(id: item.id, kind: kind) }
-                    return item
-                }
-                do { try index.append(batch) }
-                catch { self.error = error.localizedDescription; limited = true; break }
-            } catch {
-                guard !Task.isCancelled else { return }
-                if requested.count == 1 { self.error = error.localizedDescription }
-                failed += 1
-            }
+        error = ""; progress = ""; page = 0
+        if scope == .all, let cached = allCache, !model.provider.requiresGateway {
+            replaceItems(cached.items); error = cached.notice; loading = false; return
         }
-        guard !Task.isCancelled else { return }
-        items = index.items; loading = false; progress = ""
-        if failed > 0 && requested.count > 1 && !limited {
-            error = "\(failed) categories could not be loaded. Results cover the categories that loaded successfully. Retry to try again."
+        replaceItems([]); loading = true
+        do {
+            if scope == .all {
+                let result = try await CatalogLoader.load(categoryIDs: categories.map(\.id), preferFullCatalog: !model.provider.requiresGateway, fetch: { category in
+                    try await fetchItems(category: category)
+                }, progress: { partial, message in
+                    guard !Task.isCancelled else { return }
+                    replaceItems(partial); progress = message
+                })
+                try Task.checkCancellation()
+                replaceItems(result.items); error = result.notice
+                if !model.provider.requiresGateway { allCache = result; categoryCache = [:] }
+            } else {
+                let result = try await fetchItems(category: selected)
+                try Task.checkCancellation()
+                replaceItems(result)
+            }
+            loading = false; progress = ""
+        } catch {
+            guard !Task.isCancelled else { return }
+            self.error = error.localizedDescription; loading = false; progress = ""
         }
     }
 }

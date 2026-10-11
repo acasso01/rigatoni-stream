@@ -97,4 +97,50 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(index.items.count, CatalogIndex.maximumItems)
     }
 
+    func testLiveChannelNavigationStopsAtBoundaries() {
+        let channels = (1...3).map { CatalogItem(id: String($0), name: "Channel \($0)", kind: .live, fileExtension: "ts", poster: nil) }
+        XCTAssertEqual(ChannelNavigation.adjacent(in: channels, currentID: "2", offset: 1)?.id, "3")
+        XCTAssertEqual(ChannelNavigation.adjacent(in: channels, currentID: "2", offset: -1)?.id, "1")
+        XCTAssertNil(ChannelNavigation.adjacent(in: channels, currentID: "1", offset: -1))
+        XCTAssertNil(ChannelNavigation.adjacent(in: channels, currentID: "3", offset: 1))
+        XCTAssertNil(ChannelNavigation.adjacent(in: [], currentID: "1", offset: 1))
+    }
+    @MainActor func testFullCatalogSearchUsesOneRequest() async throws {
+        let movie = CatalogItem(id: "1", name: "Movie", kind: .movies, fileExtension: "mkv", poster: nil)
+        var calls: [String?] = []
+        let result = try await CatalogLoader.load(categoryIDs: ["10", "20"], preferFullCatalog: true, fetch: {
+            calls.append($0); return [movie, movie]
+        }, progress: { _, _ in })
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertNil(calls[0])
+        XCTAssertEqual(result.items.count, 1)
+        XCTAssertTrue(result.notice.isEmpty)
+    }
+    @MainActor func testCatalogFallbackPublishesPartialResults() async throws {
+        let movie = CatalogItem(id: "1", name: "Movie", kind: .movies, fileExtension: "mkv", poster: nil)
+        var calls: [String?] = []
+        var counts: [Int] = []
+        let result = try await CatalogLoader.load(categoryIDs: ["10", "20"], preferFullCatalog: true, fetch: { category in
+            calls.append(category)
+            guard category == "10" else { throw AppFailure("Unavailable") }
+            return [movie]
+        }, progress: { items, _ in counts.append(items.count) })
+        XCTAssertEqual(calls, [nil, "10", "20"])
+        XCTAssertEqual(result.items.map(\.id), ["1"])
+        XCTAssertTrue(result.notice.contains("1 categories"))
+        XCTAssertTrue(counts.contains(1))
+    }
+    @MainActor func testCancelledCatalogDoesNotStartRequests() async {
+        var calls = 0
+        let task = Task { @MainActor in
+            try await CatalogLoader.load(categoryIDs: ["10"], preferFullCatalog: true, fetch: { _ in
+                calls += 1; return []
+            }, progress: { _, _ in })
+        }
+        task.cancel()
+        do { _ = try await task.value; XCTFail("Expected cancellation") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(calls, 0)
+    }
+
 }
