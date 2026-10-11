@@ -1,7 +1,7 @@
 import SwiftUI
 
 // Design tokens mirrored from the web app's theme.css so the TV build
-// looks like Rigatoni Stream: dark background, off-white text, red accent.
+// looks like Ant Streams: dark background, off-white text, red accent.
 enum TVTheme {
     static var background: Color { StreamTheme.background } // #09090b
     static var panel: Color { StreamTheme.panel }      // #17171b
@@ -16,4 +16,13 @@ struct TVObservedStore<Content: View>: View {
     @ObservedObject var store: TVLibraryStore
     @ViewBuilder var content: (TVLibraryStore) -> Content
     var body: some View { content(store) }
+}
+
+// Keep titles readable on the white focus highlight in every theme.
+struct TVFocusTitle: View {
+    let title: String
+    @Environment(\.isFocused) private var focused
+    var body: some View {
+        Text(title).foregroundStyle(focused ? Color.black : TVTheme.text)
+    }
 }

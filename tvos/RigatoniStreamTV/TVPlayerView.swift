@@ -136,6 +136,8 @@ struct TVPlayerView: View {
     let provider: Provider
     var channels: [CatalogItem] = []
     var startSeconds: Double = 0
+    var lastWatchedKind: String? = nil
+    var progressID: String? = nil
     @EnvironmentObject private var model: AppModel
 
     @Environment(\.dismiss) private var dismiss
@@ -148,11 +150,13 @@ struct TVPlayerView: View {
     @AppStorage("rigatoni-live-buffer-ms") private var liveBuffer = 1500
     @AppStorage("rigatoni-movie-buffer-ms") private var movieBuffer = 4000
 
-    init(item: CatalogItem, provider: Provider, channels: [CatalogItem] = [], startSeconds: Double = 0) {
+    init(item: CatalogItem, provider: Provider, channels: [CatalogItem] = [], startSeconds: Double = 0, lastWatchedKind: String? = nil, progressID: String? = nil) {
         self.item = item
         self.provider = provider
         self.channels = channels
         self.startSeconds = startSeconds
+        self.lastWatchedKind = lastWatchedKind
+        self.progressID = progressID
         _currentID = State(initialValue: item.id)
     }
 
@@ -250,7 +254,13 @@ struct TVPlayerView: View {
         }
         .focusable(!controlsVisible)
         .onTapGesture { if !controlsVisible { showControls() } }
-        .onMoveCommand { _ in if !controlsVisible { showControls() } }
+        .onMoveCommand { direction in
+            if !controlsVisible, currentItem.kind == .live {
+                if direction == .left { changeChannel(-1); return }
+                if direction == .right { changeChannel(1); return }
+            }
+            if !controlsVisible { showControls() }
+        }
         .onExitCommand {
             if controlsVisible { player.stop(); dismiss() }
             else { showControls() }
@@ -261,19 +271,21 @@ struct TVPlayerView: View {
         }
         .onAppear {
             player.resumeSeconds = startSeconds
-            player.progressRecorder = { seconds, duration in model.saveProgress(id: item.id, seconds: seconds, duration: duration) }
+            player.progressRecorder = { seconds, duration in model.saveProgress(id: progressID ?? item.id, seconds: seconds, duration: duration) }
             player.title = currentItem.name
             player.isLive = currentItem.kind == .live
             if let url = playbackURL { player.play(url: url, cache: cache) }
+            recordHistory()
             showControls()
         }
         .onChange(of: currentID) { _, _ in
             guard let url = playbackURL else { player.stop(); return }
             player.resumeSeconds = startSeconds
-            player.progressRecorder = { seconds, duration in model.saveProgress(id: item.id, seconds: seconds, duration: duration) }
+            player.progressRecorder = { seconds, duration in model.saveProgress(id: progressID ?? item.id, seconds: seconds, duration: duration) }
             player.title = currentItem.name
             player.isLive = currentItem.kind == .live
             player.play(url: url, cache: cache)
+            recordHistory()
             showControls()
         }
         .onDisappear { hideTask?.cancel(); player.stop() }
@@ -281,6 +293,11 @@ struct TVPlayerView: View {
             if playing { if controlsVisible { showControls() } }
             else { hideTask?.cancel(); controlsVisible = true }
         }
+    }
+
+    private func recordHistory() {
+        guard playbackURL != nil else { return }
+        TVLastWatched.record(kind: lastWatchedKind ?? (currentItem.kind == .live ? "live" : "movie"), item: currentItem, model: model)
     }
 
     private func adjacentChannel(_ offset: Int) -> CatalogItem? {

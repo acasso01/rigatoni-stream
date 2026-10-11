@@ -21,6 +21,13 @@ target.build_configurations.each do |config|
   path = config.build_settings['INFOPLIST_FILE']
   abort 'Expected local generated Info.plist' unless path && !path.include?('$')
   info = Xcodeproj::Plist.read_from_path(path)
+  info['CFBundleDisplayName'] = 'Ant Streams'
+  info['CFBundleName'] = 'Ant Streams'
+  info['CFBundleShortVersionString'] = '0.2.0'
+  info['CFBundleVersion'] = '2'
+  config.build_settings['INFOPLIST_KEY_CFBundleDisplayName'] = 'Ant Streams'
+  config.build_settings['MARKETING_VERSION'] = '0.2.0'
+  config.build_settings['CURRENT_PROJECT_VERSION'] = '2'
   info['UIBackgroundModes'] = ((info['UIBackgroundModes'] || []) + ['audio']).uniq
   Xcodeproj::Plist.write_to_path(info, path)
 end

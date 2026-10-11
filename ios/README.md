@@ -1,4 +1,4 @@
-# Rigatoni Stream native iPhone test app
+# Ant Streams native iPhone test app
 
 SwiftUI interface and VLCKit playback, with Live TV and Movies. This is a native app, not a Safari wrapper. It connects directly to HTTPS Xtream Codes providers and to the HTTP provider hostname explicitly configured during Mac setup. Other HTTP providers use your saved HTTPS Pi gateway. VLC receives the original media (including MKV), without the Safari-compatible rolling conversion. Source resolution is retained, including HD/4K where the source, hardware, and connection support it.
 
@@ -24,7 +24,7 @@ The app reuses your existing Supabase account and encrypted `provider-vault`. Pr
 4. Open **RigatoniStream.xcworkspace**, not the `.xcodeproj`. Select the RigatoniStream application target → Signing & Capabilities. Enable automatic signing and choose your Personal Team. Add your Apple account in Xcode Settings → Accounts if necessary. If the bundle identifier is unavailable, change it to a unique identifier under your name.
 5. Connect and unlock your iPhone, trust your Mac, and select your iPhone as the run destination. Enable Developer Mode on the iPhone when prompted (Settings → Privacy & Security → Developer Mode), then restart and confirm.
 6. Press Run (⌘R). If iOS asks you to trust the developer, use Settings → General → VPN & Device Management.
-7. Sign in with your existing Rigatoni account. Your saved provider and gateway should populate automatically. Movies opens a featured movie and lazy category shelves with filled portrait posters. Live TV retains category browsing and pins. The Search tab searches movies and channels together, with All / Movies / Live TV filters.
+7. Sign in with your existing Ant Streams account. Your saved provider and gateway should populate automatically. Movies opens a featured movie and lazy category shelves with filled portrait posters. Live TV retains category browsing and pins. The Search tab searches movies and channels together, with All / Movies / Live TV filters.
 
 With a free Personal Team, the provisioning expires after seven days. Run the project again from Xcode to renew it. A paid developer account is not required for this initial on-device test. CI builds an ad hoc signed simulator app and an unsigned physical iPhone build; neither is an installable, personally signed iPhone IPA.
 

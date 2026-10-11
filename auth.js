@@ -121,7 +121,7 @@ $('form').onsubmit = async event => {
     else result = await client.auth.updateUser({password});
     if (result.error) throw result.error;
     if (submittedMode === 'reset') status('If that account exists, a recovery email has been sent. Check your inbox and spam folder.');
-    else if (submittedMode === 'password') { showSession({user: result.data.user}); status('Password saved. You can open Rigatoni Stream.'); }
+    else if (submittedMode === 'password') { showSession({user: result.data.user}); status('Password saved. You can open Ant Streams.'); }
     else if (result.data.session) showSession(result.data.session);
     else {
       setMode('signin');

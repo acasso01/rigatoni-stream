@@ -26,18 +26,19 @@ targets:
     info:
       path: Generated/Info.plist
       properties:
-        CFBundleDisplayName: Rigatoni Stream
-        NSHumanReadableCopyright: Rigatoni Stream; VLCKit licensed under LGPL 2.1
+        CFBundleDisplayName: Ant Streams
+        NSHumanReadableCopyright: Ant Streams; VLCKit licensed under LGPL 2.1
     settings:
       base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PRODUCT_BUNDLE_IDENTIFIER: com.acasso01.rigatonistreamtv
         TARGETED_DEVICE_FAMILY: '3'
         GENERATE_INFOPLIST_FILE: NO
-        INFOPLIST_KEY_CFBundleDisplayName: Rigatoni Stream
-        INFOPLIST_KEY_NSHumanReadableCopyright: 'Rigatoni Stream; VLCKit licensed under LGPL 2.1'
+        INFOPLIST_KEY_CFBundleDisplayName: Ant Streams
+        INFOPLIST_KEY_NSHumanReadableCopyright: 'Ant Streams; VLCKit licensed under LGPL 2.1'
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        MARKETING_VERSION: '0.1.0'
-        CURRENT_PROJECT_VERSION: '1'
+        MARKETING_VERSION: '0.2.0'
+        CURRENT_PROJECT_VERSION: '2'
 schemes:
   RigatoniStreamTV:
     build:

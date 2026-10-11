@@ -10,7 +10,7 @@ struct TVRootView: View {
             StreamBackdrop()
             Group {
                 if model.starting {
-                    ProgressView("Opening Rigatoni Stream…")
+                    ProgressView("Opening Ant Streams…")
                 } else if model.signedIn {
                     TabView {
                         TVHomeView()
@@ -19,6 +19,8 @@ struct TVRootView: View {
                             .tabItem { Label("Movies", systemImage: "film") }
                         TVLiveView()
                             .tabItem { Label("Live TV", systemImage: "tv") }
+                        TVShowsView()
+                            .tabItem { Label("TV Shows", systemImage: "play.tv") }
                         TVSearchView()
                             .tabItem { Label("Search", systemImage: "magnifyingglass") }
                         TVSettingsView()

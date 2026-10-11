@@ -1,6 +1,6 @@
 {
-  "name": "Rigatoni Stream",
-  "short_name": "Rigatoni",
+  "name": "Ant Streams",
+  "short_name": "Ant Streams",
   "description": "Your personal home for live TV. Bring your own authorized IPTV provider.",
   "start_url": "./",
   "scope": "./",

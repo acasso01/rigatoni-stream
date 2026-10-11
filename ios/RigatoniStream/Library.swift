@@ -232,7 +232,7 @@ struct StreamHeading: View {
     let subtitle: String
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("RIGATONI STREAM").font(.caption.weight(.semibold)).tracking(3).foregroundStyle(.secondary)
+            Text("ANT STREAMS").font(.caption.weight(.semibold)).tracking(3).foregroundStyle(.secondary)
             Text(title).font(.largeTitle.weight(.bold))
             Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
         }

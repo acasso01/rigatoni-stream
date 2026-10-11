@@ -1,4 +1,4 @@
-# Rigatoni Stream for Apple TV
+# Ant Streams for Apple TV
 
 Native SwiftUI interface with VLCKit playback, Live TV, Movies, search,
 local category pins and your existing encrypted Supabase provider vault.
@@ -42,7 +42,7 @@ Use the workspace rather than the `.xcodeproj`.
    Keep the Apple TV app's bundle identifier distinct from the iPhone app.
 5. Choose **RigatoniStreamTV** as the scheme and your paired Apple TV as the
    run destination. Press **Command-R** to build, install and launch.
-6. Sign in with your Rigatoni account; saved provider and gateway settings load.
+6. Sign in with your Ant Streams account; saved provider and gateway settings load.
 
 Apple pairing instructions:
 https://developer.apple.com/documentation/xcode/managing-your-simulated-and-physical-devices-in-device-hub
@@ -71,3 +71,8 @@ codec, Apple TV model and connection. No transcoding is performed.
 variants without signing. It does not install on your Apple TV or prove real
 provider playback; those checks happen on the paired device. Shared vault and
 catalog logic remains covered by the existing iOS test workflow.
+
+
+TV Shows uses direct provider access and supports season/episode browsing. Live TV keeps full-height categories, long-press pinning and channel logos. With playback controls hidden, left/right switches channels; with controls visible, left/right navigates the buttons. Last watched is scoped to the signed-in account and provider; movie entries open details with Continue/Restart, and episodes restore their own playback position. History stores IDs, titles and timestamps, never credentials or artwork/stream URLs.
+
+The Ant Streams update keeps the original bundle identifiers, Keychain service and preference keys so installed apps retain settings. From the repository root, run `cd ios && bundle exec ruby update_project.rb` for iPhone or `cd tvos && bundle exec ruby update_project.rb` for Apple TV, then build and run the corresponding workspace.

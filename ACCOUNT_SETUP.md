@@ -1,4 +1,4 @@
-# Rigatoni Stream accounts
+# Ant Streams accounts
 
 The account page supports sign-in, account creation, email confirmation and resend, password recovery, and existing invitations. The home page and IPTV player share the account page's charcoal and red theme.
 

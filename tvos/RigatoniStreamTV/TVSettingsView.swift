@@ -1,7 +1,7 @@
 import SwiftUI
 
 // Sign-in screen. Same account and vault as the iPhone build: sign in with
-// the existing Rigatoni account and the saved provider populates automatically.
+// the existing Ant Streams account and the saved provider populates automatically.
 // Provider credentials themselves stay in the encrypted account vault and are
 // never written to preferences, logs or disk caches.
 struct TVLoginView: View {
@@ -14,7 +14,8 @@ struct TVLoginView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text("Rigatoni Stream")
+                Image("BrandLogo").resizable().scaledToFit().frame(width: 160, height: 160).accessibilityHidden(true)
+                Text("Ant Streams")
                     .font(.largeTitle.weight(.bold))
                 Text(createAccount ? "Create your account" : "Welcome back")
                     .font(.title.bold())
@@ -60,7 +61,7 @@ struct TVLoginView: View {
                 if !model.notice.isEmpty {
                     Text(model.notice).font(.callout).foregroundStyle(TVTheme.muted)
                 }
-                Text("Use your existing Rigatoni account. Your provider login stays in the encrypted account vault.")
+                Text("Use your existing Ant Streams account. Your provider login stays in the encrypted account vault.")
                     .font(.footnote)
                     .foregroundStyle(TVTheme.muted)
             }
@@ -179,7 +180,7 @@ struct TVSettingsView: View {
                         }
                     }
 
-                    Text("Rigatoni Stream 0.1 for tvOS · Native playback by VLCKit / VideoLAN (LGPL 2.1).")
+                    Text("Ant Streams 0.2 for tvOS · Native playback by VLCKit / VideoLAN (LGPL 2.1).")
                         .font(.footnote).foregroundStyle(TVTheme.muted)
                 }
                 .frame(maxWidth: 900, alignment: .leading)

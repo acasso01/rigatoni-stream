@@ -112,6 +112,14 @@ struct TVCatalogBrowser: View {
                                 if selectedCategory == category.id { Image(systemName: "checkmark") }
                             }.padding(.horizontal, 20).frame(maxWidth: .infinity, minHeight: kind == .live ? 68 : 60, alignment: .leading)
                         }.buttonStyle(TVCatalogRowStyle(selected: selectedCategory == category.id))
+                        .contextMenu {
+                            if allowPins {
+                                Button(pinnedIDs.contains(category.id) ? "Unpin category" : "Pin category") {
+                                    pinnedIDs = CategoryPins.toggled(category.id, in: pinnedIDs)
+                                    if let key = store.pinKey { UserDefaults.standard.set(pinnedIDs, forKey: key) }
+                                }
+                            }
+                        }
                     }
                 }.padding(.horizontal, 14).padding(.vertical, 10)
             }.frame(maxHeight: .infinity)

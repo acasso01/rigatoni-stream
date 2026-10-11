@@ -39,9 +39,11 @@ private struct TVHomeBody: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 36) {
                 VStack(alignment: .leading, spacing: 8) {
-                    StreamHeading(title: "Welcome home", subtitle: "Your pinned channels, always within reach.")
+                    StreamHeading(title: "Welcome home", subtitle: "Continue watching and jump into your pinned channels.")
                 }
                 .padding(.top, 40)
+
+                if model.providerReady { TVHistoryRail() }
 
                 if !model.providerReady {
                     Text("Save your provider in Settings to start watching.")

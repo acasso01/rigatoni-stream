@@ -7,7 +7,7 @@ struct RigatoniStreamApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                if model.starting { ProgressView("Opening Rigatoni Stream…") }
+                if model.starting { ProgressView("Opening Ant Streams…") }
                 else if model.signedIn {
                     TabView {
                         MoviesHomeView().tabItem { Label("Movies", systemImage: "film") }
@@ -35,8 +35,8 @@ struct LoginView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    Image(systemName: "play.tv.fill").font(.system(size: 46)).foregroundStyle(.primary)
-                    Text("Rigatoni Stream").font(.largeTitle.weight(.bold))
+                    Image("BrandLogo").resizable().scaledToFit().frame(width: 100, height: 100).accessibilityHidden(true)
+                    Text("Ant Streams").font(.largeTitle.weight(.bold))
                     Text(createAccount ? "Create your account" : "Welcome back").font(.title.bold())
                     Text("Your TV and movies, in your pocket.").foregroundStyle(.secondary)
                     TextField("Email", text: $email).textContentType(.emailAddress).keyboardType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -60,7 +60,7 @@ struct LoginView: View {
                     }.disabled(email.isEmpty || model.busy)
                     if model.busy { ProgressView() }
                     if !model.notice.isEmpty { Text(model.notice).font(.callout).foregroundStyle(.secondary).accessibilityAddTraits(.updatesFrequently) }
-                    Text("Use your existing Rigatoni account. Your provider login stays in the encrypted account vault.").font(.footnote).foregroundStyle(.secondary)
+                    Text("Use your existing Ant Streams account. Your provider login stays in the encrypted account vault.").font(.footnote).foregroundStyle(.secondary)
                 }.textFieldStyle(.roundedBorder).padding(28).padding(.top, 35)
             }.background { StreamBackdrop() }
         }
@@ -128,7 +128,7 @@ struct SettingsView: View {
                     Button("Sign out", role: .destructive) { Task { await model.signOut() } }.disabled(model.busy)
                 }
                 Section("About this test build") {
-                    Text("Rigatoni Stream 0.1 · Native player powered by VLCKit / VideoLAN (LGPL 2.1).")
+                    Text("Ant Streams 0.2 · Native player powered by VLCKit / VideoLAN (LGPL 2.1).")
                     Link("VideoLAN and VLCKit source", destination: URL(string: "https://code.videolan.org/videolan/VLCKit")!)
                 }
             }
