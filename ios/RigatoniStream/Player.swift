@@ -48,7 +48,7 @@ final class NativePlayer: ObservableObject {
         playing = false; seekable = false; position = 0; elapsed = "0:00"; resolution = ""; state = "Connecting…"
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         try? AVAudioSession.sharedInstance().setActive(true)
-        let media = VLCMedia(url: url)
+        guard let media = VLCMedia(url: url) else { state = "The stream URL could not be opened."; return }
         media.addOptions(["network-caching": cache])
         engine.media = media; openedAt = Date(); engine.play()
         timer?.invalidate()
