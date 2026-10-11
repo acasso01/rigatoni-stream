@@ -1,6 +1,8 @@
 import SwiftUI
 import AVFoundation
-import MobileVLCKit
+import VLCKit
+import AVKit
+import MediaPlayer
 
 @MainActor
 final class NativePlayer: ObservableObject {
@@ -11,13 +13,27 @@ final class NativePlayer: ObservableObject {
     @Published var position: Double = 0
     @Published var elapsed = "0:00"
     @Published var resolution = ""
+    @Published var pictureInPictureAvailable = false
+    @Published var pictureInPictureActive = false
+    private var pipBridge: PictureInPictureBridge?
+    private var observers: [NSObjectProtocol] = []
+    private var remoteTargets: [(MPRemoteCommand, Any)] = []
+    var title = ""
+    var isLive = false
     private var timer: Timer?
     private var openedAt = Date()
     private var url: URL?
     private var cache = 1500
     private var dragging = false
     func attach(_ view: UIView, url: URL, cache: Int) {
-        engine.drawable = view
+        let bridge = PictureInPictureBridge(view: view, player: engine)
+        bridge.availabilityChanged = { [weak self] ready in
+            self?.pictureInPictureAvailable = ready && AVPictureInPictureController.isPictureInPictureSupported()
+        }
+        bridge.activeChanged = { [weak self] active in self?.pictureInPictureActive = active }
+        pipBridge = bridge
+        engine.drawable = bridge
+        installPlaybackControls()
         self.url = url; self.cache = cache
         start()
     }
@@ -44,26 +60,84 @@ final class NativePlayer: ObservableObject {
     func poll() {
         playing = engine.isPlaying; seekable = engine.isSeekable
         if !dragging { position = Double(engine.position).clamped(to: 0...1) }
-        let seconds = max(0, Int(engine.time.intValue) / 1000)
+        let seconds = max(0, Int(engine.time.value?.int64Value ?? 0) / 1000)
         elapsed = seconds >= 3600 ? String(format: "%d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60) : String(format: "%d:%02d", seconds / 60, seconds % 60)
         let size = engine.videoSize
         resolution = size.width > 0 ? "\(Int(size.width))×\(Int(size.height)) · Original quality" : ""
+        pipBridge?.invalidatePlaybackState()
+        updateNowPlaying()
         switch engine.state {
         case .playing: state = "Playing"
         case .paused: state = "Paused"
-        case .buffering: state = "Buffering…"
+
         case .error: state = "The stream could not play. Try another title or check the provider connection."
-        case .ended: state = "Playback ended"
+        case .stopped: state = "Playback stopped"
         default: state = Date().timeIntervalSince(openedAt) > 30 ? "Still waiting for video. Retry or try another title." : "Connecting…"
         }
     }
     func toggle() { if engine.isPlaying { engine.pause() } else { engine.play() } }
     func seekEditing(_ value: Bool) {
         dragging = value
-        if !value && engine.isSeekable { engine.position = Float(position) }
+        if !value && engine.isSeekable { engine.position = position }
+    }
+    func startPictureInPicture() {
+        guard pictureInPictureAvailable else { return }
+        pipBridge?.startPictureInPicture()
+    }
+    private func installPlaybackControls() {
+        guard observers.isEmpty else { return }
+        let center = NotificationCenter.default
+        observers.append(center.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.engine.isPlaying else { return }
+                self.startPictureInPicture()
+            }
+        })
+        observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] notification in
+            let type = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+            Task { @MainActor in
+                if type == AVAudioSession.InterruptionType.began.rawValue { self?.engine.pause() }
+            }
+        })
+        observers.append(center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] notification in
+            let reason = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+            Task { @MainActor in
+                if reason == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue { self?.engine.pause() }
+            }
+        })
+        let commands = MPRemoteCommandCenter.shared()
+        commands.playCommand.isEnabled = true; commands.pauseCommand.isEnabled = true
+        commands.togglePlayPauseCommand.isEnabled = true
+        remoteTargets = [
+            (commands.playCommand, commands.playCommand.addTarget { [weak self] _ in
+                Task { @MainActor in self?.engine.play() }; return .success
+            }),
+            (commands.pauseCommand, commands.pauseCommand.addTarget { [weak self] _ in
+                Task { @MainActor in self?.engine.pause() }; return .success
+            }),
+            (commands.togglePlayPauseCommand, commands.togglePlayPauseCommand.addTarget { [weak self] _ in
+                Task { @MainActor in self?.toggle() }; return .success
+            })
+        ]
+    }
+    private func updateNowPlaying() {
+        var info: [String: Any] = [
+            MPMediaItemPropertyTitle: title,
+            MPNowPlayingInfoPropertyIsLiveStream: isLive,
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: Double(engine.time.value?.int64Value ?? 0) / 1000,
+            MPNowPlayingInfoPropertyPlaybackRate: playing ? 1.0 : 0.0
+        ]
+        let duration = Double(engine.media?.length.value?.int64Value ?? 0) / 1000
+        if !isLive && duration > 0 { info[MPMediaItemPropertyPlaybackDuration] = duration }
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
     func stop() {
         timer?.invalidate(); timer = nil
+        pipBridge?.detach(); pipBridge = nil
+        pictureInPictureAvailable = false; pictureInPictureActive = false
+        observers.forEach { NotificationCenter.default.removeObserver($0) }; observers = []
+        remoteTargets.forEach { $0.0.removeTarget($0.1) }; remoteTargets = []
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         engine.stop(); engine.media = nil; engine.drawable = nil; url = nil
         UIApplication.shared.isIdleTimerDisabled = false
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -85,7 +159,8 @@ enum VideoDisplayMode: String, CaseIterable {
     }
 }
 
-final class VideoCanvas: UIView {
+final class VideoCanvas: UIView, UIGestureRecognizerDelegate {
+    var onTap: (() -> Void)?
     let drawable = UIView()
     var mode = VideoDisplayMode.fit
     var videoSize = CGSize.zero
@@ -94,7 +169,12 @@ final class VideoCanvas: UIView {
         backgroundColor = .black; clipsToBounds = true
         drawable.backgroundColor = .black
         addSubview(drawable)
+        let tap = UITapGestureRecognizer(target: self, action: #selector(tapped))
+        tap.cancelsTouchesInView = false; tap.delegate = self
+        addGestureRecognizer(tap)
     }
+    @objc func tapped() { onTap?() }
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -107,12 +187,15 @@ struct PlayerSurface: UIViewRepresentable {
     let url: URL
     let cache: Int
     let mode: VideoDisplayMode
+    let onTap: () -> Void
     func makeUIView(context: Context) -> VideoCanvas {
         let view = VideoCanvas()
+        view.onTap = onTap
         player.attach(view.drawable, url: url, cache: cache)
         return view
     }
     func updateUIView(_ view: VideoCanvas, context: Context) {
+        view.onTap = onTap
         view.mode = mode; view.videoSize = player.engine.videoSize
         view.setNeedsLayout()
     }
@@ -134,7 +217,6 @@ struct PlayerView: View {
     @State private var selectedChannel: CatalogItem?
     private var currentItem: CatalogItem { selectedChannel ?? item }
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var player = NativePlayer()
     @State private var controlsVisible = true
     @State private var displayMode = VideoDisplayMode.fit
@@ -146,12 +228,8 @@ struct PlayerView: View {
         ZStack {
             Color.black.ignoresSafeArea()
             if let url = currentItem.playbackURL ?? (provider.requiresGateway ? nil : try? provider.streamURL(item: currentItem)) {
-                PlayerSurface(player: player, url: url, cache: currentItem.kind == .live ? liveBuffer : movieBuffer, mode: displayMode)
-                    .ignoresSafeArea().contentShape(Rectangle())
-                    .onTapGesture {
-                        if controlsVisible { hideTask?.cancel(); controlsVisible = false }
-                        else { showControls() }
-                    }
+                PlayerSurface(player: player, url: url, cache: currentItem.kind == .live ? liveBuffer : movieBuffer, mode: displayMode, onTap: toggleControls)
+                    .ignoresSafeArea()
                     .accessibilityLabel("Video. Tap to show or hide playback controls.")
             } else { Text("Invalid provider settings.") }
             if controlsVisible {
@@ -169,17 +247,19 @@ struct PlayerView: View {
                     }
                 }
                 .font(.system(size: 30, weight: .semibold))
-                .buttonStyle(.bordered).controlSize(.large).tint(.white)
-                .padding(12).background(.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 18))
+                .buttonStyle(TransparentPlaybackButton()).tint(.white)
                 VStack {
                     HStack(spacing: 12) {
                         Button { player.stop(); dismiss() } label: { Label("Back", systemImage: "chevron.left") }
                         Text(currentItem.name).font(.headline).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                        Button { player.startPictureInPicture(); showControls() } label: {
+                            Image(systemName: "pip").frame(minWidth: 44, minHeight: 44)
+                        }.disabled(!player.pictureInPictureAvailable).accessibilityLabel("Picture in Picture")
                         Button { displayMode = displayMode.next; showControls() } label: {
                             Label(displayMode.rawValue, systemImage: displayMode == .fit ? "arrow.up.left.and.arrow.down.right" : "arrow.down.right.and.arrow.up.left")
                         }.accessibilityLabel("Picture mode: \(displayMode.rawValue). Tap to change fit, fill or zoom.")
                     }
-                    .padding().background(.black.opacity(0.7))
+                    .padding().background(LinearGradient(colors: [.black.opacity(0.5), .clear], startPoint: .top, endPoint: .bottom))
                     Spacer()
                     VStack(spacing: 10) {
                         HStack {
@@ -200,17 +280,18 @@ struct PlayerView: View {
                         if player.state != "Playing" && player.state != "Buffering…" {
                             Text(player.state).font(.callout).frame(maxWidth: .infinity, alignment: .leading)
                         }
-                    }.padding(.horizontal).padding(.bottom, 8).background(.black.opacity(0.7))
-                }.foregroundStyle(.white).transition(.opacity)
+                    }.padding(.horizontal).padding(.bottom, 8).background(LinearGradient(colors: [.clear, .black.opacity(0.5)], startPoint: .top, endPoint: .bottom))
+                }.foregroundStyle(.white).buttonStyle(TransparentPlaybackButton()).transition(.opacity)
             }
         }
         .statusBarHidden(!controlsVisible)
         .persistentSystemOverlays(controlsVisible ? .automatic : .hidden)
-        .onAppear { showControls() }
+        .onAppear { player.title = currentItem.name; player.isLive = currentItem.kind == .live; showControls() }
         .onChange(of: currentItem.id) { _, _ in
             guard let url = currentItem.playbackURL ?? (provider.requiresGateway ? nil : try? provider.streamURL(item: currentItem)) else {
                 player.stop(); return
             }
+            player.title = currentItem.name; player.isLive = currentItem.kind == .live
             player.changeSource(url: url, cache: liveBuffer)
             showControls()
         }
@@ -219,7 +300,10 @@ struct PlayerView: View {
             if playing { if controlsVisible { showControls() } }
             else { hideTask?.cancel(); controlsVisible = true }
         }
-        .onChange(of: scenePhase) { _, phase in if phase != .active && player.playing { player.engine.pause() } }
+    }
+    private func toggleControls() {
+        if controlsVisible { hideTask?.cancel(); controlsVisible = false }
+        else { showControls() }
     }
     private func adjacentChannel(_ offset: Int) -> CatalogItem? {
         ChannelNavigation.adjacent(in: channels, currentID: currentItem.id, offset: offset)
@@ -237,5 +321,15 @@ struct PlayerView: View {
             guard !Task.isCancelled, player.playing, !seeking else { return }
             withAnimation(.easeOut(duration: 0.2)) { controlsVisible = false }
         }
+    }
+}
+
+struct TransparentPlaybackButton: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.frame(minWidth: 44, minHeight: 44)
+            .foregroundStyle(.white)
+            .shadow(color: .black.opacity(0.85), radius: 3, y: 1)
+            .opacity(configuration.isPressed ? 0.55 : 1)
+            .contentShape(Rectangle())
     }
 }

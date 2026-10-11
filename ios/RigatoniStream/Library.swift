@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import CryptoKit
 
 // Ephemeral, bounded in-memory requests prevent provider responses or URLs entering disk caches.
 final class BoundedTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendable {
@@ -149,9 +150,29 @@ enum CatalogLoader {
     }
 }
 
+
+enum CategoryPins {
+    static func key(accountID: String, host: String) -> String {
+        let digest = SHA256.hash(data: Data("\(accountID)|\(host.lowercased())".utf8))
+        return "rigatoni-pinned-categories-" + digest.map { String(format: "%02x", $0) }.joined()
+    }
+    static func toggled(_ id: String, in pins: [String]) -> [String] {
+        guard !id.isEmpty, id.allSatisfy(\.isNumber) else { return pins }
+        if pins.contains(id) { return pins.filter { $0 != id } }
+        return Array((pins + [id]).suffix(100))
+    }
+    static func ordered(_ categories: [CatalogCategory], pins: [String]) -> [CatalogCategory] {
+        let byID = Dictionary(categories.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let pinned = pins.compactMap { byID[$0] }
+        let ids = Set(pins)
+        return pinned + categories.filter { !ids.contains($0.id) }
+    }
+}
+
 struct LibraryView: View {
     @EnvironmentObject private var model: AppModel
     let kind: LibraryKind
+    @State private var pinnedIDs: [String] = []
     @State private var categories: [CatalogCategory] = []
     @State private var selected = ""
     @State private var items: [CatalogItem] = []
@@ -167,6 +188,11 @@ struct LibraryView: View {
     @State private var page = 0
     @State private var playing: CatalogItem?
     @State private var retry = 0
+    private var orderedCategories: [CatalogCategory] { kind == .live ? CategoryPins.ordered(categories, pins: pinnedIDs) : categories }
+    private var pinKey: String? {
+        guard let accountID = model.account.session?.user.id, let host = try? model.provider.baseURL().host else { return nil }
+        return CategoryPins.key(accountID: accountID, host: host)
+    }
     private var visible: [CatalogItem] { Array(filtered.dropFirst(page * 120).prefix(120)) }
     var body: some View {
         NavigationStack {
@@ -180,9 +206,32 @@ struct LibraryView: View {
                         Button("Provider settings") { model.settingsVisible = true }.buttonStyle(.borderedProminent)
                     } else {
                         if !categories.isEmpty && scope == .category {
-                            Picker("Category", selection: $selected) {
-                                ForEach(categories) { Text($0.name).tag($0.id) }
-                            }.pickerStyle(.menu).tint(.white)
+                            HStack {
+                                Picker("Category", selection: $selected) {
+                                    ForEach(orderedCategories) { category in
+                                        Text((pinnedIDs.contains(category.id) && kind == .live ? "★ " : "") + category.name).tag(category.id)
+                                    }
+                                }.pickerStyle(.menu).tint(.white)
+                                if kind == .live {
+                                    Button {
+                                        pinnedIDs = CategoryPins.toggled(selected, in: pinnedIDs)
+                                        if let pinKey { UserDefaults.standard.set(pinnedIDs, forKey: pinKey) }
+                                    } label: { Image(systemName: pinnedIDs.contains(selected) ? "pin.fill" : "pin").frame(width: 44, height: 44) }
+                                    .accessibilityLabel(pinnedIDs.contains(selected) ? "Unpin category" : "Pin category")
+                                    .disabled(selected.isEmpty)
+                                }
+                            }
+                        }
+                        if kind == .live && !pinnedIDs.isEmpty {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack {
+                                    ForEach(orderedCategories.filter { pinnedIDs.contains($0.id) }) { category in
+                                        Button { scope = .category; selected = category.id } label: {
+                                            Label(category.name, systemImage: "pin.fill")
+                                        }.buttonStyle(.bordered).tint(selected == category.id ? .red : .white)
+                                    }
+                                }
+                            }
                         }
                         Picker("Search scope", selection: $scope) {
                             ForEach(CatalogSearchScope.allCases, id: \.self) { Text($0.rawValue).tag($0) }
@@ -233,6 +282,7 @@ struct LibraryView: View {
     }
     private func loadCategories() async {
         categories = []; selected = ""; replaceItems([]); error = ""; query = ""; page = 0; progress = ""; categoryCache = [:]; allCache = nil
+        pinnedIDs = pinKey.flatMap { UserDefaults.standard.stringArray(forKey: $0) } ?? []
         guard model.signedIn, model.providerReady else { return }
         loading = true
         do {
@@ -243,7 +293,7 @@ struct LibraryView: View {
                 guard !id.isEmpty, id.allSatisfy(\.isNumber) else { return nil }
                 return CatalogCategory(id: id, name: row["category_name"] as? String ?? "Category")
             }
-            selected = categories.first?.id ?? ""
+            selected = orderedCategories.first?.id ?? ""
             if selected.isEmpty { loading = false }
         } catch { if !Task.isCancelled { self.error = error.localizedDescription; loading = false } }
     }

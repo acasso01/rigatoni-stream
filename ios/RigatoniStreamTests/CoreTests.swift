@@ -1,7 +1,32 @@
 import XCTest
+import UIKit
 @testable import RigatoniStream
 
 final class CoreTests: XCTestCase {
+    func testCategoryPinsKeepOrderAndRemovePins() {
+        let categories = [CatalogCategory(id: "1", name: "News"), CatalogCategory(id: "2", name: "Sports"), CatalogCategory(id: "3", name: "Movies")]
+        let pins = CategoryPins.toggled("2", in: [])
+        XCTAssertEqual(CategoryPins.ordered(categories, pins: pins).map(\.id), ["2", "1", "3"])
+        XCTAssertEqual(CategoryPins.toggled("2", in: pins), [])
+        XCTAssertEqual(CategoryPins.toggled("../bad", in: pins), pins)
+        XCTAssertEqual(CategoryPins.ordered(categories, pins: ["99", "2"]).map(\.id), ["2", "1", "3"])
+        XCTAssertNotEqual(CategoryPins.key(accountID: "a", host: "provider.example.invalid"), CategoryPins.key(accountID: "b", host: "provider.example.invalid"))
+        XCTAssertFalse(CategoryPins.key(accountID: "a", host: "provider.example.invalid").contains("provider.example.invalid"))
+    }
+    @MainActor func testVideoTapHandlerStaysAttachedWhileControlsHide() {
+        let canvas = VideoCanvas()
+        var taps = 0
+        canvas.onTap = { taps += 1 }
+        XCTAssertEqual(canvas.gestureRecognizers?.count, 1)
+        XCTAssertFalse(canvas.gestureRecognizers!.first!.cancelsTouchesInView)
+        canvas.drawable.addSubview(UIView())
+        canvas.tapped(); canvas.tapped()
+        XCTAssertEqual(taps, 2)
+    }
+    func testBackgroundAudioIsEnabledInInstalledBuild() {
+        XCTAssertTrue((Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String] ?? []).contains("audio"))
+    }
+
     func testProviderURLsEncodeCredentialsAndKeepMovieContainer() throws {
         let provider = Provider(server: "http://provider.example.invalid:8080/base/", username: "user /?", password: "dummy/#%")
         let api = try provider.apiURL(action: "get_vod_streams", category: "72")

@@ -2,13 +2,13 @@ platform :ios, '17.0'
 use_frameworks!
 project 'RigatoniStream.xcodeproj'
 target 'RigatoniStream' do
-  pod 'MobileVLCKit', '3.7.4'
+  pod 'VLCKit', :podspec => 'VLCKit.podspec'
   target 'RigatoniStreamTests' do
     inherit! :search_paths
   end
 end
 
-# Keep dependencies compatible with SDKs that reject MobileVLCKit's old iOS 9 minimum.
+# Keep dependencies compatible with SDKs that reject VLCKit's old iOS 9 minimum.
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     target.build_configurations.each do |config|
