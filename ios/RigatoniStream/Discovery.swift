@@ -113,6 +113,7 @@ final class SessionCatalog: ObservableObject {
     }
 }
 
+#if os(iOS)
 struct MovieCard: View {
     let item: CatalogItem
     var body: some View {
@@ -316,3 +317,5 @@ struct GlobalSearchView: View {
         } catch { if !Task.isCancelled { notices.append("\(kind.title): \(error.localizedDescription)") } }
     }
 }
+
+#endif

@@ -1,0 +1,14 @@
+Pods/
+.build/
+vendor/
+.bundle/
+Generated/
+*.xcworkspace/
+*.xcodeproj/
+.DS_Store
+.build-device/
+compile.log
+tests.log
+device-build.log
+Private/
+__pycache__/

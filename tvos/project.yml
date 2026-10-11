@@ -1,0 +1,45 @@
+name: RigatoniStreamTV
+# Generated Xcode project lives in tvos/Generated/. Run `bash setup.sh` on a Mac.
+options:
+  bundleIdPrefix: com.acasso01
+  deploymentTarget:
+    tvOS: '17.0'
+settings:
+  base:
+    SWIFT_VERSION: '5.0'
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: ''
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+targets:
+  RigatoniStreamTV:
+    type: application
+    platform: tvOS
+    sources:
+      # tvOS-only UI lives in tvos/RigatoniStreamTV/.
+      - RigatoniStreamTV
+      # Shared, additive-only reuse: these files live in ios/ and are NOT copied.
+      # They compile into the tvOS target unchanged (same Supabase account,
+      # encrypted provider-vault, catalog and poster code as the iPhone build).
+      - path: ../ios/RigatoniStream/Core.swift
+      - path: ../ios/RigatoniStream/Library.swift
+      - path: ../ios/RigatoniStream/Discovery.swift
+    info:
+      path: Generated/Info.plist
+      properties:
+        CFBundleDisplayName: Rigatoni Stream
+        NSHumanReadableCopyright: Rigatoni Stream; VLCKit licensed under LGPL 2.1
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.acasso01.rigatonistreamtv
+        TARGETED_DEVICE_FAMILY: '3'
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_KEY_CFBundleDisplayName: Rigatoni Stream
+        INFOPLIST_KEY_NSHumanReadableCopyright: 'Rigatoni Stream; VLCKit licensed under LGPL 2.1'
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        MARKETING_VERSION: '0.1.0'
+        CURRENT_PROJECT_VERSION: '1'
+schemes:
+  RigatoniStreamTV:
+    build:
+      targets:
+        RigatoniStreamTV: all

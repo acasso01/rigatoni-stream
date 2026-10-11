@@ -1,0 +1,52 @@
+name: Native tvOS build
+on:
+  push:
+    paths:
+      - 'tvos/**'
+      - 'ios/RigatoniStream/Core.swift'
+      - 'ios/RigatoniStream/Library.swift'
+      - 'ios/RigatoniStream/Discovery.swift'
+      - 'ios/VLCKit.podspec'
+      - 'ios/configure_http.py'
+      - '.github/workflows/tvos-build.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: tvos
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+          working-directory: tvos
+      - name: Generate Apple TV project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+          python3 ../ios/configure_http.py --host provider.example.invalid
+      - name: Install native player
+        run: bundle exec pod install
+      - name: Compile Apple TV simulator
+        run: |
+          set -o pipefail
+          xcodebuild build -workspace RigatoniStreamTV.xcworkspace -scheme RigatoniStreamTV -destination 'generic/platform=tvOS Simulator' -derivedDataPath .build CODE_SIGNING_ALLOWED=NO | tee compile.log
+      - name: Compile physical Apple TV
+        run: |
+          set -o pipefail
+          xcodebuild build -workspace RigatoniStreamTV.xcworkspace -scheme RigatoniStreamTV -destination 'generic/platform=tvOS' -derivedDataPath .build-device CODE_SIGNING_ALLOWED=NO | tee device-build.log
+      - name: Save build reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tvos-build-reports
+          path: |
+            tvos/compile.log
+            tvos/device-build.log
+            tvos/Podfile.lock

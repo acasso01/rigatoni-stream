@@ -196,6 +196,7 @@ enum CategoryPins {
     }
 }
 
+#if os(iOS)
 struct LibraryView: View {
     @EnvironmentObject private var model: AppModel
     let kind: LibraryKind
@@ -370,3 +371,5 @@ struct LibraryView: View {
         }
     }
 }
+
+#endif
