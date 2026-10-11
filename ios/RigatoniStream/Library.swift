@@ -262,7 +262,7 @@ struct LibraryView: View {
                         .padding(.vertical, 12)
                     if !model.providerReady {
                         Text("Add or restore your provider settings to browse.")
-                        Button("Provider settings") { model.settingsVisible = true }.buttonStyle(.borderedProminent)
+                        Button("Provider settings") { model.settingsVisible = true }.buttonStyle(.borderedProminent).foregroundStyle(.black)
                     } else {
                         if !categories.isEmpty && scope == .category {
                             HStack {

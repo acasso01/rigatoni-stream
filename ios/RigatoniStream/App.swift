@@ -45,7 +45,7 @@ struct LoginView: View {
                         Button { showPassword.toggle() } label: { Image(systemName: showPassword ? "eye.slash" : "eye") }.accessibilityLabel(showPassword ? "Hide password" : "Show password")
                     }
                     Button(createAccount ? "Create account" : "Sign in") { Task { await authenticate() } }
-                        .buttonStyle(.borderedProminent).controlSize(.large)
+                        .buttonStyle(.borderedProminent).controlSize(.large).foregroundStyle(.black)
                         .disabled(model.busy || email.isEmpty || password.isEmpty)
                     Button(createAccount ? "Already have an account? Sign in" : "Create an account") { createAccount.toggle(); model.notice = "" }
                     Button("Forgot password?") {
