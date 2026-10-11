@@ -198,8 +198,19 @@ enum CategoryPins {
 
 // Shared native visual language; playback and credential handling stay separate.
 enum StreamTheme {
-    static var background: Color { AppAppearance(rawValue: UserDefaults.standard.string(forKey: "rigatoni-appearance") ?? "dark") == .netflix ? .black : Color(uiColor: .systemBackground) }
-    static var panel: Color { Color(uiColor: .secondarySystemBackground) }
+    static var appearance: AppAppearance { AppAppearance(rawValue: UserDefaults.standard.string(forKey: "rigatoni-appearance") ?? "dark") ?? .dark }
+    static func background(for appearance: AppAppearance) -> Color {
+        switch appearance {
+        case .light: return .white
+        case .dark: return Color(red: 0.055, green: 0.06, blue: 0.08)
+        case .netflix: return .black
+        }
+    }
+    static func panel(for appearance: AppAppearance) -> Color {
+        appearance == .light ? Color(red: 0.94, green: 0.94, blue: 0.96) : Color(red: 0.11, green: 0.12, blue: 0.15)
+    }
+    static var background: Color { background(for: appearance) }
+    static var panel: Color { panel(for: appearance) }
     static let accent = Color(red: 0.9, green: 0.035, blue: 0.08)
     static let corner: CGFloat = 18
 }
@@ -207,7 +218,7 @@ enum StreamTheme {
 struct StreamBackdrop: View {
     @AppStorage("rigatoni-appearance") private var appearance = "dark"
     var body: some View {
-        LinearGradient(colors: [StreamTheme.panel, StreamTheme.background],
+        LinearGradient(colors: [StreamTheme.panel(for: AppAppearance(rawValue: appearance) ?? .dark), StreamTheme.background(for: AppAppearance(rawValue: appearance) ?? .dark)],
                        startPoint: .topLeading, endPoint: .bottomTrailing).ignoresSafeArea()
     }
 }
