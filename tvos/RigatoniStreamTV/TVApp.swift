@@ -13,7 +13,9 @@ struct RigatoniStreamTVApp: App {
                 .environmentObject(model)
                 .environmentObject(model.catalog)
                 .tint((AppAppearance(rawValue: appearance) ?? .dark).accent)
-                .preferredColorScheme((AppAppearance(rawValue: appearance) ?? .dark).scheme)
+                .foregroundStyle(StreamTheme.text(for: AppAppearance(rawValue: appearance) ?? .dark))
+            .environment(\.colorScheme, (AppAppearance(rawValue: appearance) ?? .dark).scheme)
+            .preferredColorScheme((AppAppearance(rawValue: appearance) ?? .dark).scheme)
                 .task { await model.restore() }
         }
     }

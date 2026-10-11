@@ -43,7 +43,7 @@ struct TVCatalogBrowser: View {
     @ViewBuilder
     private func content(_ store: TVLibraryStore) -> some View {
         HStack(alignment: .top, spacing: 24) {
-            categorySidebar(store).frame(width: 285)
+            categorySidebar(store).frame(width: kind == .live ? 420 : 285).frame(maxHeight: .infinity)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 26) {
                     Text(selectedName.isEmpty ? kind.title : selectedName).font(.title2.bold())
@@ -57,7 +57,8 @@ struct TVCatalogBrowser: View {
                     } else { itemGrid(store) }
                 }.padding(.vertical, 12).padding(.horizontal, 12)
             }
-        }.padding(.horizontal, 24).padding(.top, 12)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 12)
         .background { StreamBackdrop() }
         .task(id: "\(model.libraryRevision)-\(store.revision)") {
             let previous = selectedCategory
@@ -91,11 +92,11 @@ struct TVCatalogBrowser: View {
     }
 
     private func categorySidebar(_ store: TVLibraryStore) -> some View {
-        VStack(alignment: .leading, spacing: 22) {
-            Text(kind.title).font(.title2.bold()).padding(.horizontal, 16).padding(.top, 32)
+        VStack(alignment: .leading, spacing: 14) {
+            Text(kind.title).font(.title2.bold()).padding(.horizontal, 24).padding(.top, 20)
             Text("CATEGORIES").font(.caption.weight(.semibold)).tracking(2).foregroundStyle(.secondary).padding(.horizontal, 16)
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
+                LazyVStack(alignment: .leading, spacing: kind == .live ? 8 : 12) {
                     if kind == .movies {
                         Button("All titles") { selectedCategory = "all" }.buttonStyle(.bordered)
                     }
@@ -104,16 +105,14 @@ struct TVCatalogBrowser: View {
                             HStack(spacing: 12) {
                                 Image(systemName: pinnedIDs.contains(category.id) ? "pin.fill" : kind.symbol)
                                     .foregroundStyle(.secondary)
-                                Text(category.name).font(.callout.weight(.medium)).lineLimit(2)
+                                Text(category.name).font(.system(size: kind == .live ? 22 : 20, weight: .medium)).lineLimit(1)
                                 Spacer(minLength: 0)
                                 if selectedCategory == category.id { Image(systemName: "checkmark") }
-                            }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
-                                .background(selectedCategory == category.id ? Color.white.opacity(0.15) : Color.clear,
-                                            in: RoundedRectangle(cornerRadius: 16))
-                        }.buttonStyle(.card)
+                            }.padding(.horizontal, 20).frame(maxWidth: .infinity, minHeight: kind == .live ? 68 : 60, alignment: .leading)
+                        }.buttonStyle(TVCatalogRowStyle(selected: selectedCategory == category.id))
                     }
-                }.padding(16)
-            }
+                }.padding(.horizontal, 14).padding(.vertical, 10)
+            }.frame(maxHeight: .infinity)
             if allowPins {
                 Button(isPinned ? "Unpin category" : "Pin category") {
                     pinnedIDs = CategoryPins.toggled(selectedCategory, in: pinnedIDs)
@@ -122,7 +121,8 @@ struct TVCatalogBrowser: View {
                     .padding(.horizontal, 16).padding(.bottom, 30)
             }
         }
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24))
+        .frame(maxHeight: .infinity, alignment: .topLeading)
+        .background(TVTheme.panel, in: RoundedRectangle(cornerRadius: 18))
     }
 
     @ViewBuilder
@@ -133,17 +133,16 @@ struct TVCatalogBrowser: View {
             Text("No titles available.").foregroundStyle(TVTheme.muted)
         } else {
             if kind == .live {
-                LazyVStack(spacing: 18) {
+                LazyVStack(spacing: 10) {
                     ForEach(visible) { item in
                         Button { playing = item } label: {
-                            HStack(spacing: 24) {
+                            HStack(spacing: 22) {
                                 ProviderPoster(url: item.poster, kind: .live).frame(width: 100, height: 56)
                                     .clipShape(RoundedRectangle(cornerRadius: 14))
                                 Text(item.name).font(.headline).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
                                 Image(systemName: "play.circle.fill").font(.title2).foregroundStyle(.secondary)
-                            }.padding(18).foregroundStyle(.primary)
-                                .background(TVTheme.panel, in: RoundedRectangle(cornerRadius: TVTheme.corner))
-                        }.buttonStyle(.card).focused($focusedCard, equals: item.id)
+                            }.padding(.horizontal, 22).frame(minHeight: 86)
+                        }.buttonStyle(TVCatalogRowStyle(selected: false)).focused($focusedCard, equals: item.id)
                     }
                 }.padding(.vertical, 12)
             } else {
@@ -173,6 +172,8 @@ struct TVCatalogBrowser: View {
 // ProviderPoster view (same bounded in-memory fetch as the iPhone build).
 struct TVCatalogCard: View {
     let item: CatalogItem
+    @Environment(\.isFocused) private var focused
+    @AppStorage("rigatoni-appearance") private var appearance = "dark"
 
     private var cardWidth: CGFloat { item.kind == .movies ? 200 : 260 }
     private var cardHeight: CGFloat { item.kind == .movies ? 300 : 146 }
@@ -187,6 +188,28 @@ struct TVCatalogCard: View {
                 .lineLimit(2)
                 .frame(width: cardWidth, alignment: .leading)
         }
-        .foregroundStyle(TVTheme.text)
+        .foregroundStyle(focused ? Color.black : StreamTheme.text(for: AppAppearance(rawValue: appearance) ?? .dark))
+    }
+}
+
+private struct TVCatalogRowStyle: ButtonStyle {
+    let selected: Bool
+    func makeBody(configuration: Configuration) -> some View {
+        TVCatalogRowLabel(configuration: configuration, selected: selected)
+    }
+}
+private struct TVCatalogRowLabel: View {
+    let configuration: ButtonStyleConfiguration
+    let selected: Bool
+    @Environment(\.isFocused) private var focused
+    @AppStorage("rigatoni-appearance") private var appearance = "dark"
+    var body: some View {
+        configuration.label
+            .foregroundStyle(focused ? Color.black : StreamTheme.text(for: AppAppearance(rawValue: appearance) ?? .dark))
+            .background(focused ? Color.white : (selected ? StreamTheme.accent.opacity(0.22) : StreamTheme.panel), in: RoundedRectangle(cornerRadius: 10))
+            .overlay(alignment: .leading) {
+                if selected { RoundedRectangle(cornerRadius: 2).fill(StreamTheme.accent).frame(width: 4).padding(.vertical, 12) }
+            }
+            .opacity(configuration.isPressed ? 0.8 : 1)
     }
 }

@@ -209,6 +209,10 @@ enum StreamTheme {
     static func panel(for appearance: AppAppearance) -> Color {
         appearance == .light ? Color(red: 0.94, green: 0.94, blue: 0.96) : Color(red: 0.11, green: 0.12, blue: 0.15)
     }
+    static func text(for appearance: AppAppearance) -> Color {
+        appearance == .light ? Color(red: 0.08, green: 0.09, blue: 0.11) : Color(red: 0.96, green: 0.96, blue: 0.97)
+    }
+    static var text: Color { text(for: appearance) }
     static var background: Color { background(for: appearance) }
     static var panel: Color { panel(for: appearance) }
     static let accent = Color(red: 0.9, green: 0.035, blue: 0.08)
@@ -286,7 +290,22 @@ struct LibraryView: View {
                                 Text("Categories").tag(CatalogSearchScope.category)
                             }.pickerStyle(.segmented)
                         }
-                        if !categories.isEmpty && scope == .category {
+                        if kind == .movies && scope == .category {
+                            ScrollView(.horizontal, showsIndicators: true) {
+                                LazyHStack(spacing: 10) {
+                                    ForEach(orderedCategories) { category in
+                                        Button { selected = category.id } label: {
+                                            Text(category.name).font(.subheadline.weight(.semibold)).lineLimit(1).fixedSize()
+                                                .padding(.horizontal, 16).padding(.vertical, 12)
+                                                .foregroundStyle(StreamTheme.text)
+                                                .background(selected == category.id ? StreamTheme.accent.opacity(0.18) : StreamTheme.panel, in: Capsule())
+                                                .overlay(Capsule().stroke(selected == category.id ? StreamTheme.accent : .clear, lineWidth: 2))
+                                        }.buttonStyle(.plain).accessibilityAddTraits(selected == category.id ? .isSelected : [])
+                                    }
+                                }.padding(.horizontal, 2).padding(.vertical, 4)
+                            }.frame(height: 62).scrollClipDisabled()
+                        }
+                        if kind == .live && !categories.isEmpty && scope == .category {
                             HStack {
                                 Picker("Category", selection: $selected) {
                                     ForEach(orderedCategories) { category in

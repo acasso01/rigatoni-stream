@@ -117,14 +117,17 @@ final class SessionCatalog: ObservableObject {
 #if os(iOS)
 struct MovieCard: View {
     let item: CatalogItem
+    @AppStorage("rigatoni-appearance") private var appearance = "dark"
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 0) {
             ProviderPoster(url: item.poster, kind: .movies)
                 .aspectRatio(2.0 / 3.0, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: StreamTheme.corner))
-            Text(item.name).font(.subheadline.weight(.medium)).lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }.foregroundStyle(.primary)
+            Text(item.name).font(.subheadline.weight(.semibold)).lineLimit(2)
+                .foregroundStyle(StreamTheme.text(for: AppAppearance(rawValue: appearance) ?? .dark))
+                .frame(maxWidth: .infinity, minHeight: 48, alignment: .topLeading).padding(10)
+        }.background(StreamTheme.panel(for: AppAppearance(rawValue: appearance) ?? .dark))
+            .clipShape(RoundedRectangle(cornerRadius: StreamTheme.corner))
     }
 }
 
@@ -145,26 +148,30 @@ struct MoviesHomeView: View {
                     StreamHeading(title: "Movies", subtitle: "Something great to watch.")
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 22).padding(.top, 20)
                     if !categories.isEmpty {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 10) {
-                                NavigationLink("All titles") { LibraryView(kind: .movies, initialCategoryID: "all", embedded: true) }.buttonStyle(.bordered)
+                        ScrollView(.horizontal, showsIndicators: true) {
+                            LazyHStack(spacing: 10) {
+                                NavigationLink { LibraryView(kind: .movies, initialCategoryID: "all", embedded: true) } label: {
+                                    Text("All titles").font(.subheadline.weight(.semibold)).fixedSize()
+                                        .padding(.horizontal, 18).padding(.vertical, 12)
+                                        .foregroundStyle(StreamTheme.text).background(StreamTheme.panel, in: Capsule())
+                                }.buttonStyle(.plain)
                                 ForEach(categories) { category in
                                     NavigationLink { LibraryView(kind: .movies, initialCategoryID: category.id, embedded: true) } label: {
-                                        Text(category.name).font(.subheadline.weight(.semibold))
+                                        Text(category.name).font(.subheadline.weight(.semibold)).lineLimit(1).fixedSize()
                                             .padding(.horizontal, 18).padding(.vertical, 11)
-                                            .background(.thinMaterial, in: Capsule())
+                                            .foregroundStyle(StreamTheme.text).background(StreamTheme.panel, in: Capsule())
                                     }.buttonStyle(.plain)
                                 }
-                            }.padding(.horizontal, 22)
-                        }
+                            }.padding(.horizontal, 22).padding(.vertical, 4)
+                        }.frame(height: 62).scrollClipDisabled()
                     }
                     if let featured {
                         ZStack(alignment: .bottomLeading) {
                             ProviderPoster(url: featured.poster, kind: .movies).frame(height: 260).clipped()
-                            LinearGradient(colors: [.clear, .black.opacity(0.35), .black], startPoint: .top, endPoint: .bottom)
+                            LinearGradient(colors: [.black.opacity(0.25), .black.opacity(0.65), .black], startPoint: .top, endPoint: .bottom)
                             VStack(alignment: .leading, spacing: 12) {
                                 Text("IN THE SPOTLIGHT").font(.caption.weight(.bold)).tracking(3)
-                                Text(featured.name).font(.largeTitle.weight(.bold)).lineLimit(3)
+                                Text(featured.name).font(.title.weight(.bold)).lineLimit(2).shadow(color: .black, radius: 4, y: 2)
                                 Button { playing = featured } label: { Label("Play", systemImage: "play.fill").font(.headline).padding(.horizontal, 24).padding(.vertical, 10) }
                                     .buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black)
                             }.padding(22).foregroundStyle(.white)
