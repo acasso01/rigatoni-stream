@@ -131,6 +131,7 @@ struct MoviesHomeView: View {
     @EnvironmentObject private var catalog: SessionCatalog
     @State private var categories: [CatalogCategory] = []
     @State private var featured: CatalogItem?
+    @State private var featuredLoading = false
     @State private var playing: CatalogItem?
     @State private var error = ""
     @State private var categoryCount = 6
@@ -150,7 +151,7 @@ struct MoviesHomeView: View {
                                     .buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black)
                             }.padding(22)
                         }.frame(height: 470)
-                    } else if error.isEmpty && model.providerReady {
+                    } else if featuredLoading && model.providerReady {
                         ProgressView("Loading movies…").frame(maxWidth: .infinity).padding(40)
                     }
                     if !model.providerReady {
@@ -175,6 +176,8 @@ struct MoviesHomeView: View {
             }
             .task(id: "\(model.libraryRevision)-\(retry)") {
                 featured = nil; categories = []; error = ""; categoryCount = 6
+                featuredLoading = true
+                defer { featuredLoading = false }
                 guard model.signedIn, model.providerReady else { return }
                 do {
                     let loaded = try await catalog.categories(kind: .movies, model: model)
