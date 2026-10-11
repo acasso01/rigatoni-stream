@@ -200,6 +200,7 @@ struct LibraryView: View {
     @EnvironmentObject private var model: AppModel
     let kind: LibraryKind
     var initialCategoryID: String? = nil
+    var embedded = false
     @State private var pinnedIDs: [String] = []
     @State private var categories: [CatalogCategory] = []
     @State private var selected = ""
@@ -223,7 +224,10 @@ struct LibraryView: View {
     }
     private var visible: [CatalogItem] { Array(filtered.dropFirst(page * 120).prefix(120)) }
     var body: some View {
-        NavigationStack {
+        if embedded { libraryContent }
+        else { NavigationStack { libraryContent } }
+    }
+    private var libraryContent: some View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     Text(kind == .movies ? "Movie night, made yours." : "Live TV, made yours.")
@@ -294,7 +298,6 @@ struct LibraryView: View {
             .task(id: "\(scope.rawValue)-\(selected)-\(model.libraryRevision)-\(retry)") { await loadItems() }
             .task(id: "\(query)-\(searchRevision)") { await filterItems() }
             .fullScreenCover(item: $playing) { PlayerView(item: $0, provider: model.provider, channels: kind == .live ? items : []) }
-        }
     }
     private func rows(action: String, category: String? = nil) async throws -> [[String: Any]] {
         if model.provider.requiresGateway { return try await model.gatewayRows(kind: kind, category: category) }

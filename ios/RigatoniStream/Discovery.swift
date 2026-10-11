@@ -209,7 +209,7 @@ struct MovieShelf: View {
             HStack {
                 Text(category.name).font(.title3.bold()).lineLimit(1)
                 Spacer()
-                NavigationLink("See all") { LibraryView(kind: .movies, initialCategoryID: category.id) }.font(.subheadline.weight(.semibold))
+                NavigationLink("See all") { LibraryView(kind: .movies, initialCategoryID: category.id, embedded: true) }.font(.subheadline.weight(.semibold))
             }.padding(.horizontal)
             if !error.isEmpty {
                 HStack { Text(error).font(.caption); Button("Retry") { retry += 1 } }.padding(.horizontal)
