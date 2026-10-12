@@ -89,6 +89,7 @@ struct CatalogItem: Identifiable, Equatable {
     let poster: URL?
     var playbackURL: URL? = nil
     var categoryID: String = ""
+    var number: String = "" // Channel number (Xtream `num`); empty for M3U playlists.
     static func parse(_ row: [String: Any], kind: LibraryKind) -> CatalogItem? {
         let id = row["stream_id"].map { String(describing: $0) } ?? ""
         guard !id.isEmpty, id.allSatisfy(\.isNumber) else { return nil }
@@ -98,7 +99,8 @@ struct CatalogItem: Identifiable, Equatable {
         return CatalogItem(id: id, name: row["name"] as? String ?? "Untitled", kind: kind,
                            fileExtension: allowed.contains(ext) ? ext : "mp4",
                            poster: ["https", "http"].contains(image?.scheme ?? "") ? image : nil,
-                           categoryID: row["category_id"].map { String(describing: $0) } ?? "")
+                           categoryID: row["category_id"].map { String(describing: $0) } ?? "",
+                           number: row["num"].map { String(describing: $0) } ?? "")
     }
 }
 
