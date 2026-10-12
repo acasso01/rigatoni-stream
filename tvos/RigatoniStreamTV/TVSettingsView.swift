@@ -118,6 +118,7 @@ struct TVSettingsView: View {
 
                     settingsGroup(title: "Personalize") {
                         NavigationLink("Themes & hidden categories / channels") { LibraryCustomizationView() }
+                            .tvContentEntry()
                 Picker("Theme", selection: $appearance) {
                     ForEach(AppAppearance.allCases) { Text($0.title).tag($0.rawValue) }
                 }.pickerStyle(.segmented)
@@ -208,6 +209,7 @@ struct TVSettingsView: View {
         }
         .padding(28)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .focusSection()
         .background(TVTheme.panel)
         .clipShape(RoundedRectangle(cornerRadius: TVTheme.corner))
     }

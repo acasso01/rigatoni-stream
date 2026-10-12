@@ -28,6 +28,8 @@ struct TVGuideView: View {
     @State private var loadedRetry = -1
     @State private var playing: CatalogItem?
     @FocusState private var focusedCell: String?
+    @Environment(\.tvContentFocusScope) private var contentFocus
+    @Environment(\.resetFocus) private var resetFocus
 
     private let slotMinutes = 30
     private let slotCount = 4
@@ -164,6 +166,7 @@ struct TVGuideView: View {
                             .padding(.vertical, 14)
                     }
                     .buttonStyle(TVCompactButtonStyle())
+                    .tvContentEntry(category.id == selectedCategory)
                     .background(selectedCategory == category.id ? TVTheme.accent : TVTheme.card)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .foregroundStyle(StreamTheme.text)
@@ -171,6 +174,12 @@ struct TVGuideView: View {
             }
             .padding(.horizontal, 48)
             .padding(.vertical, 8)
+        }
+        .focusSection()
+        .onChange(of: selectedCategory) { old, new in
+            if old.isEmpty, !new.isEmpty, let contentFocus {
+                resetFocus(in: contentFocus)
+            }
         }
     }
 

@@ -50,3 +50,26 @@ struct TVCompactButtonStyle: ButtonStyle {
         }
     }
 }
+
+private struct TVContentFocusKey: EnvironmentKey {
+    static let defaultValue: Namespace.ID? = nil
+}
+extension EnvironmentValues {
+    var tvContentFocusScope: Namespace.ID? {
+        get { self[TVContentFocusKey.self] }
+        set { self[TVContentFocusKey.self] = newValue }
+    }
+}
+private struct TVContentEntry: ViewModifier {
+    @Environment(\.tvContentFocusScope) private var scope
+    let preferred: Bool
+    @ViewBuilder func body(content: Content) -> some View {
+        if let scope { content.prefersDefaultFocus(preferred, in: scope) }
+        else { content }
+    }
+}
+extension View {
+    func tvContentEntry(_ preferred: Bool = true) -> some View {
+        modifier(TVContentEntry(preferred: preferred))
+    }
+}

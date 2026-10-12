@@ -17,14 +17,21 @@ struct TVSearchView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 32) {
                 StreamHeading(title: "Search", subtitle: "Movies and live channels. Every category. One place.")
-                HStack(spacing: 30) {
-                    TextField("Search movies and Live TV", text: $query).frame(maxWidth: 850)
+                VStack(alignment: .leading, spacing: 24) {
+                    TextField("Search movies and Live TV", text: $query)
+                        .font(.system(size: 26))
+                        .frame(maxWidth: .infinity, minHeight: 64)
+                        .tvContentEntry()
+                        .accessibilityLabel("Search movies and live TV")
+                    Text("Select the search field to type with your remote or iPhone.")
+                        .font(.system(size: 20)).foregroundStyle(.secondary)
                     Picker("Search in", selection: $filter) {
                         Text("All").tag("all")
                         Text("Movies").tag(LibraryKind.movies.rawValue)
                         Text("Live TV").tag(LibraryKind.live.rawValue)
                     }.pickerStyle(.segmented).frame(maxWidth: 580)
                 }
+                .focusSection()
                 if !hasQuery {
                     Label("Enter at least two characters to explore your library", systemImage: "sparkle.magnifyingglass")
                         .foregroundStyle(.secondary).padding(36).frame(maxWidth: .infinity, alignment: .leading)
