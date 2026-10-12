@@ -66,6 +66,6 @@ struct TVHeroBanner: View {
             }
             .frame(height: 440)
         }
-        .buttonStyle(.card)
+        .buttonStyle(TVCardButtonStyle())
     }
 }

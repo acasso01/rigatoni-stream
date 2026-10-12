@@ -162,7 +162,7 @@ struct TVCatalogBrowser: View {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: 22)], spacing: 36) {
                     ForEach(visible) { item in
                         Button { playing = item } label: { TVCatalogCard(item: item) }
-                            .buttonStyle(.card).focused($focusedCard, equals: item.id)
+                            .buttonStyle(TVCardButtonStyle()).focused($focusedCard, equals: item.id)
                             .contextMenu {
                                 Button(TVFavorites.contains(item: item, model: model) ? "Remove from Saved" : "Save to Favorites") { TVFavorites.toggle(item: item, model: model) }
                             }
@@ -173,7 +173,7 @@ struct TVCatalogBrowser: View {
                 Button("Show more (\(shown.count - visibleCount) remaining)") {
                     visibleCount += 60
                 }
-                .buttonStyle(.card)
+                .buttonStyle(TVCardButtonStyle())
                 .padding(.top, 8)
             }
             Text("\(shown.count) titles")
@@ -204,7 +204,7 @@ struct TVCatalogCard: View {
                 .lineLimit(2)
                 .frame(width: cardWidth, alignment: .leading)
         }
-        .foregroundStyle(focused ? Color.black : StreamTheme.text(for: AppAppearance(rawValue: appearance) ?? .dark))
+        .foregroundStyle(focused ? Color.white : StreamTheme.text(for: AppAppearance(rawValue: appearance) ?? .dark))
     }
 }
 
@@ -221,8 +221,8 @@ private struct TVCatalogRowLabel: View {
     @AppStorage("rigatoni-appearance") private var appearance = "dark"
     var body: some View {
         configuration.label
-            .foregroundStyle(focused ? Color.black : StreamTheme.text(for: AppAppearance(rawValue: appearance) ?? .dark))
-            .background(focused ? Color.white : (selected ? StreamTheme.accent.opacity(0.22) : StreamTheme.panel), in: RoundedRectangle(cornerRadius: 10))
+            .foregroundStyle(focused ? Color.white : StreamTheme.text(for: AppAppearance(rawValue: appearance) ?? .dark))
+            .background(focused ? TVTheme.focusFill : (selected ? StreamTheme.accent.opacity(0.22) : StreamTheme.panel), in: RoundedRectangle(cornerRadius: 10))
             .overlay(alignment: .leading) {
                 if selected { RoundedRectangle(cornerRadius: 2).fill(StreamTheme.accent).frame(width: 4).padding(.vertical, 12) }
             }

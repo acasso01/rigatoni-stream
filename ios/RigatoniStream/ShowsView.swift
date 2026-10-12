@@ -14,7 +14,7 @@ struct ShowsView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { model.settingsVisible = true } label: { Image(systemName: "person.crop.circle") }
-                        .accessibilityLabel("Account settings")
+                        .accessibilityLabel("Provider settings")
                 }
             }
         }
@@ -44,7 +44,7 @@ private struct ShowsBrowser: View {
             VStack(alignment: .leading, spacing: 20) {
                 if let reason = store.unavailableReason {
                     Text(reason).foregroundStyle(.secondary).padding()
-                    Button("Account & provider") { model.settingsVisible = true }.padding(.horizontal)
+                    Button("Provider settings") { model.settingsVisible = true }.padding(.horizontal)
                 } else {
                     ScrollView(.horizontal, showsIndicators: true) {
                         LazyHStack(spacing: 10) {
@@ -57,7 +57,7 @@ private struct ShowsBrowser: View {
                                 }.buttonStyle(.plain).fixedSize(horizontal: true, vertical: false)
                             }
                         }.padding(.horizontal).padding(.vertical, 8)
-                    }
+                    }.frame(height: 74).scrollClipDisabled()
                     if store.loading { ProgressView("Loading shows…").frame(maxWidth: .infinity).padding(30) }
                     else if !store.error.isEmpty {
                         VStack(alignment: .leading, spacing: 12) {
@@ -81,7 +81,7 @@ private struct ShowsBrowser: View {
                                         Text(series.name).font(.subheadline.weight(.semibold)).lineLimit(2)
                                             .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).padding(10)
                                     }
-                                    .foregroundStyle(StreamTheme.text).background(StreamTheme.panel)
+                                    .foregroundStyle(StreamTheme.text).background(StreamTheme.card)
                                     .clipShape(RoundedRectangle(cornerRadius: 16))
                                 }.buttonStyle(.plain).contextMenu {
                                     MobileSaveButton(record: SavedRecord(kind: "series", itemID: series.id, name: series.name, ext: "", categoryID: category, addedAt: Date()))
@@ -175,7 +175,7 @@ struct ShowDetailView: View {
                                     }
                                 }
                             }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
-                                .background(StreamTheme.panel, in: RoundedRectangle(cornerRadius: 16))
+                                .background(StreamTheme.card, in: RoundedRectangle(cornerRadius: 16))
                         }
                     }
                 }
@@ -192,7 +192,7 @@ struct ShowDetailView: View {
             seasons = result.seasons; episodes = result.episodes; season = seasons.first?.number ?? 0
         }
         .fullScreenCover(item: $playing) { item in
-            PlayerView(item: item, provider: model.provider, startSeconds: startSeconds, progressID: "series-" + item.id)
+            DirectPlayerView(item: item, provider: model.provider, startSeconds: startSeconds, progressID: "series-" + item.id)
         }
     }
 

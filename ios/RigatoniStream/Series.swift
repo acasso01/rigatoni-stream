@@ -1,7 +1,7 @@
 import SwiftUI
 
 // Shared, bounded Xtream series access for iPhone and Apple TV.
-// Provider credentials stay in memory and the existing encrypted account vault.
+// Provider credentials stay in memory and this device’s Keychain.
 struct SeriesItem: Identifiable {
     let id: String
     let name: String
@@ -36,11 +36,11 @@ final class SeriesStore: ObservableObject {
     init(model: AppModel) { self.model = model }
 
     var unavailableReason: String? {
-        guard model.signedIn, model.providerReady else {
-            return "Save your provider in Settings to browse TV shows."
+        guard model.providerReady else {
+            return "Add your provider in Settings to browse TV shows."
         }
-        if model.provider.requiresGateway {
-            return "TV Shows needs a direct provider connection — it isn't available through the gateway yet."
+        if model.provider.kind == .m3u {
+            return "M3U playlists do not supply seasons and episodes. Add an Xtream Codes provider for TV Shows; playlist video entries remain available in Movies."
         }
         return nil
     }
@@ -74,11 +74,6 @@ final class SeriesStore: ObservableObject {
         return try await Task.detached(priority: .userInitiated) { try JSONSerialization.jsonObject(with: data) }.value
     }
 
-    private func validURL(_ string: String?) -> URL? {
-        let url = string.flatMap(URL.init(string:))
-        return ["https", "http"].contains(url?.scheme ?? "") ? url : nil
-    }
-
     func loadCategories() async {
         categories = []; series = []; error = ""
         guard unavailableReason == nil else { return }
@@ -110,17 +105,47 @@ final class SeriesStore: ObservableObject {
                 throw AppFailure("The provider returned an invalid series list.")
             }
             try Task.checkCancellation()
-            series = rows.compactMap { row in
-                let id = row["series_id"].map { String(describing: $0) } ?? ""
-                guard !id.isEmpty, id.allSatisfy(\.isNumber) else { return nil }
-                return SeriesItem(id: id,
-                                name: row["name"] as? String ?? "Untitled",
-                                poster: validURL(row["cover"] as? String))
-            }
+            series = Self.parseSeries(rows)
         } catch {
             guard !Task.isCancelled else { return }
             self.error = error.localizedDescription
         }
+    }
+
+    /// Loads every series for search: one full-catalog request when the
+    /// provider supports it, otherwise per-category. Deduped by series id.
+    func loadAllSeries() async -> [SeriesItem] {
+        guard unavailableReason == nil else { return [] }
+        if let rows = try? await fetchJSON(action: "get_series") as? [[String: Any]], !rows.isEmpty {
+            return Self.parseSeries(rows)
+        }
+        await loadCategories()
+        guard error.isEmpty else { return [] }
+        var seen = Set<String>()
+        var all: [SeriesItem] = []
+        for category in categories {
+            do { try Task.checkCancellation() } catch { break }
+            guard let rows = try? await fetchJSON(action: "get_series", extra: ["category_id": category.id]) as? [[String: Any]] else { continue }
+            for item in Self.parseSeries(rows) where seen.insert(item.id).inserted {
+                all.append(item)
+            }
+        }
+        return all
+    }
+
+    private static func parseSeries(_ rows: [[String: Any]]) -> [SeriesItem] {
+        rows.compactMap { row in
+            let id = row["series_id"].map { String(describing: $0) } ?? ""
+            guard !id.isEmpty, id.allSatisfy(\.isNumber) else { return nil }
+            return SeriesItem(id: id,
+                            name: row["name"] as? String ?? "Untitled",
+                            poster: validURL(row["cover"] as? String))
+        }
+    }
+
+    private static func validURL(_ string: String?) -> URL? {
+        let url = string.flatMap(URL.init(string:))
+        return ["https", "http"].contains(url?.scheme ?? "") ? url : nil
     }
 
     /// Loads seasons and episodes for a series via get_series_info.
