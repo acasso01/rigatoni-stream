@@ -6,6 +6,7 @@ if ! command -v xcodegen >/dev/null; then
   exit 1
 fi
 xcodegen generate
+test -f configure_http.py || { echo "Missing shared HTTP helper. Update the complete repository, including ios/."; exit 1; }
 python3 configure_http.py
 bundle install
 bundle exec pod install

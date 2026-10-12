@@ -4,41 +4,53 @@ import Security
 
 enum TransportPolicy {
     static func permits(_ url: URL, settings: [String: Any]? = Bundle.main.object(forInfoDictionaryKey: "NSAppTransportSecurity") as? [String: Any]) -> Bool {
+        guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil,
+              url.user == nil, url.password == nil else { return false }
         if url.scheme?.lowercased() == "https" { return true }
-        guard url.scheme?.lowercased() == "http", let host = url.host?.lowercased(),
-              let exceptions = settings?["NSExceptionDomains"] as? [String: Any],
-              let rule = exceptions[host] as? [String: Any] else { return false }
-        return rule["NSExceptionAllowsInsecureHTTPLoads"] as? Bool == true && rule["NSIncludesSubdomains"] as? Bool != true
+        return settings?["NSAllowsArbitraryLoads"] as? Bool == true
     }
 }
 
-struct Provider: Equatable {
+enum ProviderKind: String, Codable, CaseIterable, Identifiable {
+    case xtream, m3u
+    var id: String { rawValue }
+    var title: String { self == .xtream ? "Xtream Codes" : "M3U Playlist" }
+}
+struct Provider: Codable, Equatable {
     var server = ""
     var username = ""
     var password = ""
-
-    var requiresGateway: Bool {
-        guard let url = try? baseURL() else { return false }
-        return usesHTTP && !TransportPolicy.permits(url)
-    }
+    var name = ""
+    var kind: ProviderKind = .xtream
+    var epgURL = ""
     var usesHTTP: Bool { (try? baseURL().scheme?.lowercased()) == "http" }
     func baseURL() throws -> URL {
-        guard let url = URL(string: server.trimmingCharacters(in: .whitespacesAndNewlines)),
-              ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
-              url.host != nil, url.user == nil, url.password == nil,
-              url.query == nil, url.fragment == nil,
-              !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !password.isEmpty else { throw AppFailure("Enter a server URL, username and password.") }
+        let url = try Self.validURL(server)
+        guard kind == .m3u || (url.query == nil && !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !password.isEmpty)
+        else { throw AppFailure("Enter the server URL, username and password. Use the server address, not a player_api.php login link.") }
+        return url
+    }
+    static func validURL(_ value: String) throws -> URL {
+        guard let url = URL(string: value.trimmingCharacters(in: .whitespacesAndNewlines)),
+              ["http", "https"].contains(url.scheme?.lowercased() ?? ""), let host = url.host, !host.isEmpty,
+              url.user == nil, url.password == nil, url.fragment == nil,
+              url.port.map({ (1...65535).contains($0) }) ?? true else {
+            throw AppFailure("Enter a valid http:// or https:// URL, including the port if required.")
+        }
         return url
     }
     func apiURL(action: String, category: String? = nil) throws -> URL {
+        guard kind == .xtream else { throw AppFailure("This feature requires an Xtream Codes provider.") }
         var parts = URLComponents(url: try baseURL().appendingPathComponent("player_api.php"), resolvingAgainstBaseURL: false)!
-        parts.queryItems = [URLQueryItem(name: "username", value: username), URLQueryItem(name: "password", value: password), URLQueryItem(name: "action", value: action)]
+        parts.queryItems = [URLQueryItem(name: "username", value: username), URLQueryItem(name: "password", value: password)]
+        if !action.isEmpty { parts.queryItems?.append(URLQueryItem(name: "action", value: action)) }
         if let category { parts.queryItems?.append(URLQueryItem(name: "category_id", value: category)) }
         guard let url = parts.url else { throw AppFailure("Invalid provider URL.") }
         return url
     }
     func streamURL(item: CatalogItem) throws -> URL {
+        if let url = item.playbackURL { return url }
+        guard kind == .xtream else { throw AppFailure("Refresh the playlist to reopen this stream.") }
         let folder = item.kind == .movies ? "movie" : "live"
         var parts = URLComponents(url: try baseURL(), resolvingAgainstBaseURL: false)!
         let allowed = CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "/%?#"))
@@ -90,284 +102,163 @@ struct CatalogItem: Identifiable, Equatable {
     }
 }
 
-struct AccountUser: Codable {
-    let id: String
-    let email: String?
-    let user_metadata: Metadata?
-    struct Metadata: Codable { let rigatoni_gateway_url: String? }
+struct ProviderProfile: Codable, Identifiable, Equatable {
+    var id = UUID()
+    var provider: Provider
 }
-struct AuthSession: Codable {
-    let access_token: String
-    let refresh_token: String
-    let expires_in: Double?
-    var expires_at: Double?
-    let user: AccountUser
-    var needsRefresh: Bool { (expires_at ?? 0) < Date().timeIntervalSince1970 + 90 }
+struct ProviderVault: Codable, Equatable {
+    var profiles: [ProviderProfile] = []
+    var selectedID: UUID?
 }
 
-// Only account tokens enter Keychain. Provider credentials stay in memory and the encrypted vault.
-enum SessionKeychain {
-    private static let service = "com.acasso01.rigatonistream.auth"
-    private static let account = "supabase-session"
-    private static var query: [String: Any] {
-        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
+// A single atomic Keychain record contains profiles and the selection. No cloud sync.
+enum ProviderKeychain {
+    static let service = "com.acasso01.antstreams.local-providers"
+    static func query(service: String) -> [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+         kSecAttrAccount as String: "profiles"]
     }
-    static func read() throws -> AuthSession? {
-        var request = query
-        request[kSecReturnData as String] = true
-        request[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: CFTypeRef?
-        let code = SecItemCopyMatching(request as CFDictionary, &result)
-        if code == errSecItemNotFound { return nil }
-        guard code == errSecSuccess, let data = result as? Data else { throw AppFailure("Your saved sign-in could not be read. Sign in again.") }
-        return try JSONDecoder().decode(AuthSession.self, from: data)
+    static func read(service: String = service) throws -> ProviderVault {
+        var request = query(service: service)
+        request[kSecReturnData as String] = true; request[kSecMatchLimit as String] = kSecMatchLimitOne
+        var value: CFTypeRef?
+        let code = SecItemCopyMatching(request as CFDictionary, &value)
+        if code == errSecItemNotFound { return ProviderVault() }
+        guard code == errSecSuccess, let data = value as? Data else { throw AppFailure("Unlock this device and retry loading your saved providers.") }
+        do { return try JSONDecoder().decode(ProviderVault.self, from: data) }
+        catch { throw AppFailure("Saved providers could not be read. Your Keychain data has not been overwritten.") }
     }
-    static func write(_ session: AuthSession) throws {
-        let data = try JSONEncoder().encode(session)
-        // Tokens include user metadata; no provider login is present in this payload.
-        let code = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-        if code == errSecItemNotFound {
-            var request = query
-            request[kSecValueData as String] = data
-            request[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-            guard SecItemAdd(request as CFDictionary, nil) == errSecSuccess else { throw AppFailure("Could not save your sign-in securely.") }
-        } else if code != errSecSuccess { throw AppFailure("Could not update your saved sign-in.") }
+    static func write(_ vault: ProviderVault, service: String = service) throws {
+        let data = try JSONEncoder().encode(vault)
+        let query = query(service: service)
+        let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if status == errSecItemNotFound {
+            var entry = query; entry[kSecValueData as String] = data
+            entry[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            guard SecItemAdd(entry as CFDictionary, nil) == errSecSuccess else { throw AppFailure("Could not save providers securely in Keychain.") }
+        } else if status != errSecSuccess { throw AppFailure("Could not update providers in Keychain.") }
     }
-    static func clear() { SecItemDelete(query as CFDictionary) }
-}
-
-@MainActor
-final class AccountAPI {
-    private let root = URL(string: "https://edjejdftwjiasfhpffmc.supabase.co")!
-    private let publicKey = "sb_publishable_w3-KHDqTcBEsLTRNwdRpgg_U9xugdH2"
-    private(set) var session: AuthSession?
-    private let http: URLSession
-    init(http: URLSession? = nil) {
-        if let http { self.http = http; return }
-        let config = URLSessionConfiguration.ephemeral
-        config.urlCache = nil
-        config.httpCookieStorage = nil
-        config.requestCachePolicy = .reloadIgnoringLocalCacheData
-        config.timeoutIntervalForRequest = 30
-        config.timeoutIntervalForResource = 60
-        self.http = URLSession(configuration: config)
+    static func clear(service: String = service) throws {
+        let code = SecItemDelete(query(service: service) as CFDictionary)
+        guard code == errSecSuccess || code == errSecItemNotFound else { throw AppFailure("Could not delete saved providers.") }
     }
-    private func send(path: String, method: String = "GET", body: [String: Any]? = nil, authenticated: Bool = true) async throws -> Data {
-        if authenticated { try await refreshIfNeeded() }
-        var request = URLRequest(url: root.appendingPathComponent(path.components(separatedBy: "?")[0]))
-        if let query = path.split(separator: "?", maxSplits: 1).last, path.contains("?") {
-            var parts = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!
-            parts.percentEncodedQuery = String(query); request.url = parts.url
-        }
-        request.httpMethod = method
-        request.setValue(publicKey, forHTTPHeaderField: "apikey")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if authenticated {
-            guard let session else { throw AppFailure("Sign in to access your saved settings.") }
-            request.setValue("Bearer \(session.access_token)", forHTTPHeaderField: "Authorization")
-        }
-        if let body { request.httpBody = try JSONSerialization.data(withJSONObject: body) }
-        let data: Data, response: URLResponse
-        do { (data, response) = try await http.data(for: request) }
-        catch { throw AppFailure("Could not reach your account. Check your connection and retry.") }
-        guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else {
-            if (response as? HTTPURLResponse)?.statusCode == 401 { throw AppFailure("Your sign-in was rejected or expired. Sign in again.") }
-            throw AppFailure("Account request failed. Check your sign-in details or retry shortly.")
-        }
-        return data
-    }
-    private func accept(_ data: Data) throws {
-        var next = try JSONDecoder().decode(AuthSession.self, from: data)
-        if next.expires_at == nil { next.expires_at = Date().timeIntervalSince1970 + (next.expires_in ?? 3600) }
-        try SessionKeychain.write(next); session = next
-    }
-    func restore() async throws -> Bool {
-        session = try SessionKeychain.read()
-        guard session != nil else { return false }
-        try await refreshIfNeeded()
-        return true
-    }
-    private func refreshIfNeeded() async throws {
-        guard let current = session, current.needsRefresh else { return }
-        let data = try await send(path: "auth/v1/token?grant_type=refresh_token", method: "POST", body: ["refresh_token": current.refresh_token], authenticated: false)
-        try accept(data)
-    }
-    func signIn(email: String, password: String) async throws {
-        try accept(await send(path: "auth/v1/token?grant_type=password", method: "POST", body: ["email": email, "password": password], authenticated: false))
-    }
-    func signUp(email: String, password: String) async throws -> Bool {
-        let data = try await send(path: "auth/v1/signup", method: "POST", body: ["email": email, "password": password], authenticated: false)
-        if (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["access_token"] != nil { try accept(data); return true }
-        return false
-    }
-    func recover(email: String) async throws {
-        _ = try await send(path: "auth/v1/recover", method: "POST", body: ["email": email], authenticated: false)
-    }
-    func accessToken() async throws -> String {
-        try await refreshIfNeeded()
-        guard let session else { throw AppFailure("Sign in again to use the gateway.") }
-        return session.access_token
-    }
-    func signOut() async {
-        _ = try? await send(path: "auth/v1/logout", method: "POST")
-        session = nil; SessionKeychain.clear()
-    }
-    func loadSettings() async throws -> (Provider, String) {
-        let user = try JSONDecoder().decode(AccountUser.self, from: await send(path: "auth/v1/user"))
-        let data = try await send(path: "functions/v1/provider-vault")
-        let row = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
-        let provider = Provider(server: row["server_url"] as? String ?? "", username: row["username"] as? String ?? "", password: row["password"] as? String ?? "")
-        return (provider, user.user_metadata?.rigatoni_gateway_url ?? "")
-    }
-    func save(provider: Provider, gateway: String) async throws {
-        let url = try provider.baseURL()
-        let origin = try Self.gatewayOrigin(gateway)
-        let data = try await send(path: "functions/v1/provider-vault", method: "POST", body: ["server_url": url.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")), "username": provider.username, "password": provider.password])
-        let result = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        guard result?["saved"] as? Bool == true else { throw AppFailure("The vault did not confirm saving your provider.") }
-        do { _ = try await send(path: "auth/v1/user", method: "PUT", body: ["data": ["rigatoni_gateway_url": origin.isEmpty ? NSNull() : origin as Any]]) }
-        catch { throw AppFailure("Provider saved, but the gateway preference could not be saved. Retry Save settings.") }
-    }
-    static func gatewayOrigin(_ value: String) throws -> String {
-        if value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "" }
-        guard let parts = URLComponents(string: value.trimmingCharacters(in: .whitespacesAndNewlines)),
-              parts.scheme == "https", parts.host?.hasSuffix(".ts.net") == true,
-              parts.user == nil, parts.password == nil, parts.query == nil, parts.fragment == nil,
-              ["", "/"].contains(parts.path) else { throw AppFailure("Enter an HTTPS Tailscale gateway URL, or leave it blank. Native playback connects directly to your provider.") }
-        var origin = parts; origin.path = ""
-        return origin.string ?? ""
-    }
-    func deleteSettings() async throws {
-        let data = try await send(path: "functions/v1/provider-vault", method: "DELETE")
-        let result = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        guard result?["deleted"] as? Bool == true else { throw AppFailure("The vault did not confirm deletion.") }
-        do { _ = try await send(path: "auth/v1/user", method: "PUT", body: ["data": ["rigatoni_gateway_url": NSNull()]]) }
-        catch { throw AppFailure("Provider deleted. The gateway preference could not be cleared; retry deletion.") }
+    static func removeLegacySession() {
+        // Only remove obsolete local account tokens. Never contact or alter the old vault/Pi.
+        SecItemDelete([kSecClass as String: kSecClassGenericPassword,
+                       kSecAttrService as String: "com.acasso01.rigatonistream.auth",
+                       kSecAttrAccount as String: "supabase-session"] as CFDictionary)
     }
 }
 
-@MainActor
-final class AppModel: ObservableObject {
-    @Published var signedIn = false
+@MainActor final class AppModel: ObservableObject {
     @Published var starting = true
     @Published var busy = false
     @Published var notice = ""
-    @Published var provider = Provider()
-    @Published var gateway = ""
+    @Published private(set) var vault = ProviderVault()
+    @Published private(set) var provider = Provider()
     @Published var settingsVisible = false
     @Published var libraryRevision = 0
-    let account = AccountAPI()
-    let catalog = SessionCatalog()
     @Published var preferences = LibraryPreferences()
-    var preferenceKey: String? {
-        guard let id = account.session?.user.id, let host = try? provider.baseURL().host else { return nil }
-        return CategoryPins.key(accountID: id, host: host) + "-library-v1"
-    }
-    func savePreferences() {
-        preferences.write(key: preferenceKey); libraryRevision += 1
-    }
+    let catalog = SessionCatalog()
+    private var restored = false
+    private var warmup: Task<Void, Never>?
+    var providerReady: Bool { vault.selectedID != nil && (try? provider.baseURL()) != nil }
+    var preferenceKey: String? { vault.selectedID.map { "ant-provider-" + $0.uuidString + "-library-v1" } }
+    var pinKey: String? { vault.selectedID.map { "ant-provider-" + $0.uuidString + "-pins" } }
+    func savePreferences() { preferences.write(key: preferenceKey); libraryRevision += 1 }
     func saveProgress(id: String, seconds: Double, duration: Double) {
         guard preferenceKey != nil, seconds.isFinite, duration.isFinite, seconds >= 10, duration > 0 else { return }
         if seconds >= duration - 20 { preferences.progress[id] = nil }
         else { preferences.progress[id] = MovieProgress(seconds: seconds, duration: duration, updated: Date().timeIntervalSince1970) }
-        // Bound preferences without saving any provider URLs or login details.
-        if preferences.progress.count > 500 {
-            let oldest = preferences.progress.min { $0.value.updated < $1.value.updated }?.key
-            if let oldest { preferences.progress[oldest] = nil }
-        }
+        if preferences.progress.count > 500, let oldest = preferences.progress.min(by: { $0.value.updated < $1.value.updated })?.key { preferences.progress[oldest] = nil }
         preferences.write(key: preferenceKey)
     }
-    var gatewayConnection: [String: Any]?
-    var gatewayConnectTask: Task<[String: Any], Error>?
-    var gatewayMovieCatalog: [String: Any]?
-    var gatewayMedia: [LibraryKind: [String: String]] = [:]
-    func resetGateway() {
-        EPGCache.shared.reset()
+    func resetCatalog() {
+        warmup?.cancel()
+        EPGCache.shared.reset(); PlaylistStore.shared.reset()
         #if os(tvOS)
         TVFavorites.reset()
         #endif
         catalog.reset()
         preferences = LibraryPreferences.read(key: preferenceKey)
-        gatewayConnectTask?.cancel(); gatewayConnectTask = nil; gatewayConnection = nil
-        gatewayMovieCatalog = nil; gatewayMedia = [:]
+        libraryRevision += 1
     }
-    var providerReady: Bool { (try? provider.baseURL()) != nil }
     func restore() async {
+        guard !restored else { return }
         defer { starting = false }
-        do { signedIn = try await account.restore(); if signedIn { try await reloadSettings() } }
-        catch { notice = error.localizedDescription; settingsVisible = signedIn }
+        do {
+            vault = try ProviderKeychain.read()
+            restored = true
+            ProviderKeychain.removeLegacySession()
+            if let profile = vault.profiles.first(where: { $0.id == vault.selectedID }) ?? vault.profiles.first {
+                vault.selectedID = profile.id; provider = profile.provider
+                resetCatalog(); preload()
+            }
+        } catch { notice = error.localizedDescription }
     }
-    func reloadSettings() async throws {
-        let result = try await account.loadSettings(); provider = result.0; gateway = result.1
-        resetGateway(); libraryRevision += 1
-        notice = providerReady ? "Provider and gateway loaded from your account." : "Save your provider to start watching."
-        settingsVisible = !providerReady
-    }
-    func saveSettings() async {
+    func saveProvider(_ value: Provider, editing id: UUID?) async throws {
+        guard restored else { throw AppFailure("Retry loading your saved providers before making changes.") }
+        guard !busy else { throw AppFailure("Wait for the current provider operation to finish.") }
         busy = true; defer { busy = false }
-        do { try await account.save(provider: provider, gateway: gateway); gateway = try AccountAPI.gatewayOrigin(gateway); resetGateway(); libraryRevision += 1; notice = "Settings saved securely. No provider connection required." }
-        catch { notice = error.localizedDescription }
-    }
-    func deleteSettings() async {
-        busy = true; defer { busy = false }
-        do { try await account.deleteSettings(); provider = Provider(); gateway = ""; resetGateway(); libraryRevision += 1; notice = "Saved provider and gateway deleted." }
-        catch { notice = error.localizedDescription }
-    }
-    func signOut() async {
-        busy = true; defer { busy = false }
-        // Clear provider credentials immediately, including catalog/player state in views.
-        signedIn = false; provider = Provider(); gateway = ""; resetGateway(); libraryRevision += 1; settingsVisible = false
-        await account.signOut(); notice = "Signed out."
-    }
-}
-
-
-extension AppModel {
-    private func gatewayRequest(_ url: URL, method: String = "GET") async throws -> [String: Any] {
-        let token = try await account.accessToken()
-        let data = try await BoundedTransfer(limit: 32 * 1024 * 1024).fetch(url, headers: ["Authorization": "Bearer \(token)"], method: method)
-        guard let result = try JSONSerialization.jsonObject(with: data) as? [String: Any], result["error"] == nil else { throw AppFailure("The gateway request failed. Check Tailscale, save provider settings and retry.") }
-        return result
-    }
-    private func connectGateway() async throws -> [String: Any] {
-        if let gatewayConnection { return gatewayConnection }
-        if let gatewayConnectTask { return try await gatewayConnectTask.value }
-        guard let origin = URL(string: try AccountAPI.gatewayOrigin(gateway)), !gateway.isEmpty else { throw AppFailure("This HTTP provider needs your saved HTTPS gateway. Open settings and save the gateway URL.") }
-        let next = Task { try await self.gatewayRequest(origin.appendingPathComponent("api/connect"), method: "POST") }
-        gatewayConnectTask = next
-        defer { gatewayConnectTask = nil }
-        let result = try await next.value
-        gatewayConnection = result
-        gatewayMedia[.live] = result["streams"] as? [String: String] ?? [:]
-        return result
-    }
-    private func movieURL(_ connection: [String: Any]) throws -> URL {
-        guard let path = connection["movies_path"] as? String,
-              path.range(of: "^/api/movies/[A-Za-z0-9_-]+$", options: .regularExpression) != nil,
-              let url = URL(string: try AccountAPI.gatewayOrigin(gateway) + path) else { throw AppFailure("Update the Pi gateway to load movies.") }
-        return url
-    }
-    func gatewayRows(kind: LibraryKind, category: String?) async throws -> [[String: Any]] {
-        let connection = try await connectGateway()
-        if kind == .live {
-            if let category { return (connection["channels"] as? [[String: Any]] ?? []).filter { String(describing: $0["category_id"] ?? "") == category } }
-            return connection["categories"] as? [[String: Any]] ?? []
+        guard !value.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AppFailure("Enter a provider name.") }
+        _ = try value.baseURL()
+        if !value.epgURL.isEmpty { _ = try Provider.validURL(value.epgURL) }
+        try await ProviderAuthentication.validate(value)
+        try Task.checkCancellation()
+        var next = vault
+        if let id, let index = next.profiles.firstIndex(where: { $0.id == id }) { next.profiles[index].provider = value; next.selectedID = id }
+        else {
+            guard next.profiles.count < 20 else { throw AppFailure("You can save up to 20 providers.") }
+            let entry = ProviderProfile(provider: value); next.profiles.append(entry); next.selectedID = entry.id
         }
-        let base = try movieURL(connection)
-        if category == nil {
-            if gatewayMovieCatalog == nil { gatewayMovieCatalog = try await gatewayRequest(base) }
-            return gatewayMovieCatalog?["categories"] as? [[String: Any]] ?? []
-        }
-        var parts = URLComponents(url: base, resolvingAgainstBaseURL: false)!
-        parts.queryItems = [URLQueryItem(name: "category_id", value: category)]
-        let result = try await gatewayRequest(parts.url!)
-        gatewayMedia[.movies] = result["streams"] as? [String: String] ?? [:]
-        return result["movies"] as? [[String: Any]] ?? []
+        try ProviderKeychain.write(next)
+        vault = next; provider = value; restored = true
+        resetCatalog(); preload(); notice = "Provider saved securely on this device."
     }
-    func gatewayPlaybackURL(id: String, kind: LibraryKind) throws -> URL {
-        guard let path = gatewayMedia[kind]?[id],
-              path.range(of: "^/media/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+$", options: .regularExpression) != nil,
-              let url = URL(string: try AccountAPI.gatewayOrigin(gateway) + path) else { throw AppFailure("Reconnect the provider to refresh this stream.") }
-        return url
+    func selectProvider(_ id: UUID) throws {
+        guard !busy, let selected = vault.profiles.first(where: { $0.id == id }) else { return }
+        var next = vault; next.selectedID = id
+        try ProviderKeychain.write(next)
+        vault = next; provider = selected.provider; resetCatalog(); preload(); notice = ""
+    }
+    func deleteProvider(_ id: UUID) throws {
+        guard !busy else { return }
+        var next = vault; next.profiles.removeAll { $0.id == id }
+        if next.selectedID == id { next.selectedID = next.profiles.first?.id }
+        if next.profiles.isEmpty { try ProviderKeychain.clear() } else { try ProviderKeychain.write(next) }
+        let switched = next.selectedID != vault.selectedID
+        vault = next
+        let prefix = "ant-provider-" + id.uuidString
+        for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix(prefix) { UserDefaults.standard.removeObject(forKey: key) }
+        if switched || next.profiles.isEmpty {
+            provider = next.profiles.first(where: { $0.id == next.selectedID })?.provider ?? Provider()
+            resetCatalog(); if providerReady { preload() }
+        }
+        notice = "Provider deleted from this device."
+    }
+    func refreshProvider() {
+        resetCatalog(); if providerReady { preload() }
+    }
+    private func preload() {
+        let source = provider; let revision = libraryRevision
+        warmup = Task { @MainActor in
+            // Load category indexes automatically, fetch large catalogs only when opened/searched.
+            for kind in LibraryKind.allCases {
+                guard !Task.isCancelled else { return }
+                do {
+                    let categories = try await catalog.categories(kind: kind, model: self)
+                    if let first = categories.first { _ = try await catalog.items(kind: kind, category: first.id, model: self) }
+                } catch { if !Task.isCancelled, revision == libraryRevision { notice = "Provider saved. Some catalogs could not be loaded; open the section to retry." } }
+            }
+            if source.kind == .xtream, !Task.isCancelled { _ = try? await DirectCatalog.rows(provider: source, action: "get_series_categories") }
+        }
+    }
+    func resolve(_ item: CatalogItem) async throws -> CatalogItem {
+        guard provider.kind == .m3u else { return item }
+        let revision = libraryRevision
+        let playlist = try await PlaylistStore.shared.load(provider)
+        guard revision == libraryRevision else { throw CancellationError() }
+        guard let fresh = playlist.items.first(where: { $0.id == item.id }) else { throw AppFailure("This title is no longer in the playlist.") }
+        return fresh
     }
 }

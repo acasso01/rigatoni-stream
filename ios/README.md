@@ -1,3 +1,5 @@
+> **Native iOS/tvOS update:** use the [standalone provider setup and installation guide](../NATIVE_STANDALONE.md). Native apps now use direct providers and local Keychain profiles; older account/gateway instructions below apply only to legacy builds.
+
 # Ant Streams native iPhone test app
 
 SwiftUI interface and VLCKit playback, with Live TV and Movies. This is a native app, not a Safari wrapper. It connects directly to HTTPS Xtream Codes providers and to the HTTP provider hostname explicitly configured during Mac setup. Other HTTP providers use your saved HTTPS Pi gateway. VLC receives the original media (including MKV), without the Safari-compatible rolling conversion. Source resolution is retained, including HD/4K where the source, hardware, and connection support it.

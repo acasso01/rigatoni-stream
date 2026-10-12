@@ -211,30 +211,19 @@ final class CoreTests: XCTestCase {
         XCTAssertNil(CatalogItem.parse(["stream_id": "../private"], kind: .live))
         XCTAssertEqual(CatalogItem.parse(["stream_id": "1", "container_extension": "../../bad"], kind: .movies)?.fileExtension, "mp4")
     }
-    @MainActor func testGatewayPreferenceMatchesWebsiteValidation() async throws {
-        XCTAssertEqual(try AccountAPI.gatewayOrigin("https://homepi.test.ts.net:8443/"), "https://homepi.test.ts.net:8443")
-        XCTAssertEqual(try AccountAPI.gatewayOrigin(""), "")
-        for gateway in ["http://homepi.test.ts.net", "https://example.invalid", "https://homepi.test.ts.net/private", "https://user:pass@homepi.test.ts.net"] {
-            XCTAssertThrowsError(try AccountAPI.gatewayOrigin(gateway))
+    func testStandaloneHTTPPolicyInInstalledBuild() throws {
+        for scheme in ["http", "https"] {
+            for port in [80, 8080, 8000, 25461] {
+                let provider = Provider(server: "\(scheme)://arbitrary.example.invalid:\(port)", username: "dummy", password: "dummy")
+                let url = try provider.apiURL(action: "get_live_streams")
+                XCTAssertEqual(url.scheme, scheme)
+                XCTAssertEqual(url.port, port)
+                XCTAssertTrue(TransportPolicy.permits(url))
+            }
         }
-    }
-    func testDirectHTTPPolicyOnlyAllowsConfiguredProviderHost() {
-        let settings: [String: Any] = ["NSExceptionDomains": ["provider.example.invalid": ["NSExceptionAllowsInsecureHTTPLoads": true, "NSIncludesSubdomains": false]]]
-        XCTAssertTrue(TransportPolicy.permits(URL(string: "http://provider.example.invalid:8080/movie/1.mkv")!, settings: settings))
-        XCTAssertFalse(TransportPolicy.permits(URL(string: "http://other.example.invalid")!, settings: settings))
-        XCTAssertFalse(TransportPolicy.permits(URL(string: "http://sub.provider.example.invalid")!, settings: settings))
-        XCTAssertFalse(TransportPolicy.permits(URL(string: "http://provider.example.invalid")!, settings: [:]))
-        XCTAssertTrue(TransportPolicy.permits(URL(string: "https://account.example.invalid")!, settings: settings))
-    }
-    func testConfiguredProviderBypassesGatewayInActualBuild() throws {
-        let settings = Bundle.main.object(forInfoDictionaryKey: "NSAppTransportSecurity") as? [String: Any]
-        let domains = settings?["NSExceptionDomains"] as? [String: Any]
-        guard let host = domains?.keys.first else { throw XCTSkip("This build uses the HTTPS gateway for HTTP providers.") }
-        let provider = Provider(server: "http://\(host)", username: "dummy", password: "dummy")
-        XCTAssertTrue(provider.usesHTTP)
-        XCTAssertFalse(provider.requiresGateway)
-        let other = Provider(server: "http://other.example.invalid", username: "dummy", password: "dummy")
-        XCTAssertTrue(other.requiresGateway)
+        XCTAssertFalse(TransportPolicy.permits(URL(string: "file:///tmp/test")!))
+        XCTAssertFalse(TransportPolicy.permits(URL(string: "http://user:pass@example.invalid")!))
+        XCTAssertFalse(TransportPolicy.permits(URL(string: "http://example.invalid")!, settings: [:]))
     }
 
     func testPictureModesPreserveAspectAndCoverScreen() {

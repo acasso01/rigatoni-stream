@@ -31,6 +31,8 @@ targets:
     info:
       path: Generated/Info.plist
       properties:
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
         UIBackgroundModes: [audio]
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
