@@ -88,7 +88,7 @@ private struct TVSeriesBrowser: View {
                                     selectedCategory = store.categories.first?.id ?? ""
                                 } else { await store.loadSeries(categoryID: selectedCategory) }
                             } }
-                                .buttonStyle(.card)
+                                .buttonStyle(TVCardButtonStyle())
                         }
                     } else if store.series.isEmpty {
                         Text("No shows in this category.").foregroundStyle(TVTheme.muted)
@@ -110,7 +110,7 @@ private struct TVSeriesBrowser: View {
                                             .frame(width: 200, alignment: .leading)
                                     }
                                 }
-                                .buttonStyle(.card)
+                                .buttonStyle(TVCardButtonStyle())
                                 .contextMenu {
                                     Button(TVFavorites.contains(id: item.id, kind: "series", model: model) ? "Remove from Saved" : "Save to Favorites") { TVFavorites.toggleSeries(item, model: model) }
                                 }
@@ -182,7 +182,7 @@ struct TVSeriesDetailView: View {
                         Button { dismiss() } label: {
                             Label("Back", systemImage: "chevron.left")
                         }
-                        .buttonStyle(.card)
+                        .buttonStyle(TVCardButtonStyle())
                         Spacer()
                     }
                     Text(series.name)
@@ -233,7 +233,7 @@ struct TVSeriesDetailView: View {
                                         .background(Color.white.opacity(0.05))
                                         .clipShape(RoundedRectangle(cornerRadius: 12))
                                     }
-                                    .buttonStyle(.card)
+                                    .buttonStyle(TVCardButtonStyle())
                                 }
                             }
                             .padding(.vertical, 8)
@@ -255,7 +255,7 @@ struct TVSeriesDetailView: View {
             selectedSeason = seasons.first?.number ?? 0
         }
         .fullScreenCover(item: $playing) { item in
-            TVPlayerView(item: item, provider: model.provider, startSeconds: model.preferences.progress["series-" + item.id]?.seconds ?? 0, lastWatchedKind: "series", progressID: "series-" + item.id)
+            DirectPlayerView(item: item, provider: model.provider, startSeconds: model.preferences.progress["series-" + item.id]?.seconds ?? 0, progressID: "series-" + item.id)
         }
     }
 

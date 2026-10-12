@@ -93,7 +93,7 @@ struct TVSavedView: View {
                     .frame(width: 240, alignment: .leading)
             }
         }
-        .buttonStyle(.card)
+        .buttonStyle(TVCardButtonStyle())
         .disabled(connecting)
         .contextMenu {
             Button("Remove from Saved") {
@@ -120,8 +120,8 @@ struct TVSavedView: View {
         notice = ""
         playingKind = record.kind
         if record.kind == "series" {
-            guard !model.provider.requiresGateway else {
-                notice = "That show needs a direct provider connection."
+            guard model.provider.kind == .xtream else {
+                notice = "TV Shows requires an Xtream Codes provider."
                 return
             }
             let store = SeriesStore(model: model)
@@ -139,21 +139,15 @@ struct TVSavedView: View {
             fileExtension: record.ext,
             poster: TVFavorites.poster(record, model: model), categoryID: record.categoryID
         )
-        if model.provider.requiresGateway {
-            Task {
-                connecting = true; defer { connecting = false }
-                let scope = model.preferenceKey
-                do {
-                    guard !record.categoryID.isEmpty else { throw AppFailure("Browse this title's category to refresh its playback link.") }
-                    let items = try await model.catalog.items(kind: kind, category: record.categoryID, model: model)
-                    guard scope == model.preferenceKey else { return }
-                    guard let refreshed = items.first(where: { $0.id == record.itemID }), model.preferences.visible(refreshed) else {
-                        throw AppFailure("This saved title is unavailable in the current provider catalog.")
-                    }
-                    playing = refreshed
-                } catch { notice = error.localizedDescription }
-            }
-        } else { playing = item }
+        Task {
+            connecting = true; defer { connecting = false }
+            let scope = model.preferenceKey
+            do {
+                let fresh = try await model.resolve(item)
+                guard scope == model.preferenceKey else { return }
+                playing = fresh
+            } catch { if scope == model.preferenceKey { notice = error.localizedDescription } }
+        }
     }
 }
 
