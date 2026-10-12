@@ -23,6 +23,7 @@ targets:
       - path: ../ios/RigatoniStream/Core.swift
       - path: ../ios/RigatoniStream/Library.swift
       - path: ../ios/RigatoniStream/Discovery.swift
+      - path: ../ios/RigatoniStream/Series.swift
     info:
       path: Generated/Info.plist
       properties:

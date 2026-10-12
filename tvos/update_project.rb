@@ -10,10 +10,12 @@ group ||= project.main_group.new_group('RigatoniStreamTV', 'RigatoniStreamTV')
   file = group.files.find { |candidate| candidate.path == name } || group.new_file(name)
   target.source_build_phase.add_file_reference(file) unless target.source_build_phase.files_references.include?(file)
 end
-unless target.source_build_phase.files_references.any? { |file| file.path&.end_with?('Discovery.swift') }
-  shared = project.main_group.new_group('Shared')
-  file = shared.new_file('../ios/RigatoniStream/Discovery.swift')
-  target.source_build_phase.add_file_reference(file)
+%w[Discovery.swift Series.swift].each do |name|
+  unless target.source_build_phase.files_references.any? { |file| file.path&.end_with?(name) }
+    shared = project.main_group.children.find { |candidate| candidate.name == 'Shared' } || project.main_group.new_group('Shared')
+    file = shared.new_file('../ios/RigatoniStream/' + name)
+    target.source_build_phase.add_file_reference(file)
+  end
 end
 asset = group.files.find { |candidate| candidate.path == 'Assets.xcassets' } || group.new_file('Assets.xcassets')
 target.resources_build_phase.add_file_reference(asset) unless target.resources_build_phase.files_references.include?(asset)

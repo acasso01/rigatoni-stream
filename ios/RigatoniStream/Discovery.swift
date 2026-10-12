@@ -199,7 +199,7 @@ struct MoviesHomeView: View {
             .foregroundStyle(StreamTheme.text(for: AppAppearance(rawValue: appearance) ?? .dark))
             .navigationTitle("Movies").navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Text("RS").font(.caption.weight(.black)).foregroundStyle(StreamTheme.accent) }
+                ToolbarItem(placement: .topBarLeading) { Text("AS").font(.caption.weight(.black)).foregroundStyle(StreamTheme.accent) }
                 ToolbarItem(placement: .topBarTrailing) { Button { model.settingsVisible = true } label: { Image(systemName: "person.crop.circle") }.accessibilityLabel("Account settings") }
             }
             .task(id: "\(model.libraryRevision)-\(retry)") {

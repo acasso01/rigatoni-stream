@@ -3,6 +3,37 @@ import UIKit
 @testable import RigatoniStream
 
 final class CoreTests: XCTestCase {
+    @MainActor func testSeriesURLPreservesBasePathAndEncodesCredentials() throws {
+        var provider = Provider()
+        provider.server = "https://provider.example.invalid/base%20path"
+        provider.username = "test/user"
+        provider.password = "test?#pass"
+        let url = try SeriesStore.seriesStreamURL(provider: provider, episodeID: "42", ext: "mkv")
+        XCTAssertEqual(url.host, "provider.example.invalid")
+        XCTAssertEqual(URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedPath, "/base%20path/series/test%2Fuser/test%3F%23pass/42.mkv")
+        XCTAssertNil(url.query)
+        XCTAssertNil(url.fragment)
+    }
+    @MainActor func testSeriesDetailsInferSeasonsSortEpisodesAndValidateFormats() {
+        let detail = SeriesStore.parseDetail(["episodes": ["2": [
+            ["id": "12", "episode_num": 2, "title": "Second", "container_extension": "mkv"],
+            ["id": 11, "episode_num": 1, "title": "First", "info": ["container_extension": "m4v"]],
+            ["id": "13", "episode_num": 3, "container_extension": "../../invalid"],
+            ["id": "12", "episode_num": 4],
+            ["id": "bad/id", "episode_num": 5]
+        ]]])
+        XCTAssertEqual(detail.seasons.map(\.number), [2])
+        XCTAssertEqual(detail.episodes[2]?.map(\.id), ["11", "12", "13"])
+        XCTAssertEqual(detail.episodes[2]?.map(\.ext), ["m4v", "mkv", "mp4"])
+    }
+    @MainActor func testEpisodeProgressDoesNotCollideWithMovieProgress() {
+        let episode = SeriesEpisode(id: "42", number: 1, title: "Pilot", ext: "mp4")
+        var preferences = LibraryPreferences()
+        preferences.progress["42"] = MovieProgress(seconds: 125, duration: 7200, updated: 1)
+        preferences.progress[episode.progressID] = MovieProgress(seconds: 300, duration: 1800, updated: 2)
+        XCTAssertEqual(preferences.progress["42"]?.seconds, 125)
+        XCTAssertEqual(preferences.progress[episode.progressID]?.seconds, 300)
+    }
     func testHiddenContentIsRemovedFromUnifiedSearchAndCanBeRestored() {
         let movie = CatalogItem(id: "7", name: "Sports movie", kind: .movies, fileExtension: "mkv", poster: nil, categoryID: "2")
         let channel = CatalogItem(id: "7", name: "Sports channel", kind: .live, fileExtension: "ts", poster: nil, categoryID: "1")

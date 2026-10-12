@@ -7,7 +7,7 @@ target = project.targets.find { |candidate| candidate.name == 'RigatoniStream' }
 abort 'RigatoniStream application target missing' unless target
 group = project.main_group.children.find { |candidate| candidate.respond_to?(:path) && candidate.path == 'RigatoniStream' }
 group ||= project.main_group.new_group('RigatoniStream', 'RigatoniStream')
-%w[PictureInPictureBridge.h PictureInPictureBridge.m RigatoniStream-Bridging-Header.h Discovery.swift].each do |name|
+%w[PictureInPictureBridge.h PictureInPictureBridge.m RigatoniStream-Bridging-Header.h Discovery.swift Series.swift ShowsView.swift].each do |name|
   file = group.files.find { |candidate| candidate.path == name } || group.new_file(name)
   if (name.end_with?('.m') || name.end_with?('.swift')) && !target.source_build_phase.files_references.include?(file)
     target.source_build_phase.add_file_reference(file)

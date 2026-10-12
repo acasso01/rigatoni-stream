@@ -57,7 +57,7 @@ struct TVHistoryRail: View {
                 guard !model.provider.requiresGateway else {
                     notice = "This episode requires a direct provider connection."; return
                 }
-                item.playbackURL = try TVSeriesStore.seriesStreamURL(provider: model.provider, episodeID: item.id, ext: item.fileExtension)
+                item.playbackURL = try SeriesStore.seriesStreamURL(provider: model.provider, episodeID: item.id, ext: item.fileExtension)
             } else if model.provider.requiresGateway {
                 item.playbackURL = try model.gatewayPlaybackURL(id: item.id, kind: kind)
             }

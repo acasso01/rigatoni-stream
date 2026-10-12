@@ -70,3 +70,6 @@ VLCKit 4.0.0a25 is pinned using VideoLAN's official podspec (source commit 2e086
 - The Search tab starts loading only after two characters, with one shared full-catalog job per media type. It retains completed catalogs for this account session, debounces filtering, displays results progressively and separates movie/channel IDs. Partial catalog errors remain retryable. Settings changes and sign-out clear catalogs. Initial complete search still needs the provider's metadata.
 - Category metadata is bounded to 100,000 titles across at most six cached categories; complete search is bounded to 100,000 titles per media type. Shelves retain only 20 items. Images are downsampled and cached only in memory (48 MiB / 100 images).
 - A video tap reveals controls only. Play/Pause remains an explicit button action; no tap reaches VLC's internal controls.
+
+
+TV Shows is available in the iPhone tab bar. Categories load separately; open a show to fetch seasons and episodes. Episodes use the native VLC player, retain original quality and support Continue/Restart with progress stored separately from movies. Series requires direct provider access (approved local HTTP configuration or HTTPS); the HTTPS gateway does not expose series yet. Existing installations can add the new source files with `bundle exec ruby update_project.rb` from `ios/`, then build and run the workspace.
