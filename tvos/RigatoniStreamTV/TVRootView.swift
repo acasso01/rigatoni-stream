@@ -71,26 +71,28 @@ struct TVRootView: View {
     private var navRail: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("ANT STREAMS")
-                .font(.caption.bold())
+                .font(.system(size: 20, weight: .bold))
                 .foregroundStyle(TVTheme.muted)
-                .padding(.horizontal, 36)
-                .padding(.top, 64)
-                .padding(.bottom, 32)
+                .padding(.horizontal, 24)
+                .padding(.top, 32)
+                .padding(.bottom, 20)
 
             ForEach(TVSection.allCases) { section in
                 let selected = selection == section
                 let focused = focusedItem == section
                 Button { selection = section } label: {
-                    HStack(spacing: 20) {
+                    HStack(spacing: 14) {
                         Image(systemName: section.symbol)
-                            .font(.title2)
-                            .frame(width: 40)
+                            .font(.system(size: 26))
+                            .frame(width: 32)
                         Text(section.title)
-                            .font(.title3.weight(selected ? .bold : .regular))
+                            .font(.system(size: 25, weight: selected ? .bold : .medium))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                         Spacer()
                     }
-                    .padding(.horizontal, 32)
-                    .padding(.vertical, 22)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 16)
                     .background(
                         selected ? TVTheme.accent
                         : focused ? TVTheme.focusCard
@@ -99,7 +101,7 @@ struct TVRootView: View {
                     .foregroundStyle(selected ? .white : TVTheme.text)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(TVCompactButtonStyle())
                 .focused($focusedItem, equals: section)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 4)
@@ -107,7 +109,7 @@ struct TVRootView: View {
 
             Spacer()
         }
-        .frame(width: 340)
+        .frame(width: 300)
         .background(TVTheme.panel)
     }
 

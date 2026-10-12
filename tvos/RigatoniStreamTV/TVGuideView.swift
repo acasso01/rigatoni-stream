@@ -32,8 +32,8 @@ struct TVGuideView: View {
     private let slotMinutes = 30
     private let slotCount = 4
     private let maxGuideChannels = 40
-    private let channelColumnWidth: CGFloat = 300
-    private let slotWidth: CGFloat = 340
+    private let channelColumnWidth: CGFloat = 360
+    private let slotWidth: CGFloat = 320
 
     private static let epgDateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -87,9 +87,9 @@ struct TVGuideView: View {
         } else {
             VStack(alignment: .leading, spacing: 0) {
                 Text("Guide")
-                    .font(.largeTitle.bold())
+                    .font(.system(size: 36, weight: .bold))
                     .padding(.horizontal, 48)
-                    .padding(.top, 40)
+                    .padding(.top, 28)
 
                 categoryChips(store)
                     .padding(.top, 16)
@@ -108,10 +108,12 @@ struct TVGuideView: View {
 
                 if store.items.filter(model.preferences.visible).count > maxGuideChannels {
                     Text("Showing the first \(maxGuideChannels) channels — use Live TV to browse them all.")
-                        .font(.caption)
+                        .font(.system(size: 18))
                         .foregroundStyle(TVTheme.muted)
                         .padding(.horizontal, 48)
-                        .padding(.bottom, 24)
+                        .padding(.vertical, 16)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(TVTheme.background)
                 }
             }
             .foregroundStyle(TVTheme.text)
@@ -156,12 +158,15 @@ struct TVGuideView: View {
                 ForEach(store.categories.filter { model.preferences.categoryVisible($0.id, kind: .live) }) { category in
                     Button { selectedCategory = category.id } label: {
                         Text(category.name)
-                            .font(.headline)
-                            .padding(.horizontal, 24)
+                            .font(.system(size: 23, weight: .semibold))
+                            .lineLimit(1)
+                            .padding(.horizontal, 20)
                             .padding(.vertical, 14)
                     }
-                    .buttonStyle(.bordered)
-                    .tint(selectedCategory == category.id ? TVTheme.accent : TVTheme.muted)
+                    .buttonStyle(TVCompactButtonStyle())
+                    .background(selectedCategory == category.id ? TVTheme.accent : TVTheme.card)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .foregroundStyle(StreamTheme.text)
                 }
             }
             .padding(.horizontal, 48)
@@ -197,10 +202,10 @@ struct TVGuideView: View {
         ScrollView([.vertical, .horizontal]) {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 0) {
-                    Color.clear.frame(width: channelColumnWidth, height: 44)
+                    Text("Channel").frame(width: channelColumnWidth + 8, alignment: .leading)
                     ForEach(slotStarts, id: \.self) { slot in
                         Text(Self.slotFormatter.string(from: slot))
-                            .font(.headline)
+                            .font(.system(size: 23, weight: .semibold))
                             .foregroundStyle(TVTheme.muted)
                             .frame(width: slotWidth, alignment: .leading)
                     }
@@ -213,26 +218,30 @@ struct TVGuideView: View {
                 }
             }
             .padding(.horizontal, 48)
-            .padding(.bottom, 48)
+            .padding(.top, 12)
+            .padding(.bottom, 16)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
     }
 
     private func guideRow(_ channel: CatalogItem) -> some View {
         HStack(spacing: 0) {
             Button { playing = channel } label: {
                 HStack(spacing: 16) {
-                    ProviderPoster(url: channel.poster, kind: .live).frame(width: 86, height: 56)
+                    ProviderPoster(url: channel.poster, kind: .live).frame(width: 56, height: 40)
                     Text(channel.name).foregroundStyle(TVTheme.text)
-                        .font(.headline)
-                        .lineLimit(1)
-                    Spacer()
+                        .font(.system(size: 23, weight: .semibold))
+                        .foregroundStyle(StreamTheme.text)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .padding(.horizontal, 16)
-                .frame(width: channelColumnWidth, height: 96)
+                .frame(width: channelColumnWidth, height: 88)
                 .background(TVTheme.card)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(TVCompactButtonStyle())
             .focused($focusedCell, equals: "ch-\(channel.id)")
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(focusedCell == "ch-\(channel.id)" ? TVTheme.accent : Color.clear, lineWidth: 4))
             .padding(.trailing, 8)
@@ -256,16 +265,17 @@ struct TVGuideView: View {
             Button { playing = channel } label: {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(program.title)
-                        .font(.headline)
+                        .font(.system(size: 23, weight: .semibold))
+                        .foregroundStyle(StreamTheme.text)
                         .lineLimit(2)
                     if isLive {
                         Text("LIVE NOW")
-                            .font(.caption2.bold())
+                            .font(.system(size: 16, weight: .bold))
                             .foregroundStyle(TVTheme.accent)
                     }
                 }
                 .padding(.horizontal, 16)
-                .frame(width: width, height: 96, alignment: .leading)
+                .frame(width: width, height: 88, alignment: .leading)
                 .background(isLive ? TVTheme.accent.opacity(0.25) : TVTheme.panel)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
                 .overlay(
@@ -273,20 +283,20 @@ struct TVGuideView: View {
                         .stroke(focused ? TVTheme.accent : Color.clear, lineWidth: 4)
                 )
             }
-            .buttonStyle(.plain)
+            .buttonStyle(TVCompactButtonStyle())
             .focused($focusedCell, equals: cellID)
         } else {
             // No EPG for this slot: full-width LIVE block.
             Button { playing = channel } label: {
                 Text("LIVE")
-                    .font(.caption.bold())
+                    .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(TVTheme.accent)
                     .padding(.horizontal, 16)
-                    .frame(width: slotWidth, height: 96, alignment: .leading)
+                    .frame(width: slotWidth, height: 88, alignment: .leading)
                     .background(TVTheme.card)
                     .clipShape(RoundedRectangle(cornerRadius: 10))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(TVCompactButtonStyle())
             .focused($focusedCell, equals: "live-\(channel.id)-\(Int(slot.timeIntervalSince1970))")
         }
     }
@@ -299,13 +309,13 @@ struct TVGuideView: View {
                 ForEach(channels) { channel in
                     Button { playing = channel } label: {
                         HStack(spacing: 20) {
-                            ProviderPoster(url: channel.poster, kind: .live).frame(width: 86, height: 56)
+                            ProviderPoster(url: channel.poster, kind: .live).frame(width: 56, height: 40)
                             TVFocusTitle(title: channel.name)
                                 .font(.title3)
                                 .lineLimit(1)
                             Spacer()
                             Text("LIVE")
-                                .font(.caption.bold())
+                                .font(.system(size: 18, weight: .bold))
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 6)
                                 .background(TVTheme.accent)

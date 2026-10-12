@@ -29,3 +29,24 @@ struct TVFocusTitle: View {
         Text(title).foregroundStyle(focused ? Color.black : TVTheme.text)
     }
 }
+
+// Explicit focus feedback without the system button's extra insets or scale.
+// Fixed-width navigation and guide cells must retain their measured size.
+struct TVCompactButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        FocusBody(configuration: configuration)
+    }
+
+    private struct FocusBody: View {
+        let configuration: ButtonStyleConfiguration
+        @Environment(\.isFocused) private var focused
+        var body: some View {
+            configuration.label
+                .opacity(configuration.isPressed ? 0.75 : 1)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(focused ? Color.white : Color.clear, lineWidth: 3)
+                }
+        }
+    }
+}
