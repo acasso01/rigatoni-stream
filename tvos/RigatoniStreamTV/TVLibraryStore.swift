@@ -25,11 +25,7 @@ final class TVLibraryStore: ObservableObject {
         self.model = model
     }
 
-    var pinKey: String? {
-        guard let accountID = model.account.session?.user.id,
-              let host = try? model.provider.baseURL().host else { return nil }
-        return CategoryPins.key(accountID: accountID, host: host)
-    }
+    var pinKey: String? { model.pinKey }
 
     func pinnedIDs() -> [String] {
         pinKey.flatMap { UserDefaults.standard.stringArray(forKey: $0) } ?? []
@@ -41,30 +37,16 @@ final class TVLibraryStore: ObservableObject {
         categoryCache = [:]; allCache = nil
     }
 
-    private func rows(action: String, category: String? = nil) async throws -> [[String: Any]] {
-        if model.provider.requiresGateway { return try await model.gatewayRows(kind: kind, category: category) }
-        let url = try model.provider.apiURL(action: action, category: category)
-        let data = try await BoundedTransfer(limit: 32 * 1024 * 1024).fetch(url)
-        guard let rows = try JSONSerialization.jsonObject(with: data) as? [[String: Any]],
-              rows.count <= 50000 else {
-            throw AppFailure("The provider returned an invalid or oversized category.")
-        }
-        return rows
-    }
 
     func loadCategories() async {
         reset()
-        guard model.signedIn, model.providerReady else { return }
+        guard model.providerReady else { return }
         loading = true
         defer { loading = false }
         do {
-            let result = try await rows(action: kind.categoryAction)
-            guard !Task.isCancelled else { return }
-            categories = result.compactMap { row in
-                let id = row["category_id"].map { String(describing: $0) } ?? ""
-                guard !id.isEmpty, id.allSatisfy(\.isNumber) else { return nil }
-                return CatalogCategory(id: id, name: row["category_name"] as? String ?? "Category")
-            }
+            let loaded = try await model.catalog.categories(kind: kind, model: model)
+            try Task.checkCancellation()
+            categories = loaded
         } catch {
             guard !Task.isCancelled else { return }
             self.error = error.localizedDescription
@@ -77,7 +59,7 @@ final class TVLibraryStore: ObservableObject {
 
     /// Load one category's items (grid browsing).
     func loadItems(categoryID: String) async {
-        guard model.signedIn, model.providerReady else { return }
+        guard model.providerReady else { return }
         error = ""; progress = ""; items = []; loading = true
         defer { loading = false }
         do {
@@ -93,11 +75,11 @@ final class TVLibraryStore: ObservableObject {
     /// Load the whole catalog for search (full-catalog fast path, then
     /// category fallback with progress), like the iPhone build.
     func loadAllForSearch(update: @escaping ([CatalogItem], String) -> Void) async {
-        guard model.signedIn, model.providerReady else { return }
+        guard model.providerReady else { return }
         error = ""; items = []; loading = true
         defer { loading = false }
         do {
-            if let cached = allCache, !model.provider.requiresGateway {
+            if let cached = allCache {
                 items = cached.items; error = cached.notice; return
             }
             let result = try await model.catalog.loadAll(kind: kind, model: model)

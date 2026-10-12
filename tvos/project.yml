@@ -18,8 +18,10 @@ targets:
       # tvOS-only UI lives in tvos/RigatoniStreamTV/.
       - RigatoniStreamTV
       # Shared, additive-only reuse: these files live in ios/ and are NOT copied.
-      # They compile into the tvOS target unchanged (same Supabase account,
-      # encrypted provider-vault, catalog and poster code as the iPhone build).
+      # Shared local provider storage, networking, parsing and playback.
+      - path: ../ios/RigatoniStream/DirectProviders.swift
+      - path: ../ios/RigatoniStream/ProviderManagement.swift
+      - path: ../ios/RigatoniStream/DirectPlayback.swift
       - path: ../ios/RigatoniStream/Core.swift
       - path: ../ios/RigatoniStream/Library.swift
       - path: ../ios/RigatoniStream/Discovery.swift
@@ -29,6 +31,8 @@ targets:
     info:
       path: Generated/Info.plist
       properties:
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
         CFBundleDisplayName: Ant Streams
         NSHumanReadableCopyright: Ant Streams; VLCKit licensed under LGPL 2.1
     settings:
@@ -42,8 +46,21 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         MARKETING_VERSION: '0.2.0'
         CURRENT_PROJECT_VERSION: '2'
+  RigatoniStreamTVTests:
+    type: bundle.unit-test
+    platform: tvOS
+    sources:
+      - ../ios/RigatoniStreamTests/VaultTests.swift
+      - ../ios/RigatoniStreamTests/DirectConnectionTests.swift
+    dependencies:
+      - target: RigatoniStreamTV
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
 schemes:
   RigatoniStreamTV:
     build:
       targets:
         RigatoniStreamTV: all
+    test:
+      targets: [RigatoniStreamTVTests]

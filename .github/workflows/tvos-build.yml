@@ -3,6 +3,8 @@ on:
   push:
     paths:
       - 'tvos/**'
+      - 'ios/RigatoniStream/Direct*.swift'
+      - 'ios/RigatoniStream/ProviderManagement.swift'
       - 'ios/RigatoniStream/Core.swift'
       - 'ios/RigatoniStream/Library.swift'
       - 'ios/RigatoniStream/Discovery.swift'
@@ -11,6 +13,8 @@ on:
       - 'ios/RigatoniStream/Saved.swift'
       - 'ios/VLCKit.podspec'
       - 'ios/configure_http.py'
+      - 'ios/RigatoniStreamTests/**'
+      - 'ios/fixtures/**'
       - '.github/workflows/tvos-build.yml'
   workflow_dispatch:
 permissions:
@@ -33,28 +37,42 @@ jobs:
         run: |
           brew install xcodegen
           xcodegen generate
-          python3 ../ios/configure_http.py --host provider.example.invalid
+          python3 ../ios/configure_http.py
       - name: Install native player
         run: |
           bundle exec ruby -rxcodeproj -e 'p = Xcodeproj::Project.open("RigatoniStreamTV.xcodeproj"); p.files.select { |f| f.path.end_with?("EPG.swift") || f.path.end_with?("Saved.swift") || %w[TVGuideView.swift TVFavorites.swift TVSavedView.swift TVHeroBanner.swift].include?(f.path) }.each(&:remove_from_project); p.save'
           bundle exec ruby update_project.rb
           bundle exec ruby update_project.rb
-          bundle exec ruby -rxcodeproj -e 'p = Xcodeproj::Project.open("RigatoniStreamTV.xcodeproj"); t = p.targets.find { |x| x.name == "RigatoniStreamTV" }; t.build_configurations.each { |x| i = Xcodeproj::Plist.read_from_path(x.build_settings["INFOPLIST_FILE"]); abort "HTTP setting lost" unless i.dig("NSAppTransportSecurity", "NSExceptionDomains", "provider.example.invalid"); abort "Branding missing" unless i["CFBundleDisplayName"] == "Ant Streams" }; %w[TVShowsView.swift TVLastWatched.swift TVHistoryRail.swift Discovery.swift Series.swift EPG.swift Saved.swift TVGuideView.swift TVFavorites.swift TVSavedView.swift TVHeroBanner.swift].each { |name| abort "Source missing or duplicated" unless t.source_build_phase.files_references.count { |x| x.path.end_with?(name) } == 1 }; abort "Assets missing or duplicated" unless t.resources_build_phase.files_references.count { |x| x.path.end_with?("Assets.xcassets") } == 1'
+          bundle exec ruby -rxcodeproj -e 'p = Xcodeproj::Project.open("RigatoniStreamTV.xcodeproj"); t = p.targets.find { |x| x.name == "RigatoniStreamTV" }; t.build_configurations.each { |x| i = Xcodeproj::Plist.read_from_path(x.build_settings["INFOPLIST_FILE"]); abort "HTTP setting lost" unless i.dig("NSAppTransportSecurity", "NSAllowsArbitraryLoads") == true; abort "Branding missing" unless i["CFBundleDisplayName"] == "Ant Streams" }; %w[TVShowsView.swift TVLastWatched.swift TVHistoryRail.swift DirectProviders.swift ProviderManagement.swift DirectPlayback.swift Discovery.swift Series.swift EPG.swift Saved.swift TVGuideView.swift TVFavorites.swift TVSavedView.swift TVHeroBanner.swift].each { |name| abort "Source missing or duplicated" unless t.source_build_phase.files_references.count { |x| x.path.end_with?(name) } == 1 }; abort "Assets missing or duplicated" unless t.resources_build_phase.files_references.count { |x| x.path.end_with?("Assets.xcassets") } == 1'
           bundle exec pod install
       - name: Compile Apple TV simulator
         run: |
           set -o pipefail
-          xcodebuild build -workspace RigatoniStreamTV.xcworkspace -scheme RigatoniStreamTV -destination 'generic/platform=tvOS Simulator' -derivedDataPath .build CODE_SIGNING_ALLOWED=NO | tee compile.log
+          xcodebuild build-for-testing -workspace RigatoniStreamTV.xcworkspace -scheme RigatoniStreamTV -destination 'generic/platform=tvOS Simulator' -derivedDataPath .build CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- | tee compile.log
       - name: Compile physical Apple TV
         run: |
           set -o pipefail
           xcodebuild build -workspace RigatoniStreamTV.xcworkspace -scheme RigatoniStreamTV -destination 'generic/platform=tvOS' -derivedDataPath .build-device CODE_SIGNING_ALLOWED=NO | tee device-build.log
+      - name: Run shared provider and playback tests on Apple TV
+        run: |
+          set -o pipefail
+          DEVICE_ID=$(xcrun simctl list devices available -j | ruby -rjson -e 'JSON.parse(STDIN.read)["devices"].values.flatten.each { |d| if d["name"].start_with?("Apple TV"); puts d["udid"]; break; end }')
+          test -n "$DEVICE_ID"
+          bash ../ios/fixtures/start.sh
+          xcrun simctl boot "$DEVICE_ID" || true
+          xcrun simctl bootstatus "$DEVICE_ID" -b
+          xcrun simctl keychain "$DEVICE_ID" add-root-cert ../ios/fixtures/media/test-cert.pem
+          export SIMCTL_CHILD_ANT_REQUIRE_FIXTURES=1
+          export TEST_RUNNER_ANT_REQUIRE_FIXTURES=1
+          xcodebuild test-without-building -workspace RigatoniStreamTV.xcworkspace -scheme RigatoniStreamTV -destination "platform=tvOS Simulator,id=$DEVICE_ID" -derivedDataPath .build CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- | tee tests.log
       - name: Save build reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: tvos-build-reports
           path: |
+            tvos/tests.log
+            tvos/.build/Logs/Test
             tvos/compile.log
             tvos/device-build.log
             tvos/Podfile.lock

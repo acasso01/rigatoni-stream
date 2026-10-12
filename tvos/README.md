@@ -1,3 +1,5 @@
+> **Native iOS/tvOS update:** use the [standalone provider setup and installation guide](../NATIVE_STANDALONE.md). Native apps now use direct providers and local Keychain profiles; older account/gateway instructions below apply only to legacy builds.
+
 # Ant Streams for Apple TV
 
 Native SwiftUI interface with VLCKit playback, Live TV, Movies, search,
@@ -17,12 +19,10 @@ cd tvos
 bash setup.sh
 ```
 
-At the HTTP prompt, enter your provider's DNS hostname only (no `http://`, port,
-username or password). This creates a provider-specific ATS exception in an
-ignored local plist. HTTPS account and gateway requests remain HTTPS. Enter `-`
-for gateway-only playback. HTTP providers otherwise require the HTTPS gateway;
-private Tailscale gateways require Tailscale connectivity on the Apple TV.
-Do not put credentials in source files, shell commands or preferences.
+Setup applies `NSAllowsArbitraryLoads` to the generated app so user-entered HTTP
+provider hosts work; no hostname prompt and no per-host exception. HTTPS trust
+remains enforced. Do not put credentials in source files, shell commands or
+preferences.
 
 Setup opens `RigatoniStreamTV.xcworkspace`, including the player dependency.
 Use the workspace rather than the `.xcodeproj`.
