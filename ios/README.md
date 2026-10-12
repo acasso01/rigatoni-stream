@@ -76,3 +76,17 @@ TV Shows is available in the iPhone tab bar. Categories load separately; open a 
 
 
 The interface update includes Dark, iOS Light and Xfinity-inspired navy themes. Apple TV has a left navigation rail with Guide and Saved, plus movie/show hero banners. The guide uses provider short-EPG data with at most four concurrent requests and a bounded, account/provider-scoped memory cache; gateway/no-EPG providers retain playable Live rows. Saved favorites persist IDs and metadata only, respect hidden movie/live categories and channels, and open movie details with Continue/Restart. New source files are added to existing Xcode projects by `bundle exec ruby update_project.rb`; signing and local HTTP exceptions are preserved.
+
+### Matching the Apple TV experience
+
+The phone uses Home, Live TV, Movies and Search in the bottom bar. More exposes
+Guide, TV Shows, Saved and Settings (and every primary section). Home includes
+last watched and pinned live categories; movie and show pages use full-width
+hero banners. Hold a title/channel to save it, or use the bookmark action in
+movie/show details. Saved and history contain only account/provider-scoped
+catalog metadata, never provider passwords, poster URLs or playback URLs.
+These lists are device-local, just like the Apple TV lists.
+
+Run `bundle exec ruby update_project.rb` in `ios` after pulling this update so
+existing Xcode projects include MobileExperience.swift without changing signing
+or private HTTP settings.

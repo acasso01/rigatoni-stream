@@ -128,6 +128,7 @@ struct MovieCard: View {
                 .frame(maxWidth: .infinity, minHeight: 48, alignment: .topLeading).padding(10)
         }.background(StreamTheme.panel(for: AppAppearance(rawValue: appearance) ?? .dark))
             .clipShape(RoundedRectangle(cornerRadius: StreamTheme.corner))
+            .contextMenu { MobileSaveButton(record: MobileRecords.record(item)) }
     }
 }
 
@@ -167,17 +168,9 @@ struct MoviesHomeView: View {
                         }.frame(height: 62).scrollClipDisabled()
                     }
                     if let featured {
-                        ZStack(alignment: .bottomLeading) {
-                            ProviderPoster(url: featured.poster, kind: .movies).frame(height: 260).clipped()
-                            LinearGradient(colors: [.black.opacity(0.25), .black.opacity(0.65), .black], startPoint: .top, endPoint: .bottom)
-                            VStack(alignment: .leading, spacing: 12) {
-                                Text("IN THE SPOTLIGHT").font(.caption.weight(.bold)).tracking(3)
-                                Text(featured.name).font(.title.weight(.bold)).lineLimit(2).shadow(color: .black, radius: 4, y: 2)
-                                Button { playing = featured } label: { Label("Play", systemImage: "play.fill").font(.headline).padding(.horizontal, 24).padding(.vertical, 10) }
-                                    .buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black)
-                            }.padding(22).foregroundStyle(.white)
-                        }.frame(height: 260)
-                            .clipShape(RoundedRectangle(cornerRadius: 24)).padding(.horizontal, 16)
+                        Button { playing = featured } label: {
+                            MobileHero(title: featured.name, poster: featured.poster)
+                        }.buttonStyle(.plain).padding(.horizontal, 16)
                     } else if featuredLoading && model.providerReady {
                         ProgressView("Loading movies…").frame(maxWidth: .infinity).padding(40)
                     }
@@ -526,6 +519,9 @@ struct MovieDetailView: View {
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
+                #if os(iOS)
+                MobileSaveButton(record: MobileRecords.record(item)).buttonStyle(.bordered)
+                #endif
                 Text("Overview").font(.title2.bold())
                 if loading { ProgressView("Loading movie details…") }
                 else { Text(info.overview.isEmpty ? "No overview supplied by your provider." : info.overview).font(.body) }

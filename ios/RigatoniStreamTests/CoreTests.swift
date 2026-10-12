@@ -3,6 +3,20 @@ import UIKit
 @testable import RigatoniStream
 
 final class CoreTests: XCTestCase {
+    @MainActor func testMobileRecordsExcludePlaybackAndPosterURLs() throws {
+        var item = CatalogItem(id: "42", name: "Example movie", kind: .movies, fileExtension: "mkv",
+                               poster: URL(string: "https://example.invalid/private-art"), categoryID: "7")
+        item.playbackURL = URL(string: "https://example.invalid/private-stream")
+        let record = MobileRecords.record(item)
+        let data = try JSONEncoder().encode(record)
+        let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(Set(fields.keys), Set(["kind", "itemID", "name", "ext", "categoryID", "addedAt"]))
+        XCTAssertEqual(record.kind, "movie")
+        XCTAssertEqual(record.categoryID, "7")
+        XCTAssertEqual(MobileRecords.record(item, kind: "episode").kind, "episode")
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("example.invalid"))
+    }
+
     func testEPGDecodesTitlesPrefersEpochTimestampsAndKeepsAdjacentNextProgram() {
         let root: [String: Any] = ["epg_listings": [
             ["id": "1", "title": Data("Sports".utf8).base64EncodedString(), "start_timestamp": "1000", "stop_timestamp": "2000", "start": "2099-01-01 00:00:00"],

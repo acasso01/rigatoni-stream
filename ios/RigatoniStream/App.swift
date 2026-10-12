@@ -14,13 +14,7 @@ struct RigatoniStreamApp: App {
             Group {
                 if model.starting { ProgressView("Opening Ant Streams…") }
                 else if model.signedIn {
-                    TabView {
-                        MoviesHomeView().tabItem { Label("Movies", systemImage: "film") }
-                        LibraryView(kind: .live).tabItem { Label("Live TV", systemImage: "tv") }
-                        ShowsView().tabItem { Label("TV Shows", systemImage: "play.tv") }
-                        GlobalSearchView().tabItem { Label("Search", systemImage: "magnifyingglass") }
-                    }
-                    .sheet(isPresented: $model.settingsVisible) { SettingsView() }
+                    MobileRootView()
                 } else { LoginView() }
             }
             .environmentObject(model).environmentObject(model.catalog).tint((AppAppearance(rawValue: appearance) ?? .dark).accent)

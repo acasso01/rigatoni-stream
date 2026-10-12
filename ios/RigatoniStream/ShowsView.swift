@@ -68,6 +68,11 @@ private struct ShowsBrowser: View {
                         Text(query.isEmpty ? "No TV shows in this category." : "No matching shows in this category.")
                             .foregroundStyle(.secondary).padding()
                     } else {
+                        if query.isEmpty, let featured = matches.first {
+                            NavigationLink { ShowDetailView(series: featured, store: store) } label: {
+                                MobileHero(title: featured.name, poster: featured.poster, badge: "TV SHOWS")
+                            }.buttonStyle(.plain).padding(.horizontal)
+                        }
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 14)], spacing: 20) {
                             ForEach(Array(matches.prefix(visibleCount))) { series in
                                 NavigationLink { ShowDetailView(series: series, store: store) } label: {
@@ -78,7 +83,9 @@ private struct ShowsBrowser: View {
                                     }
                                     .foregroundStyle(StreamTheme.text).background(StreamTheme.panel)
                                     .clipShape(RoundedRectangle(cornerRadius: 16))
-                                }.buttonStyle(.plain)
+                                }.buttonStyle(.plain).contextMenu {
+                                    MobileSaveButton(record: SavedRecord(kind: "series", itemID: series.id, name: series.name, ext: "", categoryID: category, addedAt: Date()))
+                                }
                             }
                         }.padding(.horizontal)
                         if matches.count > visibleCount { Button("Show more") { visibleCount += 60 }.padding() }
@@ -109,7 +116,7 @@ private struct ShowsBrowser: View {
     }
 }
 
-private struct ShowDetailView: View {
+struct ShowDetailView: View {
     let series: SeriesItem
     @ObservedObject var store: SeriesStore
     @EnvironmentObject private var model: AppModel
@@ -131,6 +138,8 @@ private struct ShowDetailView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 16))
                     Text(series.name).font(.title2.bold()).frame(maxWidth: .infinity, alignment: .leading)
                 }
+                MobileSaveButton(record: SavedRecord(kind: "series", itemID: series.id, name: series.name, ext: "", categoryID: "", addedAt: Date()))
+                    .buttonStyle(.bordered)
                 if loading { ProgressView("Loading episodes…") }
                 else if !store.detailError.isEmpty {
                     Text(store.detailError).foregroundStyle(.secondary)

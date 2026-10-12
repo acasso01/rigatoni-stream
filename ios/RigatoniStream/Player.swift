@@ -309,7 +309,8 @@ struct PlayerView: View {
         }
         .statusBarHidden(!controlsVisible)
         .persistentSystemOverlays(controlsVisible ? .automatic : .hidden)
-        .onAppear { player.resumeSeconds = startSeconds; player.progressRecorder = { seconds, duration in model.saveProgress(id: progressID ?? item.id, seconds: seconds, duration: duration) }; player.title = currentItem.name; player.isLive = currentItem.kind == .live; showControls() }
+        .onChange(of: currentItem.id) { _, _ in MobileRecords.watched(currentItem, episode: progressID != nil, model: model) }
+        .onAppear { MobileRecords.watched(currentItem, episode: progressID != nil, model: model); player.resumeSeconds = startSeconds; player.progressRecorder = { seconds, duration in model.saveProgress(id: progressID ?? item.id, seconds: seconds, duration: duration) }; player.title = currentItem.name; player.isLive = currentItem.kind == .live; showControls() }
         .onChange(of: currentItem.id) { _, _ in
             guard let url = currentItem.playbackURL ?? (provider.requiresGateway ? nil : try? provider.streamURL(item: currentItem)) else {
                 player.stop(); return

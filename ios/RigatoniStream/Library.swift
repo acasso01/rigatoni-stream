@@ -304,6 +304,7 @@ struct LiveChannelRow: View {
             Image(systemName: "play.circle.fill").font(.title2).foregroundStyle(.secondary)
         }.padding(12).foregroundStyle(.primary)
             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: StreamTheme.corner))
+            .contextMenu { MobileSaveButton(record: MobileRecords.record(item)) }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("\(item.name), live" + (guide?.now.map { ", now playing \($0.title)" } ?? ""))
             .task(id: scope + ":" + item.id) {
