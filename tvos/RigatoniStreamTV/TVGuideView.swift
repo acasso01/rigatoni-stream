@@ -76,6 +76,7 @@ struct TVGuideView: View {
 
     @ViewBuilder
     private func content(_ store: TVLibraryStore) -> some View {
+        Group {
         if !model.providerReady {
             Text("Save your provider in Settings to browse the guide.")
                 .foregroundStyle(TVTheme.muted)
@@ -105,7 +106,7 @@ struct TVGuideView: View {
                     fallbackRows(Array(store.items.filter(model.preferences.visible).prefix(maxGuideChannels)))
                 }
 
-                if store.items.count > maxGuideChannels {
+                if store.items.filter(model.preferences.visible).count > maxGuideChannels {
                     Text("Showing the first \(maxGuideChannels) channels — use Live TV to browse them all.")
                         .font(.caption)
                         .foregroundStyle(TVTheme.muted)
@@ -114,6 +115,7 @@ struct TVGuideView: View {
                 }
             }
             .foregroundStyle(TVTheme.text)
+        }
         }
         .task(id: "\(model.libraryRevision)-\(retry)-\(selectedCategory)") {
             if loadedRevision != model.libraryRevision || loadedRetry != retry {
@@ -220,7 +222,7 @@ struct TVGuideView: View {
             Button { playing = channel } label: {
                 HStack(spacing: 16) {
                     ProviderPoster(url: channel.poster, kind: .live).frame(width: 86, height: 56)
-                    TVFocusTitle(title: channel.name)
+                    Text(channel.name).foregroundStyle(TVTheme.text)
                         .font(.headline)
                         .lineLimit(1)
                     Spacer()

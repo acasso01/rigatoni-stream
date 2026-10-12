@@ -61,6 +61,7 @@ struct TVHeroBanner: View {
                     .foregroundStyle(.black)
                     .clipShape(Capsule())
                 }
+                .foregroundStyle(StreamTheme.text)
                 .padding(56)
             }
             .frame(height: 440)
