@@ -5,6 +5,11 @@ import SwiftUI
 // The content tree is rebuilt when the theme changes (`.id(theme)`), which
 // keeps the static TVTheme color accessors in sync without touching every
 // view.
+//
+// Focus model (tvOS focus engine, no programmatic handoffs): the rail keeps
+// a @FocusState for styling, arrow keys move between rail and content
+// naturally, and each content view sets its own initial focus when its
+// controls are ready. Menu anywhere in content returns focus to the rail.
 enum TVSection: String, CaseIterable, Identifiable {
     case home, guide, live, movies, shows, saved, search, settings
 
@@ -42,9 +47,6 @@ struct TVRootView: View {
     @AppStorage("rigatoni-appearance") private var appearance = "dark"
     @State private var selection: TVSection = .home
     @FocusState private var focusedItem: TVSection?
-    @Namespace private var contentFocus
-    @Environment(\.resetFocus) private var resetFocus
-    @State private var focusTask: Task<Void, Never>?
 
     var body: some View {
         ZStack {
@@ -56,14 +58,9 @@ struct TVRootView: View {
                     HStack(spacing: 0) {
                         navRail
                             .focusSection()
-                            .onMoveCommand { direction in
-                                if direction == .right { enter(focusedItem ?? selection) }
-                            }
                         content
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .focusSection()
-                            .focusScope(contentFocus)
-                            .environment(\.tvContentFocusScope, contentFocus)
                             .onExitCommand { focusedItem = selection }
                     }
                     // Rebuild the whole tree on theme change so every
@@ -91,7 +88,7 @@ struct TVRootView: View {
             ForEach(TVSection.allCases) { section in
                 let selected = selection == section
                 let focused = focusedItem == section
-                Button { enter(section) } label: {
+                Button { selection = section } label: {
                     HStack(spacing: 14) {
                         Image(systemName: section.symbol)
                             .font(.system(size: 26))
@@ -122,18 +119,6 @@ struct TVRootView: View {
         }
         .frame(width: 300)
         .background(TVTheme.panel)
-    }
-
-    private func enter(_ section: TVSection) {
-        selection = section
-        focusTask?.cancel()
-        focusTask = Task { @MainActor in
-            // Wait for the selected screen's focusable controls to mount.
-            try? await Task.sleep(for: .milliseconds(150))
-            guard !Task.isCancelled else { return }
-            focusedItem = nil
-            resetFocus(in: contentFocus)
-        }
     }
 
     // MARK: - Content

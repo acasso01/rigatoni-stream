@@ -28,8 +28,7 @@ struct TVGuideView: View {
     @State private var loadedRetry = -1
     @State private var playing: CatalogItem?
     @FocusState private var focusedCell: String?
-    @Environment(\.tvContentFocusScope) private var contentFocus
-    @Environment(\.resetFocus) private var resetFocus
+    @FocusState private var chipFocus: String?
 
     private let slotMinutes = 30
     private let slotCount = 4
@@ -166,7 +165,7 @@ struct TVGuideView: View {
                             .padding(.vertical, 14)
                     }
                     .buttonStyle(TVCompactButtonStyle())
-                    .tvContentEntry(category.id == selectedCategory)
+                    .focused($chipFocus, equals: "chip-\(category.id)")
                     .background(selectedCategory == category.id ? TVTheme.accent : TVTheme.card)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .foregroundStyle(StreamTheme.text)
@@ -176,9 +175,16 @@ struct TVGuideView: View {
             .padding(.vertical, 8)
         }
         .focusSection()
+        .onAppear {
+            // Returning to the Guide with categories already loaded.
+            if !selectedCategory.isEmpty { chipFocus = "chip-\(selectedCategory)" }
+        }
         .onChange(of: selectedCategory) { old, new in
-            if old.isEmpty, !new.isEmpty, let contentFocus {
-                resetFocus(in: contentFocus)
+            // First load: move focus onto the selected chip as soon as the
+            // chips mount. @FocusState is sticky, so the engine applies it
+            // once the button exists.
+            if old.isEmpty, !new.isEmpty {
+                chipFocus = "chip-\(new)"
             }
         }
     }

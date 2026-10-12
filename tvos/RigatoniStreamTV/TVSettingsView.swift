@@ -102,9 +102,15 @@ struct TVSettingsView: View {
     @State private var visiblePassword = false
     @AppStorage("rigatoni-live-buffer-ms") private var liveBuffer = 1500
     @AppStorage("rigatoni-movie-buffer-ms") private var movieBuffer = 4000
+    // First control gets focus on appear — deterministic, no async gating.
+    @FocusState private var entryFocused: Bool
+    @State private var showingCustomization = false
 
     var body: some View {
-        NavigationStack {
+        // NOTE: no NavigationStack here. A root-level NavigationStack made
+        // tvOS focus unreliable on this tab; the customization screen is
+        // presented modally instead (Menu dismisses it).
+        Group {
             ScrollView {
                 VStack(alignment: .leading, spacing: 28) {
                     Text("Settings")
@@ -117,8 +123,9 @@ struct TVSettingsView: View {
                     }
 
                     settingsGroup(title: "Personalize") {
-                        NavigationLink("Themes & hidden categories / channels") { LibraryCustomizationView() }
-                            .tvContentEntry()
+                        Button("Themes & hidden categories / channels") { showingCustomization = true }
+                            .buttonStyle(.card)
+                            .focused($entryFocused)
                 Picker("Theme", selection: $appearance) {
                     ForEach(AppAppearance.allCases) { Text($0.title).tag($0.rawValue) }
                 }.pickerStyle(.segmented)
@@ -198,6 +205,12 @@ struct TVSettingsView: View {
                 isPresented: $deleting, titleVisibility: .visible
             ) {
                 Button("Delete settings", role: .destructive) { Task { await model.deleteSettings() } }
+            }
+            .onAppear { entryFocused = true }
+            .fullScreenCover(isPresented: $showingCustomization) {
+                // NavigationStack here only provides the shared screen's
+                // navigation chrome inside the modal; Menu dismisses it.
+                NavigationStack { LibraryCustomizationView() }
             }
         }
     }
