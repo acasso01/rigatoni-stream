@@ -299,7 +299,7 @@ struct GlobalSearchView: View {
                             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: StreamTheme.corner))
                     }
                     if hasQuery {
-                        ForEach(LibraryKind.allCases) { kind in
+                        ForEach(LibraryKind.allCases.filter { filter == "all" || $0.rawValue == filter }) { kind in
                             if let progress = catalog.progress[kind] { ProgressView("\(kind.title): \(progress)").font(.caption) }
                         }
                         ForEach(notices, id: \.self) { Text($0).font(.caption).foregroundStyle(.secondary) }
@@ -340,14 +340,25 @@ struct GlobalSearchView: View {
                 }.padding()
             }.background { StreamBackdrop() }
             .navigationTitle("Search")
-            .task(id: "\(hasQuery)-\(model.libraryRevision)-\(retry)") {
+            .task(id: "\(hasQuery)-\(filter)-\(model.libraryRevision)-\(retry)") {
                 guard hasQuery, model.providerReady else { return }
                 notices = []
-                // Three media types at most, never one network request per keystroke.
-                async let movies: Void = load(.movies)
-                async let live: Void = load(.live)
-                async let series: Void = loadSeries()
-                _ = await (movies, live, series)
+                // Only load the catalogs the selected filter needs — no more
+                // "Movies: Loading full catalog…" when TV Shows is selected.
+                let scope = filter
+                if scope == "all" {
+                    // Three media types at most, never one network request per keystroke.
+                    async let movies: Void = load(.movies)
+                    async let live: Void = load(.live)
+                    async let series: Void = loadSeries()
+                    _ = await (movies, live, series)
+                } else if scope == LibraryKind.movies.rawValue {
+                    await load(.movies)
+                } else if scope == LibraryKind.live.rawValue {
+                    await load(.live)
+                } else if scope == "series" {
+                    await loadSeries()
+                }
             }
             .task(id: "\(query)-\(filter)-\(catalog.revision)-\(model.libraryRevision)") {
                 limit = 60
