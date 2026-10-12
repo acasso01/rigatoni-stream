@@ -11,6 +11,9 @@ struct RigatoniStreamTVApp: App {
         if UserDefaults.standard.string(forKey: "rigatoni-appearance") == "netflix" {
             UserDefaults.standard.set("dark", forKey: "rigatoni-appearance")
         }
+        if UserDefaults.standard.string(forKey: "rigatoni-appearance") == "xfinity" {
+            UserDefaults.standard.set("midnight", forKey: "rigatoni-appearance")
+        }
     }
     var body: some Scene {
         WindowGroup {

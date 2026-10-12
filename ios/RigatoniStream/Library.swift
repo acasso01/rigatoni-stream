@@ -220,21 +220,21 @@ enum StreamTheme {
         switch appearance {
         case .light: return rgb(242, 242, 247)
         case .dark: return rgb(9, 9, 11)
-        case .xfinity: return rgb(11, 16, 38)
+        case .midnight: return rgb(11, 16, 38)
         }
     }
     static func panel(for appearance: AppAppearance) -> Color {
         switch appearance {
         case .light: return rgb(255, 255, 255)
         case .dark: return rgb(23, 23, 27)
-        case .xfinity: return rgb(22, 29, 56)
+        case .midnight: return rgb(22, 29, 56)
         }
     }
     /// Elevated card surface: matches panel on Dark/Light, a step above
-    /// panel on Xfinity.
+    /// panel on Midnight.
     static func card(for appearance: AppAppearance) -> Color {
         switch appearance {
-        case .xfinity: return rgb(30, 38, 71)
+        case .midnight: return rgb(30, 38, 71)
         default: return panel(for: appearance)
         }
     }
@@ -242,19 +242,19 @@ enum StreamTheme {
         switch appearance {
         case .light: return rgb(28, 28, 30)
         case .dark: return rgb(250, 250, 250)
-        case .xfinity: return rgb(255, 255, 255)
+        case .midnight: return rgb(255, 255, 255)
         }
     }
     static func muted(for appearance: AppAppearance) -> Color {
         switch appearance {
         case .light: return rgb(107, 114, 128)
         case .dark: return rgb(161, 161, 170)
-        case .xfinity: return rgb(139, 147, 184)
+        case .midnight: return rgb(139, 147, 184)
         }
     }
     static func accent(for appearance: AppAppearance) -> Color {
         switch appearance {
-        case .xfinity: return rgb(124, 108, 255)
+        case .midnight: return rgb(124, 108, 255)
         default: return rgb(229, 9, 20)
         }
     }

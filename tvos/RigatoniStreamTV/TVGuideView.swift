@@ -6,7 +6,7 @@ import SwiftUI
 //  1. Channel with no EPG -> full-width LIVE block for the slot.
 //  2. Provider returns no EPG at all (or a gateway is in use) ->
 //     plain channel rows with LIVE badges. The grid is never empty.
-// Inspired by the X1 layout language only — no Xfinity/Comcast logos,
+// Inspired by cable-box guide layout language only — no third-party logos,
 // trademarks or copied assets.
 struct TVProgram: Identifiable {
     var id: String { channelID + "-" + String(Int(start.timeIntervalSince1970)) }

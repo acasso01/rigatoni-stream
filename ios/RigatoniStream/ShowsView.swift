@@ -42,6 +42,21 @@ private struct ShowsBrowser: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Search TV shows", text: $query)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .submitLabel(.search)
+                    if !query.isEmpty {
+                        Button { query = "" } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        }.accessibilityLabel("Clear search")
+                    }
+                }
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                .padding(.horizontal)
                 if let reason = store.unavailableReason {
                     Text(reason).foregroundStyle(.secondary).padding()
                     Button("Provider settings") { model.settingsVisible = true }.padding(.horizontal)
@@ -95,7 +110,6 @@ private struct ShowsBrowser: View {
         }
         .background { StreamBackdrop() }
         .foregroundStyle(StreamTheme.text(for: AppAppearance(rawValue: appearance) ?? .dark))
-        .searchable(text: $query, prompt: "Search this TV show category")
         .onChange(of: query) { _, _ in visibleCount = 60 }
         .task(id: "\(model.libraryRevision)-\(retry)-\(category)") {
             if loadedRevision != model.libraryRevision || loadedRetry != retry {

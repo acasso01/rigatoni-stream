@@ -275,6 +275,20 @@ struct GlobalSearchView: View {
         NavigationStack {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                        TextField("Movies, Live TV and TV Shows", text: $query)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .submitLabel(.search)
+                        if !query.isEmpty {
+                            Button { query = "" } label: {
+                                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                            }.accessibilityLabel("Clear search")
+                        }
+                    }
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
                     Picker("Search in", selection: $filter) {
                         Text("All").tag("all"); Text("Movies").tag(LibraryKind.movies.rawValue); Text("Live TV").tag(LibraryKind.live.rawValue); Text("TV Shows").tag("series")
                     }.pickerStyle(.segmented)
@@ -326,7 +340,6 @@ struct GlobalSearchView: View {
                 }.padding()
             }.background { StreamBackdrop() }
             .navigationTitle("Search")
-            .searchable(text: $query, prompt: "Movies, Live TV and TV Shows")
             .task(id: "\(hasQuery)-\(model.libraryRevision)-\(retry)") {
                 guard hasQuery, model.providerReady else { return }
                 notices = []
@@ -401,9 +414,9 @@ struct LibraryPreferences: Codable {
     }
 }
 enum AppAppearance: String, CaseIterable, Identifiable {
-    case dark, light, xfinity
+    case dark, light, midnight
     var id: String { rawValue }
-    var title: String { switch self { case .dark: return "Dark"; case .light: return "iOS Light"; case .xfinity: return "Xfinity" } }
+    var title: String { switch self { case .dark: return "Dark"; case .light: return "iOS Light"; case .midnight: return "Midnight" } }
     var scheme: ColorScheme { self == .light ? .light : .dark }
     var accent: Color { StreamTheme.accent(for: self) }
 }
