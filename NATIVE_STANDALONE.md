@@ -56,7 +56,7 @@ bundle exec pod install
 open RigatoniStreamTV.xcworkspace
 ```
 
-For a first-time project, run `bash setup.sh` from `ios/` or `tvos/` instead. Run it from a full repository checkout: tvOS shares sources and `configure_http.py` with iOS. Setup no longer asks for your provider hostname.
+For a first-time project, run `bash setup.sh` from `ios/` or `tvos/` instead. Run it from a full repository checkout: tvOS shares sources with iOS, and applies its local `tvos/configure_http.py` (falling back to `ios/configure_http.py` only if the local twin is missing). Setup no longer asks for your provider hostname.
 
 In Xcode choose the app scheme, your signing team and the connected iPhone/paired Apple TV, then **Product → Run**. Keep Developer Mode enabled. Updating code here does not automatically update a sideloaded app: rebuild/install from your Mac. Free personal-team provisioning needs periodic reinstallation.
 

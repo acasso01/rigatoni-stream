@@ -97,7 +97,7 @@ struct ProviderEditor: View {
             Form {
                 Section(value.kind.title) {
                     TextField("Provider name", text: $value.name).focused($nameFocused)
-                    TextField(value.kind == .m3u ? "M3U playlist URL" : "Server URL (http:// or https://)", text: $value.server)
+                    TextField(value.kind == .m3u ? "M3U playlist URL" : "Server URL, e.g. http://example.com:8080", text: $value.server)
                         .providerTextInput()
                     if value.kind == .xtream {
                         TextField("Username", text: $value.username).providerTextInput()
