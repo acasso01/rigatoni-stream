@@ -101,7 +101,7 @@ private struct TVPinnedRow: View {
                                         .frame(width: 240, alignment: .leading)
                                 }
                             }
-                            .buttonStyle(.card)
+                            .buttonStyle(TVCardButtonStyle())
                         }
                     }
                     .padding(.vertical, 12)
@@ -113,19 +113,8 @@ private struct TVPinnedRow: View {
             defer { loading = false }
             do {
                 // Lightweight per-row fetch using the shared catalog types.
-                if model.provider.requiresGateway {
-                    let raw = try await model.gatewayRows(kind: .live, category: category.id)
-                    items = raw.compactMap { CatalogItem.parse($0, kind: .live) }.map {
-                        var item = $0
-                        item.playbackURL = try? model.gatewayPlaybackURL(id: item.id, kind: .live)
-                        return item
-                    }
-                } else {
-                    let url = try model.provider.apiURL(action: LibraryKind.live.streamAction, category: category.id)
-                    let data = try await BoundedTransfer(limit: 32 * 1024 * 1024).fetch(url)
-                    guard let raw = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
-                    items = raw.compactMap { CatalogItem.parse($0, kind: .live) }
-                }
+                let loaded = try await model.catalog.items(kind: .live, category: category.id, model: model)
+                try Task.checkCancellation(); items = loaded
             } catch { items = [] }
         }
     }

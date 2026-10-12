@@ -37,7 +37,7 @@ struct TVMoviesView: View {
             .background { StreamBackdrop() }
             .task(id: "\(model.libraryRevision)-\(retry)") {
                 categories = []; featured = nil; count = 4; error = ""
-                guard model.signedIn, model.providerReady else { return }
+                guard model.providerReady else { return }
                 loading = true; defer { loading = false }
                 do {
                     let loaded = try await catalog.categories(kind: .movies, model: model)
@@ -106,7 +106,7 @@ private struct TVMovieShelf: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: 28) {
                     ForEach(items) { item in
-                        Button { play(item) } label: { TVCatalogCard(item: item) }.buttonStyle(.card).contextMenu {
+                        Button { play(item) } label: { TVCatalogCard(item: item) }.buttonStyle(TVCardButtonStyle()).contextMenu {
                             Button(TVFavorites.contains(item: item, model: model) ? "Remove from Saved" : "Save to Favorites") { TVFavorites.toggle(item: item, model: model) }
                         }
                     }

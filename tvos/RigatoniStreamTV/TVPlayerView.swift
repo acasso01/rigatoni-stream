@@ -166,7 +166,7 @@ struct TVPlayerView: View {
 
     private var playbackURL: URL? {
         currentItem.playbackURL
-            ?? (provider.requiresGateway ? nil : try? provider.streamURL(item: currentItem))
+            ?? (try? provider.streamURL(item: currentItem))
     }
 
     private var cache: Int { currentItem.kind == .live ? liveBuffer : movieBuffer }
@@ -250,6 +250,12 @@ struct TVPlayerView: View {
                 }
                 .foregroundStyle(.white)
                 .transition(.opacity)
+                // Tap anywhere while the overlay is up dismisses it immediately
+                // (the tapped button's own action still runs first). Deferred a
+                // tick so channel changes / play toggles settle before hiding.
+                .simultaneousGesture(TapGesture().onEnded {
+                    DispatchQueue.main.async { hideControls() }
+                })
             }
         }
         .focusable(!controlsVisible)
@@ -320,5 +326,11 @@ struct TVPlayerView: View {
             guard !Task.isCancelled, player.playing, !seeking else { return }
             withAnimation(.easeOut(duration: 0.2)) { controlsVisible = false }
         }
+    }
+
+    /// Hides the overlay immediately; the timed auto-hide stays as a fallback.
+    private func hideControls() {
+        hideTask?.cancel()
+        withAnimation(.easeOut(duration: 0.2)) { controlsVisible = false }
     }
 }
