@@ -97,6 +97,7 @@ struct TVLoginView: View {
 // delete settings, sign out. No vault semantics were changed.
 struct TVSettingsView: View {
     @EnvironmentObject private var model: AppModel
+    @AppStorage("rigatoni-appearance") private var appearance = "dark"
     @State private var deleting = false
     @State private var visiblePassword = false
     @AppStorage("rigatoni-live-buffer-ms") private var liveBuffer = 1500
@@ -117,6 +118,9 @@ struct TVSettingsView: View {
 
                     settingsGroup(title: "Personalize") {
                         NavigationLink("Themes & hidden categories / channels") { LibraryCustomizationView() }
+                Picker("Theme", selection: $appearance) {
+                    ForEach(AppAppearance.allCases) { Text($0.title).tag($0.rawValue) }
+                }.pickerStyle(.segmented)
                     }
                     settingsGroup(title: "Provider") {
                         Text(model.provider.requiresGateway

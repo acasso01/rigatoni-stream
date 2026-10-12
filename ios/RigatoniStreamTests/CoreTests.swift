@@ -3,6 +3,64 @@ import UIKit
 @testable import RigatoniStream
 
 final class CoreTests: XCTestCase {
+    func testEPGDecodesTitlesPrefersEpochTimestampsAndKeepsAdjacentNextProgram() {
+        let root: [String: Any] = ["epg_listings": [
+            ["id": "1", "title": Data("Sports".utf8).base64EncodedString(), "start_timestamp": "1000", "stop_timestamp": "2000", "start": "2099-01-01 00:00:00"],
+            ["id": "2", "title": "Next program", "start_timestamp": 2000, "stop_timestamp": 3000],
+            ["id": "3", "title": "Bad interval", "start_timestamp": 4000, "stop_timestamp": 3000],
+            ["id": "4", "title": "Bad timestamp", "start_timestamp": "1e200", "stop_timestamp": "2e200"]
+        ]]
+        let programs = EPGParser.programs(root)
+        XCTAssertEqual(programs.map(\.title), ["Sports", "Next program"])
+        let listing = EPGParser.nowNext(programs, at: Date(timeIntervalSince1970: 1500))
+        XCTAssertEqual(listing.now?.title, "Sports")
+        XCTAssertEqual(listing.next?.title, "Next program")
+        XCTAssertEqual(EPGParser.nowNext(programs, at: Date(timeIntervalSince1970: 2000)).now?.title, "Next program")
+    }
+    @MainActor func testGuideCacheLimitsConcurrencyAndSeparatesAccounts() async {
+        var active = 0; var peak = 0; var calls = 0
+        let cache = EPGCache(limit: 3, concurrency: 2) { _, _ in
+            active += 1; peak = max(peak, active); calls += 1
+            try? await Task.sleep(for: .milliseconds(10))
+            active -= 1; return []
+        }
+        let provider = Provider(server: "https://provider.example.invalid", username: "dummy", password: "dummy")
+        await withTaskGroup(of: Void.self) { group in
+            for number in 1...8 { group.addTask { _ = await cache.programs(streamID: String(number), provider: provider, scope: "account-a") } }
+        }
+        XCTAssertLessThanOrEqual(peak, 2)
+        XCTAssertLessThanOrEqual(cache.cachedCount, 3)
+        _ = await cache.programs(streamID: "99", provider: provider, scope: "account-a")
+        let before = calls
+        _ = await cache.programs(streamID: "99", provider: provider, scope: "account-a")
+        XCTAssertEqual(calls, before)
+        _ = await cache.programs(streamID: "99", provider: provider, scope: "account-b")
+        XCTAssertEqual(calls, before + 1)
+        cache.reset(); XCTAssertEqual(cache.cachedCount, 0)
+    }
+    @MainActor func testGuideResetDiscardsLateProviderResponses() async {
+        let cache = EPGCache { _, _ in
+            try? await Task.sleep(for: .milliseconds(40)); return []
+        }
+        let provider = Provider(server: "https://provider.example.invalid", username: "dummy", password: "dummy")
+        let request = Task { await cache.programs(streamID: "1", provider: provider, scope: "old-account") }
+        try? await Task.sleep(for: .milliseconds(10))
+        cache.reset(); _ = await request.value
+        XCTAssertEqual(cache.cachedCount, 0)
+    }
+    func testSavedFavoritesKeepAccountScopesSeparateAndPersistNoURLs() throws {
+        let key = "favorites-test-" + UUID().uuidString
+        defer { UserDefaults.standard.removeObject(forKey: key) }
+        let record = SavedRecord(kind: "movie", itemID: "7", name: "Movie", ext: "mkv", categoryID: "2", addedAt: Date())
+        XCTAssertTrue(SavedCollection.toggle(record, key: key))
+        XCTAssertEqual(SavedCollection.items(key: key).map(\.id), ["movie:7"])
+        XCTAssertTrue(SavedCollection.items(key: key + "other-account").isEmpty)
+        let json = try XCTUnwrap(UserDefaults.standard.data(forKey: key))
+        let stored = try XCTUnwrap(String(data: json, encoding: .utf8))
+        for field in ["poster", "playbackURL", "username", "password", "server", "http"] { XCTAssertFalse(stored.contains(field)) }
+        XCTAssertFalse(SavedCollection.toggle(record, key: key))
+        XCTAssertTrue(SavedCollection.items(key: key).isEmpty)
+    }
     @MainActor func testSeriesURLPreservesBasePathAndEncodesCredentials() throws {
         var provider = Provider()
         provider.server = "https://provider.example.invalid/base%20path"

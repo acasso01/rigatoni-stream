@@ -93,6 +93,9 @@ private struct TVSeriesBrowser: View {
                     } else if store.series.isEmpty {
                         Text("No shows in this category.").foregroundStyle(TVTheme.muted)
                     } else {
+                        if let hero = store.series.first {
+                            TVHeroBanner(title: hero.name, subtitle: "TV show", badge: "FEATURED SHOW", poster: hero.poster, posterKind: .movies) { selectedSeries = hero }
+                        }
                         LazyVGrid(
                             columns: [GridItem(.adaptive(minimum: 220), spacing: 28)],
                             spacing: 32
@@ -108,6 +111,9 @@ private struct TVSeriesBrowser: View {
                                     }
                                 }
                                 .buttonStyle(.card)
+                                .contextMenu {
+                                    Button(TVFavorites.contains(id: item.id, kind: "series", model: model) ? "Remove from Saved" : "Save to Favorites") { TVFavorites.toggleSeries(item, model: model) }
+                                }
                             }
                         }
                         if store.series.count > visibleCount {
@@ -148,7 +154,7 @@ private struct TVSeriesPoster: View {
 
 // MARK: - Series detail: seasons -> episodes -> player
 
-private struct TVSeriesDetailView: View {
+struct TVSeriesDetailView: View {
     let series: SeriesItem
     @ObservedObject var store: SeriesStore
     @EnvironmentObject private var model: AppModel

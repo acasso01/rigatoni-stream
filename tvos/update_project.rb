@@ -6,11 +6,11 @@ target = project.targets.find { |candidate| candidate.name == 'RigatoniStreamTV'
 abort 'Apple TV target missing' unless target
 group = project.main_group.children.find { |candidate| candidate.respond_to?(:path) && candidate.path == 'RigatoniStreamTV' }
 group ||= project.main_group.new_group('RigatoniStreamTV', 'RigatoniStreamTV')
-%w[TVShowsView.swift TVLastWatched.swift TVHistoryRail.swift].each do |name|
+%w[TVShowsView.swift TVLastWatched.swift TVHistoryRail.swift TVGuideView.swift TVHeroBanner.swift TVFavorites.swift TVSavedView.swift].each do |name|
   file = group.files.find { |candidate| candidate.path == name } || group.new_file(name)
   target.source_build_phase.add_file_reference(file) unless target.source_build_phase.files_references.include?(file)
 end
-%w[Discovery.swift Series.swift].each do |name|
+%w[Discovery.swift Series.swift EPG.swift Saved.swift].each do |name|
   unless target.source_build_phase.files_references.any? { |file| file.path&.end_with?(name) }
     shared = project.main_group.children.find { |candidate| candidate.name == 'Shared' } || project.main_group.new_group('Shared')
     file = shared.new_file('../ios/RigatoniStream/' + name)

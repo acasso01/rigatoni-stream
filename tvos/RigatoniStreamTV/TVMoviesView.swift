@@ -19,14 +19,7 @@ struct TVMoviesView: View {
                     StreamHeading(title: "Movies", subtitle: "Make tonight a movie night.")
                     if !categories.isEmpty { categoryStrip }
                     if let featured {
-                        HStack(spacing: 22) {
-                            ProviderPoster(url: featured.poster, kind: .movies).frame(width: 96, height: 144).clipShape(RoundedRectangle(cornerRadius: 12))
-                            VStack(alignment: .leading, spacing: 12) {
-                                Text("IN THE SPOTLIGHT").font(.caption).foregroundStyle(.secondary)
-                                Text(featured.name).font(.title2.bold()).lineLimit(2)
-                                Button("Movie details") { playing = featured }.buttonStyle(.bordered)
-                            }
-                        }
+                        TVHeroBanner(title: featured.name, subtitle: "Movie details, overview and Continue/Restart", badge: "FEATURED MOVIE", poster: featured.poster, posterKind: .movies) { playing = featured }
                     }
                     else if loading { ProgressView("Loading movies…").padding(40) }
                     if !model.providerReady { Text("Save your provider in Settings to browse movies.").foregroundStyle(.secondary) }
@@ -113,7 +106,9 @@ private struct TVMovieShelf: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: 28) {
                     ForEach(items) { item in
-                        Button { play(item) } label: { TVCatalogCard(item: item) }.buttonStyle(.card)
+                        Button { play(item) } label: { TVCatalogCard(item: item) }.buttonStyle(.card).contextMenu {
+                            Button(TVFavorites.contains(item: item, model: model) ? "Remove from Saved" : "Save to Favorites") { TVFavorites.toggle(item: item, model: model) }
+                        }
                     }
                 }.padding(.vertical, 20).padding(.horizontal, 12)
             }

@@ -1,36 +1,129 @@
 import SwiftUI
 
-// Root of the tvOS app: sign-in gate, then a top tab bar with
-// Home, Live TV, Movies, Search and Settings.
+// Root of the tvOS app: sign-in gate, then an X1-style left nav rail with
+// the content area to its right. The rail replaces the old top tab bar.
+// The content tree is rebuilt when the theme changes (`.id(theme)`), which
+// keeps the static TVTheme color accessors in sync without touching every
+// view.
+enum TVSection: String, CaseIterable, Identifiable {
+    case home, guide, live, movies, shows, saved, search, settings
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .home: return "Home"
+        case .guide: return "Guide"
+        case .live: return "Live TV"
+        case .movies: return "Movies"
+        case .shows: return "TV Shows"
+        case .saved: return "Saved"
+        case .search: return "Search"
+        case .settings: return "Settings"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .home: return "house"
+        case .guide: return "square.grid.2x2"
+        case .live: return "tv"
+        case .movies: return "film"
+        case .shows: return "play.tv"
+        case .saved: return "bookmark"
+        case .search: return "magnifyingglass"
+        case .settings: return "gearshape"
+        }
+    }
+}
+
 struct TVRootView: View {
     @EnvironmentObject private var model: AppModel
+    @AppStorage("rigatoni-appearance") private var appearance = "dark"
+    @State private var selection: TVSection = .home
+    @FocusState private var focusedItem: TVSection?
 
     var body: some View {
         ZStack {
-            StreamBackdrop()
+            TVTheme.background.ignoresSafeArea()
             Group {
                 if model.starting {
                     ProgressView("Opening Ant Streams…")
                 } else if model.signedIn {
-                    TabView {
-                        TVHomeView()
-                            .tabItem { Label("Home", systemImage: "house") }
-                        TVMoviesView()
-                            .tabItem { Label("Movies", systemImage: "film") }
-                        TVLiveView()
-                            .tabItem { Label("Live TV", systemImage: "tv") }
-                        TVShowsView()
-                            .tabItem { Label("TV Shows", systemImage: "play.tv") }
-                        TVSearchView()
-                            .tabItem { Label("Search", systemImage: "magnifyingglass") }
-                        TVSettingsView()
-                            .tabItem { Label("Settings", systemImage: "gearshape") }
+                    HStack(spacing: 0) {
+                        navRail
+                        content
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
+                    // Rebuild the whole tree on theme change so every
+                    // TVTheme.xxx static resolves to the new theme.
+                    .id(appearance)
                 } else {
                     TVLoginView()
                 }
             }
             .foregroundStyle(TVTheme.text)
+        }
+    }
+
+    // MARK: - Nav rail
+
+    private var navRail: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("ANT STREAMS")
+                .font(.caption.bold())
+                .foregroundStyle(TVTheme.muted)
+                .padding(.horizontal, 36)
+                .padding(.top, 64)
+                .padding(.bottom, 32)
+
+            ForEach(TVSection.allCases) { section in
+                let selected = selection == section
+                let focused = focusedItem == section
+                Button { selection = section } label: {
+                    HStack(spacing: 20) {
+                        Image(systemName: section.symbol)
+                            .font(.title2)
+                            .frame(width: 40)
+                        Text(section.title)
+                            .font(.title3.weight(selected ? .bold : .regular))
+                        Spacer()
+                    }
+                    .padding(.horizontal, 32)
+                    .padding(.vertical, 22)
+                    .background(
+                        selected ? TVTheme.accent
+                        : focused ? TVTheme.focusCard
+                        : Color.clear
+                    )
+                    .foregroundStyle(selected ? .white : TVTheme.text)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+                .buttonStyle(.plain)
+                .focused($focusedItem, equals: section)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 4)
+            }
+
+            Spacer()
+        }
+        .frame(width: 340)
+        .background(TVTheme.panel)
+    }
+
+    // MARK: - Content
+
+    @ViewBuilder
+    private var content: some View {
+        switch selection {
+        case .home: TVHomeView()
+        case .guide: TVGuideView()
+        case .live: TVLiveView()
+        case .movies: TVMoviesView()
+        case .shows: TVShowsView()
+        case .saved: TVSavedView()
+        case .search: TVSearchView()
+        case .settings: TVSettingsView()
         }
     }
 }

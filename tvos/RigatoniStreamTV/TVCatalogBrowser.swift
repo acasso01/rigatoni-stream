@@ -153,6 +153,9 @@ struct TVCatalogBrowser: View {
                                 Image(systemName: "play.circle.fill").font(.title2).foregroundStyle(.secondary)
                             }.padding(.horizontal, 22).frame(minHeight: 86)
                         }.buttonStyle(TVCatalogRowStyle(selected: false)).focused($focusedCard, equals: item.id)
+                        .contextMenu {
+                            Button(TVFavorites.contains(item: item, model: model) ? "Remove from Saved" : "Save to Favorites") { TVFavorites.toggle(item: item, model: model) }
+                        }
                     }
                 }.padding(.vertical, 12)
             } else {
@@ -160,6 +163,9 @@ struct TVCatalogBrowser: View {
                     ForEach(visible) { item in
                         Button { playing = item } label: { TVCatalogCard(item: item) }
                             .buttonStyle(.card).focused($focusedCard, equals: item.id)
+                            .contextMenu {
+                                Button(TVFavorites.contains(item: item, model: model) ? "Remove from Saved" : "Save to Favorites") { TVFavorites.toggle(item: item, model: model) }
+                            }
                     }
                 }.padding(.vertical, 12)
             }
@@ -202,7 +208,7 @@ struct TVCatalogCard: View {
     }
 }
 
-private struct TVCatalogRowStyle: ButtonStyle {
+struct TVCatalogRowStyle: ButtonStyle {
     let selected: Bool
     func makeBody(configuration: Configuration) -> some View {
         TVCatalogRowLabel(configuration: configuration, selected: selected)

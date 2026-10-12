@@ -43,7 +43,9 @@ struct TVSearchView: View {
                                     Label(hit.item.kind.title, systemImage: hit.item.kind.symbol)
                                         .font(.caption).foregroundStyle(.secondary)
                                 }
-                            }.buttonStyle(.card)
+                            }.buttonStyle(.card).contextMenu {
+                                Button(TVFavorites.contains(item: hit.item, model: model) ? "Remove from Saved" : "Save to Favorites") { TVFavorites.toggle(item: hit.item, model: model) }
+                            }
                         }
                     }.padding(.vertical, 20)
                     if results.count > limit { Button("More results") { limit += 60 } }

@@ -7,6 +7,11 @@ struct RigatoniStreamTVApp: App {
     @StateObject private var model = AppModel()
     @AppStorage("rigatoni-appearance") private var appearance = "dark"
 
+    init() {
+        if UserDefaults.standard.string(forKey: "rigatoni-appearance") == "netflix" {
+            UserDefaults.standard.set("dark", forKey: "rigatoni-appearance")
+        }
+    }
     var body: some Scene {
         WindowGroup {
             TVRootView()

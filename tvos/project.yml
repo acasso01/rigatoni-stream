@@ -24,6 +24,8 @@ targets:
       - path: ../ios/RigatoniStream/Library.swift
       - path: ../ios/RigatoniStream/Discovery.swift
       - path: ../ios/RigatoniStream/Series.swift
+      - path: ../ios/RigatoniStream/EPG.swift
+      - path: ../ios/RigatoniStream/Saved.swift
     info:
       path: Generated/Info.plist
       properties:

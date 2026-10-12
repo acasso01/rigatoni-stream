@@ -229,12 +229,16 @@ struct MovieShelf: View {
     @EnvironmentObject private var catalog: SessionCatalog
     let category: CatalogCategory
     let play: (CatalogItem) -> Void
+    @AppStorage("rigatoni-appearance") private var appearance = "dark"
     @State private var items: [CatalogItem] = []
     @State private var error = ""
     @State private var retry = 0
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
+            HStack(spacing: 10) {
+                Capsule()
+                    .fill(StreamTheme.accent(for: AppAppearance(rawValue: appearance) ?? .dark))
+                    .frame(width: 4, height: 22)
                 Text(category.name).font(.title3.bold()).lineLimit(1)
                 Spacer()
                 NavigationLink("See all") { LibraryView(kind: .movies, initialCategoryID: category.id, embedded: true) }.font(.subheadline.weight(.semibold))
@@ -387,11 +391,11 @@ struct LibraryPreferences: Codable {
     }
 }
 enum AppAppearance: String, CaseIterable, Identifiable {
-    case dark, light, netflix
+    case dark, light, xfinity
     var id: String { rawValue }
-    var title: String { switch self { case .dark: return "iOS Dark"; case .light: return "iOS Light"; case .netflix: return "Netflix" } }
+    var title: String { switch self { case .dark: return "Dark"; case .light: return "iOS Light"; case .xfinity: return "Xfinity" } }
     var scheme: ColorScheme { self == .light ? .light : .dark }
-    var accent: Color { self == .netflix ? .red : .blue }
+    var accent: Color { StreamTheme.accent(for: self) }
 }
 
 struct LibraryCustomizationView: View {

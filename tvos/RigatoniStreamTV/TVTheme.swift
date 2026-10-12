@@ -6,8 +6,11 @@ enum TVTheme {
     static var background: Color { StreamTheme.background } // #09090b
     static var panel: Color { StreamTheme.panel }      // #17171b
     static let text = Color.primary       // #fafafa
-    static let red = Color(red: 0.898, green: 0.035, blue: 0.078)        // #e50914
-    static let muted = Color.gray
+    static var card: Color { StreamTheme.panel }
+    static var focusCard: Color { StreamTheme.accent.opacity(0.22) }
+    static var accent: Color { StreamTheme.accent }
+    static var red: Color { StreamTheme.accent }        // #e50914
+    static var muted: Color { StreamTheme.muted }
     static let corner: CGFloat = 18
 }
 

@@ -282,6 +282,10 @@ final class AppModel: ObservableObject {
     var gatewayMovieCatalog: [String: Any]?
     var gatewayMedia: [LibraryKind: [String: String]] = [:]
     func resetGateway() {
+        EPGCache.shared.reset()
+        #if os(tvOS)
+        TVFavorites.reset()
+        #endif
         catalog.reset()
         preferences = LibraryPreferences.read(key: preferenceKey)
         gatewayConnectTask?.cancel(); gatewayConnectTask = nil; gatewayConnection = nil

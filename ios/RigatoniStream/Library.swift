@@ -199,23 +199,46 @@ enum CategoryPins {
 // Shared native visual language; playback and credential handling stay separate.
 enum StreamTheme {
     static var appearance: AppAppearance { AppAppearance(rawValue: UserDefaults.standard.string(forKey: "rigatoni-appearance") ?? "dark") ?? .dark }
+    private static func rgb(_ r: Double, _ g: Double, _ b: Double) -> Color { Color(red: r / 255, green: g / 255, blue: b / 255) }
     static func background(for appearance: AppAppearance) -> Color {
         switch appearance {
-        case .light: return .white
-        case .dark: return Color(red: 0.055, green: 0.06, blue: 0.08)
-        case .netflix: return .black
+        case .light: return rgb(242, 242, 247)
+        case .dark: return rgb(9, 9, 11)
+        case .xfinity: return rgb(11, 27, 51)
         }
     }
     static func panel(for appearance: AppAppearance) -> Color {
-        appearance == .light ? Color(red: 0.94, green: 0.94, blue: 0.96) : Color(red: 0.11, green: 0.12, blue: 0.15)
+        switch appearance {
+        case .light: return rgb(255, 255, 255)
+        case .dark: return rgb(23, 23, 27)
+        case .xfinity: return rgb(19, 41, 75)
+        }
     }
     static func text(for appearance: AppAppearance) -> Color {
-        appearance == .light ? Color(red: 0.08, green: 0.09, blue: 0.11) : Color(red: 0.96, green: 0.96, blue: 0.97)
+        switch appearance {
+        case .light: return rgb(28, 28, 30)
+        case .dark: return rgb(250, 250, 250)
+        case .xfinity: return rgb(255, 255, 255)
+        }
+    }
+    static func muted(for appearance: AppAppearance) -> Color {
+        switch appearance {
+        case .light: return rgb(107, 114, 128)
+        case .dark: return rgb(161, 161, 170)
+        case .xfinity: return rgb(143, 163, 191)
+        }
+    }
+    static func accent(for appearance: AppAppearance) -> Color {
+        switch appearance {
+        case .xfinity: return rgb(59, 157, 255)
+        default: return rgb(229, 9, 20)
+        }
     }
     static var text: Color { text(for: appearance) }
     static var background: Color { background(for: appearance) }
     static var panel: Color { panel(for: appearance) }
-    static let accent = Color(red: 0.9, green: 0.035, blue: 0.08)
+    static var muted: Color { muted(for: appearance) }
+    static var accent: Color { accent(for: appearance) }
     static let corner: CGFloat = 18
 }
 
@@ -240,6 +263,61 @@ struct StreamHeading: View {
 }
 
 #if os(iOS)
+/// X1-styled live channel row: logo, channel name with a LIVE badge, and
+/// now/next program info when the provider supplies short-EPG data.
+/// Without EPG (gateway providers, or providers without listings) it falls
+/// back to the plain channel row with the LIVE badge.
+struct LiveChannelRow: View {
+    let item: CatalogItem
+    let provider: Provider
+    let epgEnabled: Bool
+    let scope: String
+    @AppStorage("rigatoni-appearance") private var appearance = "dark"
+    @State private var guide: EPGNowNext?
+    private var theme: AppAppearance { AppAppearance(rawValue: appearance) ?? .dark }
+    var body: some View {
+        HStack(spacing: 16) {
+            ProviderPoster(url: item.poster, kind: .live)
+                .frame(width: 86, height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 8) {
+                    Text(item.name).font(.headline).lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Text("LIVE").font(.caption2.weight(.bold))
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .foregroundStyle(.white)
+                        .background(StreamTheme.accent(for: theme), in: Capsule())
+                        .accessibilityHidden(true)
+                }
+                if let now = guide?.now {
+                    Text("Now · \(now.title)").font(.subheadline).lineLimit(1)
+                        .foregroundStyle(StreamTheme.muted(for: theme))
+                    HStack(spacing: 4) {
+                        Text(now.timeRange).font(.caption).monospacedDigit()
+                        if let next = guide?.next, !next.title.isEmpty {
+                            Text("· Next: \(next.title)").font(.caption).lineLimit(1)
+                        }
+                    }.foregroundStyle(StreamTheme.muted(for: theme).opacity(0.85))
+                }
+            }
+            Image(systemName: "play.circle.fill").font(.title2).foregroundStyle(.secondary)
+        }.padding(12).foregroundStyle(.primary)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: StreamTheme.corner))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(item.name), live" + (guide?.now.map { ", now playing \($0.title)" } ?? ""))
+            .task(id: scope + ":" + item.id) {
+                guide = nil
+                guard epgEnabled else { return }
+                while !Task.isCancelled {
+                    let value = await EPGCache.shared.nowNext(streamID: item.id, provider: provider, scope: scope)
+                    guard !Task.isCancelled else { return }; guide = value
+                    do { try await Task.sleep(for: .seconds(60)) } catch { return }
+                }
+            }
+    }
+}
+
 struct LibraryView: View {
     @AppStorage("rigatoni-appearance") private var appearance = "dark"
     @EnvironmentObject private var model: AppModel
@@ -345,15 +423,7 @@ struct LibraryView: View {
                             LazyVStack(spacing: 10) {
                                 ForEach(visible) { item in
                                     Button { playing = item } label: {
-                                        HStack(spacing: 16) {
-                                            ProviderPoster(url: item.poster, kind: .live)
-                                                .frame(width: 86, height: 56)
-                                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                                            Text(item.name).font(.headline).lineLimit(2)
-                                                .frame(maxWidth: .infinity, alignment: .leading)
-                                            Image(systemName: "play.circle.fill").font(.title2).foregroundStyle(.secondary)
-                                        }.padding(12).foregroundStyle(.primary)
-                                            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: StreamTheme.corner))
+                                        LiveChannelRow(item: item, provider: model.provider, epgEnabled: !model.provider.requiresGateway, scope: (model.preferenceKey ?? "") + "-\(model.libraryRevision)")
                                     }.buttonStyle(.plain)
                                 }
                             }
