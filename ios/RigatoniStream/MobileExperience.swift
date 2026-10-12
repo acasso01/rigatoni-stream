@@ -51,13 +51,13 @@ struct MobileRootView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             HStack(spacing: 0) {
-                ForEach([MobileSection.home, .live, .movies, .search]) { entry in
+                ForEach([MobileSection.home, .live, .movies, .shows, .search]) { entry in
                     Button { section = entry } label: {
                         navLabel(entry.title, symbol: entry.symbol, selected: section == entry)
                     }.accessibilityAddTraits(section == entry ? .isSelected : [])
                 }
                 Button { more = true } label: {
-                    navLabel("More", symbol: "ellipsis.circle", selected: [.guide, .shows, .saved, .settings].contains(section))
+                    navLabel("More", symbol: "ellipsis.circle", selected: [.guide, .saved, .settings].contains(section))
                 }
             }
             .buttonStyle(.plain).padding(.top, 10).padding(.bottom, 6)
@@ -162,8 +162,8 @@ struct MobileHomeView: View {
     @State private var error = ""
     @State private var retry = 0
     private var pinned: [CatalogCategory] {
-        guard let id = model.account.session?.user.id, let host = try? model.provider.baseURL().host else { return [] }
-        let pins = UserDefaults.standard.stringArray(forKey: CategoryPins.key(accountID: id, host: host)) ?? []
+        guard let key = model.pinKey else { return [] }
+        let pins = UserDefaults.standard.stringArray(forKey: key) ?? []
         return CategoryPins.ordered(categories.filter { pins.contains($0.id) && model.preferences.categoryVisible($0.id, kind: .live) }, pins: pins)
     }
     var body: some View {
@@ -342,10 +342,10 @@ struct MobileGuideRow: View {
                     }
                 }
             }
-        }.padding(14).background(StreamTheme.panel, in: RoundedRectangle(cornerRadius: 16))
+        }.padding(14).background(StreamTheme.card, in: RoundedRectangle(cornerRadius: 16))
             .task(id: "\(model.libraryRevision)-\(item.id)") {
                 programs = []; loading = true
-                guard !model.provider.requiresGateway, let scope = model.preferenceKey else { loading = false; return }
+                guard let scope = model.preferenceKey else { loading = false; return }
                 while !Task.isCancelled {
                     let loaded = await EPGCache.shared.programs(streamID: item.id, provider: model.provider, scope: scope + "-\(model.libraryRevision)")
                     guard !Task.isCancelled else { return }
@@ -392,7 +392,7 @@ struct MobileSavedContent: View {
                     HStack(spacing: 14) {
                         Image(systemName: record.kind == "live" ? "tv" : record.kind == "movie" ? "film" : "play.tv")
                             .font(.title2).frame(width: 56, height: 64)
-                            .background(StreamTheme.panel, in: RoundedRectangle(cornerRadius: 12))
+                            .background(StreamTheme.card, in: RoundedRectangle(cornerRadius: 12))
                         VStack(alignment: .leading, spacing: 5) {
                             Text(record.name).font(.headline).lineLimit(2)
                             if let progress = model.preferences.progress[(record.kind == "episode" ? "series-" : "") + record.itemID], record.kind != "live" {
@@ -415,7 +415,7 @@ struct MobileSavedContent: View {
         .onChange(of: model.libraryRevision) { _, _ in reload() }
         .fullScreenCover(item: $playing, onDismiss: reload) { item in
             if episode {
-                PlayerView(item: item, provider: model.provider, startSeconds: model.preferences.progress["series-" + item.id]?.seconds ?? 0, progressID: "series-" + item.id)
+                DirectPlayerView(item: item, provider: model.provider, startSeconds: model.preferences.progress["series-" + item.id]?.seconds ?? 0, progressID: "series-" + item.id)
             } else { CatalogDestination(item: item) }
         }
         .sheet(item: $show) { request in
@@ -434,22 +434,17 @@ struct MobileSavedContent: View {
         guard model.providerReady else { notice = "Save your provider in Settings first."; return }
         let scope = model.preferenceKey
         if record.kind == "series" {
-            guard !model.provider.requiresGateway else { notice = "TV Shows needs direct provider access."; return }
+            guard model.provider.kind == .xtream else { notice = "TV Shows requires an Xtream Codes provider."; return }
             show = MobileShowRequest(series: SeriesItem(id: record.itemID, name: record.name, poster: nil), store: SeriesStore(model: model)); return
         }
         var item = CatalogItem(id: record.itemID, name: record.name, kind: record.kind == "live" ? .live : .movies,
                                fileExtension: record.ext, poster: nil, categoryID: record.categoryID)
         do {
             if record.kind == "episode" {
-                guard !model.provider.requiresGateway else { throw AppFailure("This episode requires direct provider access.") }
+                guard model.provider.kind == .xtream else { throw AppFailure("This episode requires an Xtream Codes provider.") }
                 item.playbackURL = try SeriesStore.seriesStreamURL(provider: model.provider, episodeID: record.itemID, ext: record.ext)
-            } else if model.provider.requiresGateway {
-                guard !record.categoryID.isEmpty else { throw AppFailure("Open this title's category to refresh its playback link.") }
-                let items = try await model.catalog.items(kind: item.kind, category: record.categoryID, model: model)
-                guard scope == model.preferenceKey else { return }
-                guard let fresh = items.first(where: { $0.id == record.itemID }), model.preferences.visible(fresh) else { throw AppFailure("This title is no longer available.") }
-                item = fresh
-            }
+            } else { item = try await model.resolve(item) }
+            guard scope == model.preferenceKey else { return }
             episode = record.kind == "episode"; playing = item
         } catch { if scope == model.preferenceKey { notice = error.localizedDescription } }
     }

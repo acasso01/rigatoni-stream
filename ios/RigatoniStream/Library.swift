@@ -13,9 +13,11 @@ final class BoundedTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendab
     private var session: URLSession?
     private var task: URLSessionDataTask?
     private var finished = false
+    private var finalURL: URL?
+    var resolvedURL: URL? { lock.lock(); defer { lock.unlock() }; return finalURL }
     init(limit: Int, timeout: TimeInterval = 30) { self.limit = limit; self.timeout = timeout }
     func fetch(_ url: URL, headers: [String: String] = [:], method: String = "GET") async throws -> Data {
-        guard TransportPolicy.permits(url) else { throw AppFailure("This HTTP host is not enabled in your app build. Configure your provider hostname on your Mac or use the HTTPS gateway.") }
+        guard TransportPolicy.permits(url) else { throw AppFailure("This URL is unsupported or this app build is missing its HTTP transport setting.") }
         return try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { next in
                 lock.lock()
@@ -28,7 +30,7 @@ final class BoundedTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendab
                 let connection = URLSession(configuration: config, delegate: self, delegateQueue: nil)
                 session = connection
                 var request = URLRequest(url: url); request.httpMethod = method
-                headers.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }; request.setValue("application/json,image/*", forHTTPHeaderField: "Accept")
+                headers.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }; request.setValue("*/*", forHTTPHeaderField: "Accept")
                 let nextTask = connection.dataTask(with: request); task = nextTask
                 lock.unlock(); nextTask.resume()
             }
@@ -45,14 +47,28 @@ final class BoundedTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendab
     }
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
         guard let url = request.url, TransportPolicy.permits(url) else {
-            completionHandler(nil); finish(.failure(AppFailure("The provider redirected to an HTTP host that is not enabled. Use the HTTPS gateway for this provider."))); return
+            completionHandler(nil); finish(.failure(AppFailure("The provider redirected to an unsupported URL."))); return
         }
-        completionHandler(request)
+        var next = request
+        if response.url?.host != request.url?.host || response.url?.scheme != request.url?.scheme || response.url?.port != request.url?.port {
+            next.setValue(nil, forHTTPHeaderField: "Authorization")
+            next.setValue(nil, forHTTPHeaderField: "Cookie")
+        }
+        completionHandler(next)
     }
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
-        guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode), response.expectedContentLength <= Int64(limit) else {
-            completionHandler(.cancel); finish(.failure(AppFailure("Provider response failed or is too large. Try another category."))); return
+        guard let response = response as? HTTPURLResponse else {
+            completionHandler(.cancel); finish(.failure(AppFailure("The server returned an unsupported response."))); return
         }
+        guard (200..<300).contains(response.statusCode) else {
+            let message = [401,403].contains(response.statusCode) ? "Provider access was denied. Check your credentials or subscription." :
+                response.statusCode == 429 ? "The provider is rate limiting requests. Wait before retrying." : "Provider request failed (HTTP \(response.statusCode))."
+            completionHandler(.cancel); finish(.failure(AppFailure(message))); return
+        }
+        guard response.expectedContentLength <= Int64(limit) else {
+            completionHandler(.cancel); finish(.failure(AppFailure("Provider response is too large. Try a smaller category."))); return
+        }
+        lock.lock(); finalURL = response.url; lock.unlock()
         completionHandler(.allow)
     }
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
@@ -204,14 +220,22 @@ enum StreamTheme {
         switch appearance {
         case .light: return rgb(242, 242, 247)
         case .dark: return rgb(9, 9, 11)
-        case .xfinity: return rgb(11, 27, 51)
+        case .xfinity: return rgb(11, 16, 38)
         }
     }
     static func panel(for appearance: AppAppearance) -> Color {
         switch appearance {
         case .light: return rgb(255, 255, 255)
         case .dark: return rgb(23, 23, 27)
-        case .xfinity: return rgb(19, 41, 75)
+        case .xfinity: return rgb(22, 29, 56)
+        }
+    }
+    /// Elevated card surface: matches panel on Dark/Light, a step above
+    /// panel on Xfinity.
+    static func card(for appearance: AppAppearance) -> Color {
+        switch appearance {
+        case .xfinity: return rgb(30, 38, 71)
+        default: return panel(for: appearance)
         }
     }
     static func text(for appearance: AppAppearance) -> Color {
@@ -225,18 +249,19 @@ enum StreamTheme {
         switch appearance {
         case .light: return rgb(107, 114, 128)
         case .dark: return rgb(161, 161, 170)
-        case .xfinity: return rgb(143, 163, 191)
+        case .xfinity: return rgb(139, 147, 184)
         }
     }
     static func accent(for appearance: AppAppearance) -> Color {
         switch appearance {
-        case .xfinity: return rgb(59, 157, 255)
+        case .xfinity: return rgb(124, 108, 255)
         default: return rgb(229, 9, 20)
         }
     }
     static var text: Color { text(for: appearance) }
     static var background: Color { background(for: appearance) }
     static var panel: Color { panel(for: appearance) }
+    static var card: Color { card(for: appearance) }
     static var muted: Color { muted(for: appearance) }
     static var accent: Color { accent(for: appearance) }
     static let corner: CGFloat = 18
@@ -346,10 +371,7 @@ struct LibraryView: View {
         let shown = categories.filter { model.preferences.categoryVisible($0.id, kind: kind) }
         return kind == .live ? CategoryPins.ordered(shown, pins: pinnedIDs) : shown
     }
-    private var pinKey: String? {
-        guard let accountID = model.account.session?.user.id, let host = try? model.provider.baseURL().host else { return nil }
-        return CategoryPins.key(accountID: accountID, host: host)
-    }
+    private var pinKey: String? { model.pinKey }
     private var visible: [CatalogItem] { Array(filtered.dropFirst(page * 120).prefix(120)) }
     var body: some View {
         if embedded { libraryContent }
@@ -418,13 +440,13 @@ struct LibraryView: View {
                         if loading { ProgressView(progress.isEmpty ? "Loading \(kind.title.lowercased())…" : progress).frame(maxWidth: .infinity) }
                         if !error.isEmpty {
                             Text(error).foregroundStyle(.secondary)
-                            Button("Retry") { model.resetGateway(); retry += 1 }.buttonStyle(.bordered)
+                            Button("Retry") { model.refreshProvider(); retry += 1 }.buttonStyle(.bordered)
                         } else if !loading && filtered.isEmpty { Text(query.isEmpty ? "No titles available." : "No matching titles.").foregroundStyle(.secondary) }
                         if kind == .live {
                             LazyVStack(spacing: 10) {
                                 ForEach(visible) { item in
                                     Button { playing = item } label: {
-                                        LiveChannelRow(item: item, provider: model.provider, epgEnabled: !model.provider.requiresGateway, scope: (model.preferenceKey ?? "") + "-\(model.libraryRevision)")
+                                        LiveChannelRow(item: item, provider: model.provider, epgEnabled: true, scope: (model.preferenceKey ?? "") + "-\(model.libraryRevision)")
                                     }.buttonStyle(.plain)
                                 }
                             }
@@ -461,26 +483,16 @@ struct LibraryView: View {
             }
             .fullScreenCover(item: $playing) { CatalogDestination(item: $0, channels: kind == .live ? items : []) }
     }
-    private func rows(action: String, category: String? = nil) async throws -> [[String: Any]] {
-        if model.provider.requiresGateway { return try await model.gatewayRows(kind: kind, category: category) }
-        let url = try model.provider.apiURL(action: action, category: category)
-        let data = try await BoundedTransfer(limit: 32 * 1024 * 1024).fetch(url)
-        guard let rows = try JSONSerialization.jsonObject(with: data) as? [[String: Any]], rows.count <= 50000 else { throw AppFailure("The provider returned an invalid or oversized category.") }
-        return rows
-    }
+
     private func loadCategories() async {
         categories = []; selected = ""; replaceItems([]); error = ""; query = ""; page = 0; progress = ""; categoryCache = [:]; allCache = nil
         pinnedIDs = pinKey.flatMap { UserDefaults.standard.stringArray(forKey: $0) } ?? []
-        guard model.signedIn, model.providerReady else { return }
+        guard model.providerReady else { return }
         loading = true
         do {
-            let result = try await rows(action: kind.categoryAction)
-            guard !Task.isCancelled else { return }
-            categories = result.compactMap { row in
-                let id = row["category_id"].map { String(describing: $0) } ?? ""
-                guard !id.isEmpty, id.allSatisfy(\.isNumber) else { return nil }
-                return CatalogCategory(id: id, name: row["category_name"] as? String ?? "Category")
-            }
+            let loaded = try await model.catalog.categories(kind: kind, model: model)
+            try Task.checkCancellation()
+            categories = loaded
             selected = orderedCategories.first { $0.id == initialCategoryID }?.id ?? orderedCategories.first?.id ?? ""
             if initialCategoryID == "all" { scope = .all }
             if selected.isEmpty { loading = false }
@@ -504,9 +516,9 @@ struct LibraryView: View {
         try await model.catalog.items(kind: kind, category: category, model: model)
     }
     private func loadItems() async {
-        guard !selected.isEmpty, !categories.isEmpty, model.signedIn, model.providerReady else { return }
+        guard !selected.isEmpty, !categories.isEmpty, model.providerReady else { return }
         error = ""; progress = ""; page = 0
-        if scope == .all, let cached = allCache, !model.provider.requiresGateway {
+        if scope == .all, let cached = allCache {
             replaceItems(cached.items); error = cached.notice; loading = false; return
         }
         replaceItems([]); loading = true

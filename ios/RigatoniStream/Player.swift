@@ -250,10 +250,10 @@ struct PlayerView: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            if let url = currentItem.playbackURL ?? (provider.requiresGateway ? nil : try? provider.streamURL(item: currentItem)) {
-                PlayerSurface(player: player, url: url, cache: currentItem.kind == .live ? liveBuffer : movieBuffer, mode: displayMode, onTap: showControls)
+            if let url = currentItem.playbackURL ?? (try? provider.streamURL(item: currentItem)) {
+                PlayerSurface(player: player, url: url, cache: currentItem.kind == .live ? liveBuffer : movieBuffer, mode: displayMode, onTap: toggleControls)
                     .ignoresSafeArea()
-                    .accessibilityLabel("Video. Tap to show playback controls.")
+                    .accessibilityLabel("Video. Tap to toggle playback controls.")
             } else { Text("Invalid provider settings.") }
             if controlsVisible {
                 HStack(spacing: 40) {
@@ -312,7 +312,7 @@ struct PlayerView: View {
         .onChange(of: currentItem.id) { _, _ in MobileRecords.watched(currentItem, episode: progressID != nil, model: model) }
         .onAppear { MobileRecords.watched(currentItem, episode: progressID != nil, model: model); player.resumeSeconds = startSeconds; player.progressRecorder = { seconds, duration in model.saveProgress(id: progressID ?? item.id, seconds: seconds, duration: duration) }; player.title = currentItem.name; player.isLive = currentItem.kind == .live; showControls() }
         .onChange(of: currentItem.id) { _, _ in
-            guard let url = currentItem.playbackURL ?? (provider.requiresGateway ? nil : try? provider.streamURL(item: currentItem)) else {
+            guard let url = currentItem.playbackURL ?? (try? provider.streamURL(item: currentItem)) else {
                 player.stop(); return
             }
             player.title = currentItem.name; player.isLive = currentItem.kind == .live
@@ -340,6 +340,15 @@ struct PlayerView: View {
             try? await Task.sleep(for: .seconds(4))
             guard !Task.isCancelled, player.playing, !seeking else { return }
             withAnimation(.easeOut(duration: 0.2)) { controlsVisible = false }
+        }
+    }
+    /// Tap toggles the overlay immediately; the timed auto-hide stays as a fallback.
+    private func toggleControls() {
+        if controlsVisible {
+            hideTask?.cancel()
+            withAnimation(.easeOut(duration: 0.2)) { controlsVisible = false }
+        } else {
+            showControls()
         }
     }
 }
