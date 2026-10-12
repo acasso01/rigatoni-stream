@@ -85,11 +85,18 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var deleting = false
     @State private var visiblePassword = false
+    @AppStorage("rigatoni-appearance") private var appearance = AppAppearance.dark.rawValue
     @AppStorage("rigatoni-live-buffer-ms") private var liveBuffer = 1500
     @AppStorage("rigatoni-movie-buffer-ms") private var movieBuffer = 4000
     var body: some View {
         NavigationStack {
             Form {
+                Section("Theme") {
+                    Picker("Theme", selection: $appearance) {
+                        ForEach(AppAppearance.allCases) { Text($0.title).tag($0.rawValue) }
+                    }.pickerStyle(.segmented)
+                    Text("Dark, iOS Light, or Xfinity — the X1-style navy look. Saved on this device only.").font(.footnote).foregroundStyle(.secondary)
+                }
                 Section("Personalize") {
                     NavigationLink("Themes & hidden categories / channels") { LibraryCustomizationView() }
                 }
