@@ -14,7 +14,7 @@ struct ShowsView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { model.settingsVisible = true } label: { Image(systemName: "person.crop.circle") }
-                        .accessibilityLabel("Account settings")
+                        .accessibilityLabel("Provider settings")
                 }
             }
         }
@@ -44,7 +44,7 @@ private struct ShowsBrowser: View {
             VStack(alignment: .leading, spacing: 20) {
                 if let reason = store.unavailableReason {
                     Text(reason).foregroundStyle(.secondary).padding()
-                    Button("Account & provider") { model.settingsVisible = true }.padding(.horizontal)
+                    Button("Provider settings") { model.settingsVisible = true }.padding(.horizontal)
                 } else {
                     ScrollView(.horizontal, showsIndicators: true) {
                         LazyHStack(spacing: 10) {
@@ -57,7 +57,7 @@ private struct ShowsBrowser: View {
                                 }.buttonStyle(.plain).fixedSize(horizontal: true, vertical: false)
                             }
                         }.padding(.horizontal).padding(.vertical, 8)
-                    }
+                    }.frame(height: 74).scrollClipDisabled()
                     if store.loading { ProgressView("Loading shows…").frame(maxWidth: .infinity).padding(30) }
                     else if !store.error.isEmpty {
                         VStack(alignment: .leading, spacing: 12) {

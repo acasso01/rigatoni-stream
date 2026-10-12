@@ -1,7 +1,7 @@
 import SwiftUI
 
 // Shared, bounded Xtream series access for iPhone and Apple TV.
-// Provider credentials stay in memory and the existing encrypted account vault.
+// Provider credentials stay in memory and this device’s Keychain.
 struct SeriesItem: Identifiable {
     let id: String
     let name: String

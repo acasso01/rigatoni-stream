@@ -4,6 +4,11 @@ project 'RigatoniStreamTV.xcodeproj'
 target 'RigatoniStreamTV' do
   # Local podspec; it declares a tvOS deployment target and ships an xcframework.
   pod 'VLCKit', :podspec => '../ios/VLCKit.podspec'
+  if Xcodeproj::Project.open('RigatoniStreamTV.xcodeproj').targets.any? { |t| t.name == 'RigatoniStreamTVTests' }
+    target 'RigatoniStreamTVTests' do
+      inherit! :search_paths
+    end
+  end
 end
 
 # Keep the dependency compatible with SDKs that reject VLCKit's old tvOS 11 minimum.

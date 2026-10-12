@@ -47,6 +47,12 @@ jobs:
           set -o pipefail
           DEVICE_ID=$(xcrun simctl list devices available -j | ruby -rjson -e 'JSON.parse(STDIN.read)["devices"].values.flatten.each { |d| if d["name"].start_with?("iPhone"); puts d["udid"]; break; end }')
           test -n "$DEVICE_ID"
+          bash fixtures/start.sh
+          xcrun simctl boot "$DEVICE_ID" || true
+          xcrun simctl bootstatus "$DEVICE_ID" -b
+          xcrun simctl keychain "$DEVICE_ID" add-root-cert fixtures/media/test-cert.pem
+          export SIMCTL_CHILD_ANT_REQUIRE_FIXTURES=1
+          export TEST_RUNNER_ANT_REQUIRE_FIXTURES=1
           xcodebuild test-without-building -workspace RigatoniStream.xcworkspace -scheme RigatoniStream -destination "platform=iOS Simulator,id=$DEVICE_ID" -derivedDataPath .build CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- | tee tests.log
       - name: Save build reports
         if: always()

@@ -46,8 +46,21 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         MARKETING_VERSION: '0.2.0'
         CURRENT_PROJECT_VERSION: '2'
+  RigatoniStreamTVTests:
+    type: bundle.unit-test
+    platform: tvOS
+    sources:
+      - ../ios/RigatoniStreamTests/VaultTests.swift
+      - ../ios/RigatoniStreamTests/DirectConnectionTests.swift
+    dependencies:
+      - target: RigatoniStreamTV
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
 schemes:
   RigatoniStreamTV:
     build:
       targets:
         RigatoniStreamTV: all
+    test:
+      targets: [RigatoniStreamTVTests]

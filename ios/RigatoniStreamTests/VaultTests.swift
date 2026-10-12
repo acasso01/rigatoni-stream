@@ -1,5 +1,9 @@
 import XCTest
+#if os(tvOS)
+@testable import RigatoniStreamTV
+#else
 @testable import RigatoniStream
+#endif
 
 final class VaultTests: XCTestCase {
     func testKeychainMultipleProvidersReloadEditSelectDelete() throws {
@@ -22,11 +26,11 @@ final class VaultTests: XCTestCase {
         XCTAssertNil(UserDefaults.standard.object(forKey: service))
     }
     func testXtreamAuthenticationResponses() throws {
-        for auth: Any in [1, "1", true] {
+        for auth in [1, "1", true] as [Any] {
             let data = try JSONSerialization.data(withJSONObject: ["user_info": ["auth": auth, "status": "Active"]])
             XCTAssertNoThrow(try ProviderAuthentication.validateXtream(data))
         }
-        for root: [String: Any] in [["user_info": ["auth": 0]], ["user_info": ["auth": 1, "status": "Expired"]], ["unexpected": true]] {
+        for root in [["user_info": ["auth": 0]], ["user_info": ["auth": 1, "status": "Expired"]], ["unexpected": true]] as [[String: Any]] {
             XCTAssertThrowsError(try ProviderAuthentication.validateXtream(JSONSerialization.data(withJSONObject: root)))
         }
         XCTAssertThrowsError(try ProviderAuthentication.validateXtream(Data("<html>error</html>".utf8)))
