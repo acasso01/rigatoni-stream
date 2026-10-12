@@ -166,7 +166,7 @@ struct TVPlayerView: View {
 
     private var playbackURL: URL? {
         currentItem.playbackURL
-            ?? (provider.requiresGateway ? nil : try? provider.streamURL(item: currentItem))
+            ?? (try? provider.streamURL(item: currentItem))
     }
 
     private var cache: Int { currentItem.kind == .live ? liveBuffer : movieBuffer }

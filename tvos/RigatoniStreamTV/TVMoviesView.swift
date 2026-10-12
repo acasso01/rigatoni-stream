@@ -37,7 +37,7 @@ struct TVMoviesView: View {
             .background { StreamBackdrop() }
             .task(id: "\(model.libraryRevision)-\(retry)") {
                 categories = []; featured = nil; count = 4; error = ""
-                guard model.signedIn, model.providerReady else { return }
+                guard model.providerReady else { return }
                 loading = true; defer { loading = false }
                 do {
                     let loaded = try await catalog.categories(kind: .movies, model: model)

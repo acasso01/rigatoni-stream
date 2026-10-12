@@ -255,7 +255,7 @@ struct TVSeriesDetailView: View {
             selectedSeason = seasons.first?.number ?? 0
         }
         .fullScreenCover(item: $playing) { item in
-            TVPlayerView(item: item, provider: model.provider, startSeconds: model.preferences.progress["series-" + item.id]?.seconds ?? 0, lastWatchedKind: "series", progressID: "series-" + item.id)
+            DirectPlayerView(item: item, provider: model.provider, startSeconds: model.preferences.progress["series-" + item.id]?.seconds ?? 0, progressID: "series-" + item.id)
         }
     }
 

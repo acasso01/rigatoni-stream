@@ -2,7 +2,7 @@ import SwiftUI
 
 @main
 struct RigatoniStreamTVApp: App {
-    // Shared with the iPhone build: AppModel/AccountAPI live in
+    // Shared with the iPhone build: AppModel live in
     // ../ios/RigatoniStream/Core.swift and are compiled into this target.
     @StateObject private var model = AppModel()
     @AppStorage("rigatoni-appearance") private var appearance = "dark"

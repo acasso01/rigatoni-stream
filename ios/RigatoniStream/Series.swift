@@ -36,11 +36,11 @@ final class SeriesStore: ObservableObject {
     init(model: AppModel) { self.model = model }
 
     var unavailableReason: String? {
-        guard model.signedIn, model.providerReady else {
-            return "Save your provider in Settings to browse TV shows."
+        guard model.providerReady else {
+            return "Add your provider in Settings to browse TV shows."
         }
-        if model.provider.requiresGateway {
-            return "TV Shows needs a direct provider connection — it isn't available through the gateway yet."
+        if model.provider.kind == .m3u {
+            return "M3U playlists do not supply seasons and episodes. Add an Xtream Codes provider for TV Shows; playlist video entries remain available in Movies."
         }
         return nil
     }

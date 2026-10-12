@@ -93,7 +93,7 @@ enum EPGParser {
         else { waiters.removeFirst().resume() }
     }
     func programs(streamID: String, provider: Provider, scope: String) async -> [EPGProgram] {
-        guard !scope.isEmpty, !provider.requiresGateway, streamID.allSatisfy(\.isNumber), !streamID.isEmpty else { return [] }
+        guard !scope.isEmpty, streamID.allSatisfy(\.isNumber), !streamID.isEmpty else { return [] }
         let key = scope + ":" + streamID
         if let entry = entries[key], Date().timeIntervalSince(entry.fetched) < 300 { return entry.programs }
         if let flight = flights[key] { return await flight.task.value }
@@ -118,6 +118,7 @@ enum EPGParser {
     }
     private static func fetch(streamID: String, provider: Provider) async -> [EPGProgram] {
         do {
+            if provider.kind == .m3u { return try await PlaylistStore.shared.programs(streamID: streamID, provider: provider) }
             var components = URLComponents(url: try provider.apiURL(action: "get_short_epg"), resolvingAgainstBaseURL: false)!
             components.queryItems = (components.queryItems ?? []) + [URLQueryItem(name: "stream_id", value: streamID), URLQueryItem(name: "limit", value: "8")]
             guard let url = components.url else { return [] }

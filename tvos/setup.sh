@@ -6,7 +6,6 @@ if ! command -v xcodegen >/dev/null; then
   exit 1
 fi
 xcodegen generate
-# Uses an ignored local plist; enter only the DNS hostname, never credentials.
 python3 ../ios/configure_http.py
 bundle install
 bundle exec pod install

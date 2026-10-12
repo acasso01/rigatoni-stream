@@ -11,6 +11,9 @@ struct TVSearchView: View {
     @State private var playing: CatalogItem?
     @State private var limit = 60
     @State private var retry = 0
+    // The search field mounts synchronously, so focusing it on appear is
+    // deterministic. Selecting it opens the tvOS keyboard.
+    @FocusState private var fieldFocused: Bool
     private var hasQuery: Bool { query.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 }
 
     var body: some View {
@@ -21,7 +24,7 @@ struct TVSearchView: View {
                     TextField("Search movies and Live TV", text: $query)
                         .font(.system(size: 26))
                         .frame(maxWidth: .infinity, minHeight: 64)
-                        .tvContentEntry()
+                        .focused($fieldFocused)
                         .accessibilityLabel("Search movies and live TV")
                     Text("Select the search field to type with your remote or iPhone.")
                         .font(.system(size: 20)).foregroundStyle(.secondary)
@@ -31,7 +34,7 @@ struct TVSearchView: View {
                         Text("Live TV").tag(LibraryKind.live.rawValue)
                     }.pickerStyle(.segmented).frame(maxWidth: 580)
                 }
-                .focusSection()
+                .onAppear { fieldFocused = true }
                 if !hasQuery {
                     Label("Enter at least two characters to explore your library", systemImage: "sparkle.magnifyingglass")
                         .foregroundStyle(.secondary).padding(36).frame(maxWidth: .infinity, alignment: .leading)
@@ -64,7 +67,7 @@ struct TVSearchView: View {
         }
         .background { StreamBackdrop() }
         .task(id: "\(hasQuery)-\(model.libraryRevision)-\(retry)") {
-            guard hasQuery, model.signedIn, model.providerReady else { return }
+            guard hasQuery, model.providerReady else { return }
             notices = []
             async let movies: Void = load(.movies)
             async let live: Void = load(.live)

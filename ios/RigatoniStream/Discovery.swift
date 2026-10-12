@@ -24,14 +24,14 @@ final class SessionCatalog: ObservableObject {
     func categories(kind: LibraryKind, model: AppModel) async throws -> [CatalogCategory] {
         if let cached = categoryLists[kind] { return cached }
         let epoch = generation
-        let rows: [[String: Any]]
-        if model.provider.requiresGateway { rows = try await model.gatewayRows(kind: kind, category: nil) }
-        else {
-            let url = try model.provider.apiURL(action: kind.categoryAction)
-            let data = try await BoundedTransfer(limit: 4 * 1024 * 1024).fetch(url)
-            guard let result = try JSONSerialization.jsonObject(with: data) as? [[String: Any]], result.count <= 50000 else { throw AppFailure("The category list is too large or invalid.") }
-            rows = result
+        if model.provider.kind == .m3u {
+            let playlist = try await PlaylistStore.shared.load(model.provider)
+            guard epoch == generation else { throw CancellationError() }
+            let result = playlist.categories[kind] ?? []
+            categoryLists[kind] = result
+            return result
         }
+        let rows = try await DirectCatalog.rows(provider: model.provider, action: kind.categoryAction)
         guard epoch == generation else { throw CancellationError() }
         var seen = Set<String>()
         let result = rows.compactMap { row -> CatalogCategory? in
@@ -49,30 +49,15 @@ final class SessionCatalog: ObservableObject {
         if let job = jobs[key] { return try await job.value }
         let epoch = generation
         let task = Task { @MainActor in
-            let rows: [[String: Any]]
-            if model.provider.requiresGateway {
-                guard let category else { throw AppFailure("Load gateway categories individually.") }
-                rows = try await model.gatewayRows(kind: kind, category: category)
-            } else {
-                let url = try model.provider.apiURL(action: kind.streamAction, category: category)
-                let data = try await BoundedTransfer(limit: 32 * 1024 * 1024, timeout: category == nil ? 10 : 30).fetch(url)
-                let worker = Task.detached(priority: .userInitiated) {
-                    guard let result = try JSONSerialization.jsonObject(with: data) as? [[String: Any]], result.count <= CatalogIndex.maximumItems else { throw AppFailure("The catalog is too large or invalid.") }
-            return result
-                }
-                rows = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
+            if model.provider.kind == .m3u {
+                let playlist = try await PlaylistStore.shared.load(model.provider)
+                return playlist.items.filter { $0.kind == kind && (category == nil || $0.categoryID == category) }
             }
+            let rows = try await DirectCatalog.rows(provider: model.provider, action: kind.streamAction, category: category)
             try Task.checkCancellation()
             let worker = Task.detached(priority: .userInitiated) { rows.compactMap { CatalogItem.parse($0, kind: kind) } }
             var result = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
             try Task.checkCancellation()
-            if model.provider.requiresGateway {
-                result = result.map { item in
-                    var item = item
-                    item.playbackURL = try? model.gatewayPlaybackURL(id: item.id, kind: kind)
-                    return item
-                }
-            }
             if let category { result = result.map { var item = $0; if item.categoryID.isEmpty { item.categoryID = category }; return item } }
             return result
         }
@@ -95,7 +80,7 @@ final class SessionCatalog: ObservableObject {
         let epoch = generation
         let task = Task { @MainActor in
             let categories = try await self.categories(kind: kind, model: model)
-            return try await CatalogLoader.load(categoryIDs: categories.map(\.id), preferFullCatalog: !model.provider.requiresGateway, fetch: { category in
+            return try await CatalogLoader.load(categoryIDs: categories.map(\.id), preferFullCatalog: true, fetch: { category in
                 try await self.items(kind: kind, category: category, model: model)
             }, progress: { partial, message in
                 guard epoch == self.generation else { return }
@@ -199,7 +184,7 @@ struct MoviesHomeView: View {
                 featured = nil; categories = []; error = ""; categoryCount = 6
                 featuredLoading = true
                 defer { featuredLoading = false }
-                guard model.signedIn, model.providerReady else { return }
+                guard model.providerReady else { return }
                 do {
                     let loaded = try await catalog.categories(kind: .movies, model: model)
                     try Task.checkCancellation()
@@ -322,7 +307,7 @@ struct GlobalSearchView: View {
             .navigationTitle("Search")
             .searchable(text: $query, prompt: "Movies and Live TV")
             .task(id: "\(hasQuery)-\(model.libraryRevision)-\(retry)") {
-                guard hasQuery, model.signedIn, model.providerReady else { return }
+                guard hasQuery, model.providerReady else { return }
                 notices = []
                 // Two media types at most, never one network request per keystroke.
                 async let movies: Void = load(.movies)
@@ -409,7 +394,7 @@ struct LibraryCustomizationView: View {
                 Picker("Theme", selection: $appearance) {
                     ForEach(AppAppearance.allCases) { Text($0.title).tag($0.rawValue) }
                 }
-                Text("Themes, hidden content and watch progress are saved on this device. Provider and gateway settings remain in your account.").font(.footnote).foregroundStyle(.secondary)
+                Text("Themes, hidden content and watch progress are saved on this device. Provider credentials are stored securely in Keychain.").font(.footnote).foregroundStyle(.secondary)
                 Picker("Manage", selection: $kind) { ForEach(LibraryKind.allCases) { Text($0.title).tag($0) } }
                 TextField("Find category or channel", text: $query)
                 Text("Visible categories").font(.title2.bold())
@@ -531,7 +516,7 @@ struct MovieDetailView: View {
         .task {
             defer { loading = false }
             do {
-                guard !model.provider.requiresGateway else { throw AppFailure("Movie details require direct provider access in this build. Playback is still available through the gateway.") }
+                guard model.provider.kind == .xtream else { throw AppFailure("M3U playlists do not include a movie overview or release date.") }
                 var parts = URLComponents(url: try model.provider.apiURL(action: "get_vod_info"), resolvingAgainstBaseURL: false)!
                 parts.queryItems?.append(URLQueryItem(name: "vod_id", value: item.id))
                 let data = try await BoundedTransfer(limit: 2 * 1024 * 1024).fetch(parts.url!)
@@ -540,11 +525,7 @@ struct MovieDetailView: View {
             } catch { if !Task.isCancelled { metadataNotice = error.localizedDescription } }
         }
         .fullScreenCover(isPresented: $playing) {
-            #if os(iOS)
-            PlayerView(item: item, provider: model.provider, startSeconds: resumeSeconds)
-            #else
-            TVPlayerView(item: item, provider: model.provider, startSeconds: resumeSeconds)
-            #endif
+            DirectPlayerView(item: item, provider: model.provider, startSeconds: resumeSeconds)
         }
     }
     private var posterWidth: CGFloat {
@@ -567,11 +548,7 @@ struct CatalogDestination: View {
     var body: some View {
         if item.kind == .movies { MovieDetailView(item: item) }
         else {
-            #if os(iOS)
-            PlayerView(item: item, provider: model.provider, channels: channels.filter(model.preferences.visible))
-            #else
-            TVPlayerView(item: item, provider: model.provider, channels: channels.filter(model.preferences.visible))
-            #endif
+            DirectPlayerView(item: item, provider: model.provider, channels: channels.filter(model.preferences.visible))
         }
     }
 }

@@ -1,216 +1,55 @@
 import SwiftUI
 
-// Sign-in screen. Same account and vault as the iPhone build: sign in with
-// the existing Ant Streams account and the saved provider populates automatically.
-// Provider credentials themselves stay in the encrypted account vault and are
-// never written to preferences, logs or disk caches.
-struct TVLoginView: View {
-    @EnvironmentObject private var model: AppModel
-    @State private var email = ""
-    @State private var password = ""
-    @State private var showPassword = false
-    @State private var createAccount = false
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                Image("BrandLogo").resizable().scaledToFit().frame(width: 160, height: 160).accessibilityHidden(true)
-                Text("Ant Streams")
-                    .font(.largeTitle.weight(.bold))
-                Text(createAccount ? "Create your account" : "Welcome back")
-                    .font(.title.bold())
-                Text("Your channels and movies, on the big screen.")
-                    .foregroundStyle(TVTheme.muted)
-
-                TextField("Email", text: $email)
-                    .textContentType(.emailAddress)
-                HStack {
-                    Group {
-                        if showPassword { TextField("Password", text: $password) }
-                        else { SecureField("Password", text: $password) }
-                    }
-                    .textContentType(createAccount ? .newPassword : .password)
-                    Button { showPassword.toggle() } label: {
-                        Image(systemName: showPassword ? "eye.slash" : "eye")
-                    }
-                    .accessibilityLabel(showPassword ? "Hide password" : "Show password")
-                }
-
-                Button(createAccount ? "Create account" : "Sign in") {
-                    Task { await authenticate() }
-                }
-                .buttonStyle(.card)
-                .tint(.white)
-                .disabled(model.busy || email.isEmpty || password.isEmpty)
-
-                Button(createAccount ? "Already have an account? Sign in" : "Create an account") {
-                    createAccount.toggle(); model.notice = ""
-                }
-                Button("Forgot password?") {
-                    Task {
-                        model.busy = true; defer { model.busy = false }
-                        do {
-                            try await model.account.recover(email: email)
-                            model.notice = "Check your email for the password reset link."
-                        } catch { model.notice = error.localizedDescription }
-                    }
-                }
-                .disabled(email.isEmpty || model.busy)
-
-                if model.busy { ProgressView() }
-                if !model.notice.isEmpty {
-                    Text(model.notice).font(.callout).foregroundStyle(TVTheme.muted)
-                }
-                Text("Use your existing Ant Streams account. Your provider login stays in the encrypted account vault.")
-                    .font(.footnote)
-                    .foregroundStyle(TVTheme.muted)
-            }
-            .frame(maxWidth: 720)
-            .padding(60)
-        }
-        .background { StreamBackdrop() }
-    }
-
-    private func authenticate() async {
-        model.busy = true; model.notice = ""; defer { model.busy = false }
-        do {
-            if createAccount {
-                guard try await model.account.signUp(
-                    email: email.trimmingCharacters(in: .whitespacesAndNewlines), password: password) else {
-                    password = ""
-                    model.notice = "Check your email to confirm your account, then sign in."
-                    return
-                }
-            } else {
-                try await model.account.signIn(
-                    email: email.trimmingCharacters(in: .whitespacesAndNewlines), password: password)
-            }
-            password = ""; model.signedIn = true
-            do { try await model.reloadSettings() }
-            catch { model.notice = "Signed in. \(error.localizedDescription)" }
-        } catch { model.notice = error.localizedDescription }
-    }
-}
-
-// Settings tab. Mirrors the iPhone build's SettingsView: provider + gateway
-// preferences (saved through the shared encrypted vault), playback buffers,
-// delete settings, sign out. No vault semantics were changed.
 struct TVSettingsView: View {
     @EnvironmentObject private var model: AppModel
     @AppStorage("rigatoni-appearance") private var appearance = "dark"
-    @State private var deleting = false
-    @State private var visiblePassword = false
     @AppStorage("rigatoni-live-buffer-ms") private var liveBuffer = 1500
     @AppStorage("rigatoni-movie-buffer-ms") private var movieBuffer = 4000
-
+    @AppStorage("ant-playback-engine") private var engine = "auto"
+    @State private var providers = false
+    @State private var customization = false
+    @FocusState private var entryFocused: Bool
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 28) {
-                    Text("Settings")
-                        .font(.largeTitle.bold())
-                        .padding(.top, 40)
-
-                    if let email = model.account.session?.user.email {
-                        Text("Signed in as \(email)")
-                            .foregroundStyle(TVTheme.muted)
-                    }
-
-                    settingsGroup(title: "Personalize") {
-                        NavigationLink("Themes & hidden categories / channels") { LibraryCustomizationView() }
-                            .tvContentEntry()
-                Picker("Theme", selection: $appearance) {
-                    ForEach(AppAppearance.allCases) { Text($0.title).tag($0.rawValue) }
-                }.pickerStyle(.segmented)
-                    }
-                    settingsGroup(title: "Provider") {
-                        Text(model.provider.requiresGateway
-                             ? "Playback route: HTTPS gateway"
-                             : "Playback route: direct provider")
-                            .font(.footnote).foregroundStyle(TVTheme.muted)
-                        TextField("Server URL", text: $model.provider.server)
-                        TextField("Username", text: $model.provider.username)
-                        HStack {
-                            Group {
-                                if visiblePassword { TextField("Provider password", text: $model.provider.password) }
-                                else { SecureField("Provider password", text: $model.provider.password) }
-                            }
-                            Button { visiblePassword.toggle() } label: {
-                                Image(systemName: visiblePassword ? "eye.slash" : "eye")
-                            }
-                            .accessibilityLabel("Show or hide provider password")
-                        }
-                        TextField("HTTPS gateway URL (optional)", text: $model.gateway)
-                        Text("Providers play directly when HTTPS or locally approved HTTP is available. Other HTTP hosts use your saved HTTPS gateway.")
-                            .font(.footnote).foregroundStyle(TVTheme.muted)
-                        HStack(spacing: 16) {
-                            Button("Save provider & gateway") { Task { await model.saveSettings() } }
-                                .buttonStyle(.card).tint(.white).disabled(model.busy)
-                            Button("Reload saved settings") {
-                                Task {
-                                    model.busy = true; defer { model.busy = false }
-                                    do { try await model.reloadSettings() }
-                                    catch { model.notice = error.localizedDescription }
-                                }
-                            }
-                            .buttonStyle(.card).disabled(model.busy)
-                        }
-                    }
-
-                    settingsGroup(title: "Playback buffer") {
-                        Picker("Live TV", selection: $liveBuffer) {
-                            Text("Low delay · 1.5 seconds").tag(1500)
-                            Text("Balanced · 3 seconds").tag(3000)
-                            Text("More stable · 6 seconds").tag(6000)
-                        }
-                        Picker("Movies", selection: $movieBuffer) {
-                            Text("4 seconds").tag(4000)
-                            Text("8 seconds").tag(8000)
-                            Text("12 seconds").tag(12000)
-                        }
-                        Text("These buffers add delay. Streams keep their original resolution; HD and 4K depend on the source, device and connection.")
-                            .font(.footnote).foregroundStyle(TVTheme.muted)
-                    }
-
-                    if !model.notice.isEmpty {
-                        Text(model.notice).foregroundStyle(TVTheme.muted)
-                    }
-
-                    settingsGroup(title: "Account") {
-                        HStack(spacing: 16) {
-                            Button("Delete saved provider & gateway") { deleting = true }
-                                .buttonStyle(.card).disabled(model.busy)
-                            Button("Sign out") { Task { await model.signOut() } }
-                                .buttonStyle(.card).disabled(model.busy)
-                        }
-                    }
-
-                    Text("Ant Streams 0.2 for tvOS · Native playback by VLCKit / VideoLAN (LGPL 2.1).")
-                        .font(.footnote).foregroundStyle(TVTheme.muted)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 32) {
+                Text("Settings").font(.system(size: 36, weight: .bold))
+                group("Providers") {
+                    Text(model.provider.name).font(.headline)
+                    Button("Add, edit or switch providers") { providers = true }.focused($entryFocused)
+                    Button("Refresh provider") { model.refreshProvider() }
+                    if model.provider.usesHTTP { Label("This provider uses unencrypted HTTP.", systemImage: "lock.open").font(.system(size: 20)) }
                 }
-                .frame(maxWidth: 900, alignment: .leading)
-                .padding(.horizontal, 60)
-                .padding(.bottom, 60)
-            }
-            .background { StreamBackdrop() }
-            .confirmationDialog(
-                "Delete your saved provider and gateway from your account?",
-                isPresented: $deleting, titleVisibility: .visible
-            ) {
-                Button("Delete settings", role: .destructive) { Task { await model.deleteSettings() } }
-            }
-        }
+                group("Appearance") {
+                    Picker("Theme", selection: $appearance) { ForEach(AppAppearance.allCases) { Text($0.title).tag($0.rawValue) } }.pickerStyle(.segmented)
+                    Button("Hidden categories / channels") { customization = true }
+                }
+                group("Playback") {
+                    Picker("Player", selection: $engine) {
+                        Text("Automatic").tag("auto"); Text("VLC compatibility").tag("vlc"); Text("Apple player").tag("apple")
+                    }
+                    Picker("Live TV buffer (VLC)", selection: $liveBuffer) {
+                        Text("Low delay · 1.5 seconds").tag(1500); Text("Balanced · 3 seconds").tag(3000); Text("More stable · 6 seconds").tag(6000)
+                    }
+                    Picker("Movie buffer (VLC)", selection: $movieBuffer) {
+                        Text("4 seconds").tag(4000); Text("8 seconds").tag(8000); Text("12 seconds").tag(12000)
+                    }
+                    Text("Automatic uses Apple playback for HLS/MP4 and VLC for other containers or decoding failures. Original quality is preserved.")
+                        .font(.system(size: 20)).foregroundStyle(.secondary)
+                }
+                if !model.notice.isEmpty { Text(model.notice).font(.system(size: 22)) }
+                Text("Ant Streams · Bring your own authorized provider. No channels or subscriptions supplied.")
+                    .font(.system(size: 20)).foregroundStyle(.secondary)
+            }.frame(maxWidth: 1100, alignment: .leading).padding(48)
+        }.background { StreamBackdrop() }
+            .onAppear { entryFocused = true }
+            .sheet(isPresented: $providers) { ProviderManagerView() }
+            .fullScreenCover(isPresented: $customization) { NavigationStack { LibraryCustomizationView() }.onExitCommand { customization = false } }
     }
-
-    private func settingsGroup<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text(title).font(.title2.bold())
+    private func group<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 22) {
+            Text(title).font(.system(size: 28, weight: .bold))
             content()
-        }
-        .padding(28)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .focusSection()
-        .background(TVTheme.panel)
-        .clipShape(RoundedRectangle(cornerRadius: TVTheme.corner))
+        }.padding(28).frame(maxWidth: .infinity, alignment: .leading)
+            .background(TVTheme.panel, in: RoundedRectangle(cornerRadius: 18)).focusSection()
     }
 }

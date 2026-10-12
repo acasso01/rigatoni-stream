@@ -26,13 +26,13 @@ jobs:
           brew install xcodegen
           xcodegen generate
           python3 test_http_config.py
-          python3 configure_http.py --host provider.example.invalid
+          python3 configure_http.py
       - name: Install native player
         run: |
-          bundle exec ruby -rxcodeproj -e 'p = Xcodeproj::Project.open("RigatoniStream.xcodeproj"); p.files.select { |f| %w[EPG.swift Saved.swift MobileExperience.swift].include?(f.path) }.each(&:remove_from_project); p.save'
+          bundle exec ruby -rxcodeproj -e 'p = Xcodeproj::Project.open("RigatoniStream.xcodeproj"); p.files.select { |f| %w[EPG.swift Saved.swift MobileExperience.swift DirectProviders.swift ProviderManagement.swift DirectPlayback.swift].include?(f.path) }.each(&:remove_from_project); p.save'
           bundle exec ruby update_project.rb
           bundle exec ruby update_project.rb
-          bundle exec ruby -rxcodeproj -e 'p = Xcodeproj::Project.open("RigatoniStream.xcodeproj"); t = p.targets.find { |x| x.name == "RigatoniStream" }; t.build_configurations.each { |x| i = Xcodeproj::Plist.read_from_path(x.build_settings["INFOPLIST_FILE"]); abort "HTTP setting lost" unless i.dig("NSAppTransportSecurity", "NSExceptionDomains", "provider.example.invalid"); abort "Audio background mode missing" unless i["UIBackgroundModes"].include?("audio") }; %w[EPG.swift Saved.swift MobileExperience.swift].each { |name| abort "New source missing or duplicated" unless t.source_build_phase.files_references.count { |x| x.path == name } == 1 }; abort "PiP source duplicated" unless t.source_build_phase.files_references.count { |x| x.path == "PictureInPictureBridge.m" } == 1'
+          bundle exec ruby -rxcodeproj -e 'p = Xcodeproj::Project.open("RigatoniStream.xcodeproj"); t = p.targets.find { |x| x.name == "RigatoniStream" }; t.build_configurations.each { |x| i = Xcodeproj::Plist.read_from_path(x.build_settings["INFOPLIST_FILE"]); abort "HTTP setting lost" unless i.dig("NSAppTransportSecurity", "NSAllowsArbitraryLoads") == true; abort "Audio background mode missing" unless i["UIBackgroundModes"].include?("audio") }; %w[EPG.swift Saved.swift MobileExperience.swift DirectProviders.swift ProviderManagement.swift DirectPlayback.swift].each { |name| abort "New source missing or duplicated" unless t.source_build_phase.files_references.count { |x| x.path == name } == 1 }; abort "PiP source duplicated" unless t.source_build_phase.files_references.count { |x| x.path == "PictureInPictureBridge.m" } == 1'
           bundle exec pod install
       - name: Compile iPhone app and tests
         run: |

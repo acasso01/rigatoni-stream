@@ -192,7 +192,7 @@ struct ShowDetailView: View {
             seasons = result.seasons; episodes = result.episodes; season = seasons.first?.number ?? 0
         }
         .fullScreenCover(item: $playing) { item in
-            PlayerView(item: item, provider: model.provider, startSeconds: startSeconds, progressID: "series-" + item.id)
+            DirectPlayerView(item: item, provider: model.provider, startSeconds: startSeconds, progressID: "series-" + item.id)
         }
     }
 

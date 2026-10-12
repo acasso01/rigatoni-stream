@@ -16,7 +16,7 @@ struct TVHistoryRail: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(spacing: 24) {
                         ForEach(records) { record in
-                            Button { open(record) } label: {
+                            Button { Task { await open(record) } } label: {
                                 VStack(alignment: .leading, spacing: 12) {
                                     Image(systemName: record.kind == "live" ? "tv" : record.kind == "series" ? "play.tv" : "film")
                                         .font(.system(size: 44)).frame(width: 260, height: 130)
@@ -34,9 +34,9 @@ struct TVHistoryRail: View {
         .onChange(of: model.libraryRevision) { _, _ in reload() }
         .fullScreenCover(item: $playing, onDismiss: { reload() }) { item in
             if playingKind == "series" {
-                TVPlayerView(item: item, provider: model.provider,
+                DirectPlayerView(item: item, provider: model.provider,
                              startSeconds: model.preferences.progress["series-" + item.id]?.seconds ?? 0,
-                             lastWatchedKind: "series", progressID: "series-" + item.id)
+                             progressID: "series-" + item.id)
             } else { CatalogDestination(item: item) }
         }
     }
@@ -48,19 +48,19 @@ struct TVHistoryRail: View {
         }
     }
 
-    private func open(_ record: TVWatchedRecord) {
+    private func open(_ record: TVWatchedRecord) async {
+        let scope = model.preferenceKey
         notice = ""; playingKind = record.kind
         let kind: LibraryKind = record.kind == "live" ? .live : .movies
         var item = CatalogItem(id: record.itemID, name: record.name, kind: kind, fileExtension: record.ext, poster: nil, categoryID: record.categoryID)
         do {
             if record.kind == "series" {
-                guard !model.provider.requiresGateway else {
-                    notice = "This episode requires a direct provider connection."; return
+                guard model.provider.kind == .xtream else {
+                    notice = "This episode requires an Xtream Codes provider."; return
                 }
                 item.playbackURL = try SeriesStore.seriesStreamURL(provider: model.provider, episodeID: item.id, ext: item.fileExtension)
-            } else if model.provider.requiresGateway {
-                item.playbackURL = try model.gatewayPlaybackURL(id: item.id, kind: kind)
-            }
+            } else { item = try await model.resolve(item) }
+            guard scope == model.preferenceKey else { return }
             playing = item
         } catch { notice = error.localizedDescription }
     }
