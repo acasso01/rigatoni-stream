@@ -23,10 +23,16 @@ private struct TVSeriesBrowser: View {
     @EnvironmentObject private var model: AppModel
     @State private var selectedCategory = ""
     @State private var selectedSeries: SeriesItem?
+    @State private var showingSeriesDetail = false
     @State private var visibleCount = 60
 
     var body: some View {
-        content
+        NavigationStack {
+            content
+                .navigationDestination(isPresented: $showingSeriesDetail) {
+                    if let series = selectedSeries { TVSeriesDetailView(series: series, store: store) }
+                }
+        }
             .task(id: model.libraryRevision) {
                 selectedCategory = ""
                 await store.loadCategories()
@@ -38,9 +44,11 @@ private struct TVSeriesBrowser: View {
                 visibleCount = 60
                 await store.loadSeries(categoryID: selectedCategory)
             }
-            .fullScreenCover(item: $selectedSeries) { series in
-                TVSeriesDetailView(series: series, store: store)
-            }
+    }
+
+    private func openSeries(_ series: SeriesItem) {
+        selectedSeries = series
+        showingSeriesDetail = true
     }
 
     @ViewBuilder private var content: some View {
@@ -94,14 +102,14 @@ private struct TVSeriesBrowser: View {
                         Text("No shows in this category.").foregroundStyle(TVTheme.muted)
                     } else {
                         if let hero = store.series.first {
-                            TVHeroBanner(title: hero.name, subtitle: "TV show", badge: "FEATURED SHOW", poster: hero.poster, posterKind: .movies) { selectedSeries = hero }
+                            TVHeroBanner(title: hero.name, subtitle: "TV show", badge: "FEATURED SHOW", poster: hero.poster, posterKind: .movies) { openSeries(hero) }
                         }
                         LazyVGrid(
                             columns: [GridItem(.adaptive(minimum: 220), spacing: 28)],
                             spacing: 32
                         ) {
                             ForEach(Array(store.series.prefix(visibleCount))) { item in
-                                Button { selectedSeries = item } label: {
+                                Button { openSeries(item) } label: {
                                     VStack(alignment: .leading, spacing: 10) {
                                         TVSeriesPoster(series: item)
                                         TVFocusTitle(title: item.name)

@@ -18,6 +18,10 @@ struct TVCatalogBrowser: View {
     @State private var playing: CatalogItem?
     @State private var visibleCount = 60
     @FocusState private var focusedCard: String?
+    // Movies open their detail on the NavigationStack (single modal level
+    // for the player's cover). Live channels play straight from the cover.
+    @State private var detailItem: CatalogItem?
+    @State private var showingDetail = false
 
     private var orderedCategories: [CatalogCategory] {
         guard let store else { return [] }
@@ -86,11 +90,19 @@ struct TVCatalogBrowser: View {
         .fullScreenCover(item: $playing) { item in
             CatalogDestination(item: item, channels: kind == .live ? store.items : [])
         }
+        .navigationDestination(isPresented: $showingDetail) {
+            if let item = detailItem { MovieDetailView(item: item) }
+        }
     }
 
     private func loadSelection(_ store: TVLibraryStore) async {
         if selectedCategory == "all" { await store.loadAllForSearch { _, _ in } }
         else { await store.loadItems(categoryID: selectedCategory) }
+    }
+
+    private func openDetail(_ item: CatalogItem) {
+        detailItem = item
+        showingDetail = true
     }
 
     private func categorySidebar(_ store: TVLibraryStore) -> some View {
@@ -161,7 +173,7 @@ struct TVCatalogBrowser: View {
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: 22)], spacing: 36) {
                     ForEach(visible) { item in
-                        Button { playing = item } label: { TVCatalogCard(item: item) }
+                        Button { openDetail(item) } label: { TVCatalogCard(item: item) }
                             .buttonStyle(TVCardButtonStyle()).focused($focusedCard, equals: item.id)
                             .contextMenu {
                                 Button(TVFavorites.contains(item: item, model: model) ? "Remove from Saved" : "Save to Favorites") { TVFavorites.toggle(item: item, model: model) }

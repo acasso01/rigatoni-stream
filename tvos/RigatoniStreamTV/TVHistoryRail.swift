@@ -6,6 +6,10 @@ struct TVHistoryRail: View {
     @State private var playing: CatalogItem?
     @State private var playingKind = "movie"
     @State private var notice = ""
+    // Movie detail pushes on the NavigationStack so the player's cover is a
+    // single modal level (nested fullScreenCovers silently fail on tvOS).
+    @State private var detailItem: CatalogItem?
+    @State private var showingDetail = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -39,6 +43,9 @@ struct TVHistoryRail: View {
                              progressID: "series-" + item.id)
             } else { CatalogDestination(item: item) }
         }
+        .navigationDestination(isPresented: $showingDetail) {
+            if let item = detailItem { MovieDetailView(item: item) }
+        }
     }
 
     private func reload() {
@@ -61,7 +68,8 @@ struct TVHistoryRail: View {
                 item.playbackURL = try SeriesStore.seriesStreamURL(provider: model.provider, episodeID: item.id, ext: item.fileExtension)
             } else { item = try await model.resolve(item) }
             guard scope == model.preferenceKey else { return }
-            playing = item
+            if record.kind == "movie" { detailItem = item; showingDetail = true }
+            else { playing = item }
         } catch { notice = error.localizedDescription }
     }
 }

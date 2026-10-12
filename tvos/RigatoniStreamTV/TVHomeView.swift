@@ -8,14 +8,16 @@ struct TVHomeView: View {
     @State private var playing: CatalogItem?
 
     var body: some View {
-        Group {
-            if let store {
-                TVHomeBody(store: store, model: model, playing: $playing)
-                    .fullScreenCover(item: $playing) { item in
-                        CatalogDestination(item: item, channels: store.items)
-                    }
-            } else {
-                ProgressView("Loading…")
+        NavigationStack {
+            Group {
+                if let store {
+                    TVHomeBody(store: store, model: model, playing: $playing)
+                        .fullScreenCover(item: $playing) { item in
+                            CatalogDestination(item: item, channels: store.items)
+                        }
+                } else {
+                    ProgressView("Loading…")
+                }
             }
         }
         .onAppear {

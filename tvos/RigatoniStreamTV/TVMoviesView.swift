@@ -6,11 +6,16 @@ struct TVMoviesView: View {
     @EnvironmentObject private var catalog: SessionCatalog
     @State private var categories: [CatalogCategory] = []
     @State private var featured: CatalogItem?
-    @State private var playing: CatalogItem?
     @State private var count = 4
     @State private var loading = false
     @State private var error = ""
     @State private var retry = 0
+    // Movie detail is pushed on the NavigationStack (not a fullScreenCover)
+    // so the player's own fullScreenCover presents from a stack view — a
+    // single modal level, which tvOS handles reliably. Nested covers
+    // (cover presenting a cover) silently fail on tvOS: Play never started.
+    @State private var detailItem: CatalogItem?
+    @State private var showingDetail = false
 
     var body: some View {
         NavigationStack {
@@ -19,7 +24,7 @@ struct TVMoviesView: View {
                     StreamHeading(title: "Movies", subtitle: "Make tonight a movie night.")
                     if !categories.isEmpty { categoryStrip }
                     if let featured {
-                        TVHeroBanner(title: featured.name, subtitle: "Movie details, overview and Continue/Restart", badge: "FEATURED MOVIE", poster: featured.poster, posterKind: .movies) { playing = featured }
+                        TVHeroBanner(title: featured.name, subtitle: "Movie details, overview and Continue/Restart", badge: "FEATURED MOVIE", poster: featured.poster, posterKind: .movies) { openDetail(featured) }
                     }
                     else if loading { ProgressView("Loading movies…").padding(40) }
                     if !model.providerReady { Text("Save your provider in Settings to browse movies.").foregroundStyle(.secondary) }
@@ -27,7 +32,7 @@ struct TVMoviesView: View {
                         HStack { Text(error); Button("Retry") { retry += 1 } }.foregroundStyle(.secondary)
                     }
                     ForEach(Array(categories.prefix(count))) { category in
-                        TVMovieShelf(category: category) { playing = $0 }
+                        TVMovieShelf(category: category) { openDetail($0) }
                     }
                     if count < categories.count {
                         Button("More categories") { count += 4 }.buttonStyle(.bordered)
@@ -49,8 +54,15 @@ struct TVMoviesView: View {
                     if loaded.isEmpty { error = "No movie categories are available." }
                 } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
             }
-            .fullScreenCover(item: $playing) { CatalogDestination(item: $0) }
+            .navigationDestination(isPresented: $showingDetail) {
+                if let item = detailItem { MovieDetailView(item: item) }
+            }
         }
+    }
+
+    private func openDetail(_ item: CatalogItem) {
+        detailItem = item
+        showingDetail = true
     }
 
     private var categoryStrip: some View {
@@ -73,7 +85,7 @@ struct TVMoviesView: View {
             VStack(alignment: .leading, spacing: 18) {
                 Text("IN THE SPOTLIGHT").font(.caption.weight(.semibold)).tracking(4)
                 Text(item.name).font(.system(size: 48, weight: .bold)).lineLimit(2)
-                Button { playing = item } label: { Label("Watch movie", systemImage: "play.fill").padding(.horizontal, 22) }
+                Button { openDetail(item) } label: { Label("Watch movie", systemImage: "play.fill").padding(.horizontal, 22) }
                     .buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black)
             }.padding(40)
         }.frame(height: 490).clipShape(RoundedRectangle(cornerRadius: 28))

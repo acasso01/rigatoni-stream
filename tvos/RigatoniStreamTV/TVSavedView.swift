@@ -10,10 +10,16 @@ struct TVSavedView: View {
     @State private var playing: CatalogItem?
     @State private var playingKind: String?
     @State private var detailSeries: TVSeriesDetailRequest?
+    // Detail screens push on a NavigationStack so the player's cover is a
+    // single modal level (nested fullScreenCovers silently fail on tvOS).
+    @State private var detailItem: CatalogItem?
+    @State private var showingDetail = false
+    @State private var showingSeriesDetail = false
     @State private var notice = ""
     @State private var connecting = false
 
     var body: some View {
+        NavigationStack {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 Text("Saved")
@@ -46,16 +52,19 @@ struct TVSavedView: View {
             .padding(.horizontal, 60)
             .padding(.bottom, 60)
         }
+        .navigationDestination(isPresented: $showingDetail) {
+            if let item = detailItem { MovieDetailView(item: item) }
+        }
+        .navigationDestination(isPresented: $showingSeriesDetail) {
+            if let request = detailSeries { TVSeriesDetailView(series: request.series, store: request.store).environmentObject(model) }
+        }
+        }
         .background(TVTheme.background)
         .foregroundStyle(TVTheme.text)
         .onAppear { reload() }
         .onChange(of: model.libraryRevision) { _, _ in reload() }
         .fullScreenCover(item: $playing) { item in
             CatalogDestination(item: item)
-        }
-        .fullScreenCover(item: $detailSeries) { request in
-            TVSeriesDetailView(series: request.series, store: request.store)
-                .environmentObject(model)
         }
     }
 
@@ -129,6 +138,7 @@ struct TVSavedView: View {
                 series: SeriesItem(id: record.itemID, name: record.name,
                                  poster: TVFavorites.poster(record, model: model)),
                 store: store)
+            showingSeriesDetail = true
             return
         }
         let kind: LibraryKind = record.kind == "live" ? .live : .movies
@@ -145,7 +155,8 @@ struct TVSavedView: View {
             do {
                 let fresh = try await model.resolve(item)
                 guard scope == model.preferenceKey else { return }
-                playing = fresh
+                if kind == .movies { detailItem = fresh; showingDetail = true }
+                else { playing = fresh }
             } catch { if scope == model.preferenceKey { notice = error.localizedDescription } }
         }
     }

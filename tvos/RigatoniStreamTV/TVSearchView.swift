@@ -11,16 +11,22 @@ struct TVSearchView: View {
     @State private var playing: CatalogItem?
     @State private var seriesStore: SeriesStore?
     @State private var allSeries: [SeriesItem] = []
-    @State private var selectedSeries: SeriesItem?
     @State private var limit = 60
     @State private var retry = 0
+    // Detail screens push on a NavigationStack so the player's cover is a
+    // single modal level (nested fullScreenCovers silently fail on tvOS).
+    @State private var detailItem: CatalogItem?
+    @State private var showingDetail = false
+    @State private var detailSeries: SeriesItem?
+    @State private var showingSeriesDetail = false
     // The search field mounts synchronously, so focusing it on appear is
     // deterministic. Selecting it opens the tvOS keyboard.
     @FocusState private var fieldFocused: Bool
     private var hasQuery: Bool { query.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 }
 
     var body: some View {
-        ScrollView {
+        NavigationStack {
+            ScrollView {
             LazyVStack(alignment: .leading, spacing: 32) {
                 StreamHeading(title: "Search", subtitle: "Movies, live channels and TV shows. Every category. One place.")
                 VStack(alignment: .leading, spacing: 24) {
@@ -51,7 +57,7 @@ struct TVSearchView: View {
                     if !notices.isEmpty { Button("Retry unavailable catalogs") { retry += 1 } }
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 32)], alignment: .leading, spacing: 36) {
                         ForEach(Array(results.prefix(limit))) { hit in
-                            Button { playing = hit.item } label: {
+                            Button { openResult(hit.item) } label: {
                                 VStack(alignment: .leading, spacing: 10) {
                                     TVCatalogCard(item: hit.item)
                                     Label(hit.item.kind.title, systemImage: hit.item.kind.symbol)
@@ -69,7 +75,7 @@ struct TVSearchView: View {
                             Text("TV Shows").font(.title2.bold()).padding(.top, 12)
                             LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 32)], alignment: .leading, spacing: 36) {
                                 ForEach(Array(seriesMatches.prefix(limit))) { series in
-                                    Button { selectedSeries = series } label: {
+                                    Button { openSeries(series) } label: {
                                         VStack(alignment: .leading, spacing: 10) {
                                             ProviderPoster(url: series.poster, kind: .movies)
                                                 .frame(width: 200, height: 300)
@@ -88,6 +94,13 @@ struct TVSearchView: View {
                     }
                 }
             }.padding(.horizontal, 64).padding(.vertical, 40)
+            .navigationDestination(isPresented: $showingDetail) {
+                if let item = detailItem { MovieDetailView(item: item) }
+            }
+            .navigationDestination(isPresented: $showingSeriesDetail) {
+                if let series = detailSeries, let store = seriesStore { TVSeriesDetailView(series: series, store: store) }
+            }
+            }
         }
         .background { StreamBackdrop() }
         .task(id: "\(hasQuery)-\(model.libraryRevision)-\(retry)") {
@@ -111,9 +124,6 @@ struct TVSearchView: View {
         .fullScreenCover(item: $playing) {
             CatalogDestination(item: $0, channels: catalog.searchable[.live] ?? [])
         }
-        .fullScreenCover(item: $selectedSeries) { series in
-            if let store = seriesStore { TVSeriesDetailView(series: series, store: store) }
-        }
     }
     private func load(_ kind: LibraryKind) async {
         do {
@@ -127,5 +137,15 @@ struct TVSearchView: View {
         let items = await store.loadAllSeries()
         guard !Task.isCancelled else { return }
         allSeries = items
+    }
+
+    private func openResult(_ item: CatalogItem) {
+        if item.kind == .movies { detailItem = item; showingDetail = true }
+        else { playing = item }
+    }
+
+    private func openSeries(_ series: SeriesItem) {
+        detailSeries = series
+        showingSeriesDetail = true
     }
 }
