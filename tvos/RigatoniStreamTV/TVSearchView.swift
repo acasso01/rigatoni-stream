@@ -50,7 +50,7 @@ struct TVSearchView: View {
                         .foregroundStyle(.secondary).padding(36).frame(maxWidth: .infinity, alignment: .leading)
                         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 24))
                 } else {
-                    ForEach(LibraryKind.allCases) { kind in
+                    ForEach(LibraryKind.allCases.filter { filter == "all" || $0.rawValue == filter }) { kind in
                         if let progress = catalog.progress[kind] { ProgressView("\(kind.title): \(progress)") }
                     }
                     ForEach(notices, id: \.self) { Text($0).font(.callout).foregroundStyle(.secondary) }
@@ -103,13 +103,23 @@ struct TVSearchView: View {
             }
         }
         .background { StreamBackdrop() }
-        .task(id: "\(hasQuery)-\(model.libraryRevision)-\(retry)") {
+        .task(id: "\(hasQuery)-\(filter)-\(model.libraryRevision)-\(retry)") {
             guard hasQuery, model.providerReady else { return }
             notices = []
-            async let movies: Void = load(.movies)
-            async let live: Void = load(.live)
-            async let series: Void = loadSeries()
-            _ = await (movies, live, series)
+            // Only load the catalogs the selected filter needs.
+            let scope = filter
+            if scope == "all" {
+                async let movies: Void = load(.movies)
+                async let live: Void = load(.live)
+                async let series: Void = loadSeries()
+                _ = await (movies, live, series)
+            } else if scope == LibraryKind.movies.rawValue {
+                await load(.movies)
+            } else if scope == LibraryKind.live.rawValue {
+                await load(.live)
+            } else if scope == "series" {
+                await loadSeries()
+            }
         }
         .task(id: "\(query)-\(filter)-\(catalog.revision)-\(model.libraryRevision)") {
             limit = 60
