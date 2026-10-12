@@ -104,6 +104,12 @@ struct TVSearchView: View {
                         TVCatalogCard(item: item)
                     }
                     .buttonStyle(.card)
+                    .contextMenu {
+                        Button(TVFavorites.contains(item: item, provider: model.provider)
+                               ? "Remove from Saved" : "Save to Favorites") {
+                            TVFavorites.toggle(item: item, provider: model.provider)
+                        }
+                    }
                 }
             }
             if filtered.count > visibleCount {

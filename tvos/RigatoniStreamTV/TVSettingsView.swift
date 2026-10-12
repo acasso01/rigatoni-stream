@@ -96,6 +96,7 @@ struct TVLoginView: View {
 // delete settings, sign out. No vault semantics were changed.
 struct TVSettingsView: View {
     @EnvironmentObject private var model: AppModel
+    @StateObject private var themeStore = TVThemeStore.shared
     @State private var deleting = false
     @State private var visiblePassword = false
     @AppStorage("rigatoni-live-buffer-ms") private var liveBuffer = 1500
@@ -111,6 +112,18 @@ struct TVSettingsView: View {
                 if let email = model.account.session?.user.email {
                     Text("Signed in as \(email)")
                         .foregroundStyle(TVTheme.muted)
+                }
+
+                settingsGroup(title: "Appearance") {
+                    Picker("Theme", selection: $themeStore.theme) {
+                        ForEach(TVAppTheme.allCases) { theme in
+                            Text(theme.title).tag(theme)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 560)
+                    Text("Dark is the original look, Light matches iOS, and Xfinity uses the X1-inspired navy and blue. The choice applies to this Apple TV only.")
+                        .font(.footnote).foregroundStyle(TVTheme.muted)
                 }
 
                 settingsGroup(title: "Provider") {

@@ -12,18 +12,22 @@ This work lives on the `tvos` branch and is **additive only**: nothing under
 |---|---|
 | `project.yml` | XcodeGen spec for the `RigatoniStreamTV` tvOS target |
 | `configure_http.py` | Optional one-host ATS exception for a direct HTTP provider (streams + logo artwork); mirrors the iPhone build's script |
-| `RigatoniStreamTV/TVApp.swift` | `@main` app entry; owns the shared `AppModel` |
-| `RigatoniStreamTV/TVRootView.swift` | Sign-in gate → top tab bar (Home, Live TV, TV Shows, Movies, Search, Settings) |
+| `RigatoniStreamTV/TVApp.swift` | `@main` app entry; owns the shared `AppModel`; theme-aware tint + color scheme |
+| `RigatoniStreamTV/TVRootView.swift` | Sign-in gate → X1-style left nav rail (Home, Guide, Live TV, Movies, TV Shows, Saved, Search, Settings) |
 | `RigatoniStreamTV/TVHomeView.swift` | "Welcome back" greeting + "Last watched" rail |
 | `RigatoniStreamTV/TVLastWatched.swift` | Last-watched persistence (UserDefaults, per provider host, no credentials/URLs stored) |
+| `RigatoniStreamTV/TVGuideView.swift` | X1-style program guide: channels × 30-minute time slots, EPG via `get_short_epg` (direct providers), graceful LIVE fallback |
 | `RigatoniStreamTV/TVLiveView.swift` | Live TV tab: full-height category sidebar + channel list, long-press pin/unpin, channel logos |
-| `RigatoniStreamTV/TVShowsView.swift` | TV Shows tab: series categories → poster grid → seasons/episodes → VLC playback |
+| `RigatoniStreamTV/TVShowsView.swift` | TV Shows tab: hero banner, series categories → poster grid → seasons/episodes → VLC playback |
 | `RigatoniStreamTV/TVMoviesView.swift` | Movies tab (thin wrapper) |
-| `RigatoniStreamTV/TVCatalogBrowser.swift` | Shared focus-engine catalog browser: category bar, pin/unpin, card grid |
+| `RigatoniStreamTV/TVHeroBanner.swift` | Shared X1-style hero banner (Movies, TV Shows) |
+| `RigatoniStreamTV/TVSavedView.swift` | Saved tab: favorited channels, movies and shows |
+| `RigatoniStreamTV/TVFavorites.swift` | Favorites persistence (UserDefaults, per provider host, no credentials/URLs stored) |
+| `RigatoniStreamTV/TVCatalogBrowser.swift` | Shared focus-engine catalog browser: category bar, pin/unpin, card grid, movie hero banner |
 | `RigatoniStreamTV/TVSearchView.swift` | Full-catalog search with the same fast path + fallback as iOS |
-| `RigatoniStreamTV/TVSettingsView.swift` | Sign-in screen + provider/gateway/buffer settings, sign out |
+| `RigatoniStreamTV/TVSettingsView.swift` | Sign-in screen + appearance (theme picker) + provider/gateway/buffer settings, sign out |
 | `RigatoniStreamTV/TVPlayerView.swift` | VLC playback, Siri Remote controls, left/right channel zapping, auto-hiding overlay |
-| `RigatoniStreamTV/TVTheme.swift` | Design tokens from the web app (`#09090b`, `#fafafa`, `#e50914`) |
+| `RigatoniStreamTV/TVTheme.swift` | Three user-selectable themes (Dark, Light, Xfinity) with full token sets; theme-driven `TVTheme` accessors |
 | `RigatoniStreamTV/TVLibraryStore.swift` | tvOS catalog store mirroring the iPhone `LibraryView` data flow |
 | `Podfile` / `Gemfile` | CocoaPods setup; VLCKit via the existing `ios/VLCKit.podspec` (declares a tvOS target) |
 | `setup.sh` | `xcodegen generate` → optional `configure_http.py` → `pod install` → open the workspace |
@@ -78,19 +82,37 @@ name.
 
 ## Using it
 
+- **Nav rail:** Home, Guide, Live TV, Movies, TV Shows, Saved, Search,
+  Settings — X1-style left rail with focus states, replacing the old top
+  tab bar.
+- **Themes:** Settings → Appearance → Dark, Light, or Xfinity. Dark is the
+  original look (`#09090b` / `#e50914`), Light is iOS-style
+  (`#F2F2F7` / white cards), Xfinity is X1-inspired deep navy (`#0B1B33`)
+  with a bright blue accent (`#3B9DFF`). The choice is per-device
+  (UserDefaults) and applies instantly. The Xfinity theme copies the X1
+  *layout language* only — no Xfinity/Comcast logos or trademarks.
+- **Guide:** channels × 30-minute time slots. Program data comes from the
+  Xtream `get_short_epg` endpoint on direct providers (up to 40 channels
+  per category, loaded concurrently and cached for the session). If a
+  channel has no EPG it shows a LIVE block; if the provider returns no
+  EPG at all — or a gateway is in use — the guide falls back to channel
+  rows with LIVE badges. The grid is never empty.
+- **Saved:** long-press (hold) any channel, movie or show to add it to
+  Saved; long-press again (or use the Saved tab's context menu) to
+  remove it.
 - **Siri Remote:** move focus with swipes/clicks, press **Play/Pause** to
   toggle playback, press **Menu** to go back out of the player.
 - **Live TV:** the sidebar and channel list each fill the screen
   top-to-bottom. Long-press a category row (or use the Pin button) to
   pin/unpin it — pins sync with the iPhone build. Open a channel, then use
   the **left/right arrows** to zap to the previous/next channel.
-- **TV Shows:** series categories → poster grid → pick a season →
-  episode list → plays through VLC. Needs a direct provider connection
-  (not available through the gateway yet).
+- **TV Shows:** hero banner, series categories → poster grid → pick a
+  season → episode list → plays through VLC. Needs a direct provider
+  connection (not available through the gateway yet).
 - **Home:** "Welcome back" plus a "Last watched" rail that picks up
   channels, movies and episodes across tabs.
-- **Movies:** poster wall; the slider seeks when the provider serves
-  seekable content. Controls hide after 4 seconds.
+- **Movies:** hero banner + poster wall; the slider seeks when the
+  provider serves seekable content. Controls hide after 4 seconds.
 - **Search:** Live TV / Movies switch, full-catalog fast path with
   per-category fallback, same as the iPhone build.
 
@@ -117,9 +139,10 @@ Two paths, two causes:
 
 ## Notes and limits
 
-- **tvOS parity target is the iPhone v1 plus TV shows:** Live TV + TV Shows
-  + Movies + pins + search + last-watched. EPG, AirPlay and downloads are
-  out of scope here, same as on iOS.
+- **tvOS parity target is the iPhone v1 plus TV shows and the guide:**
+  Live TV + TV Shows + Movies + pins + search + last-watched + a
+  `get_short_epg`-backed program guide. AirPlay and downloads are out of
+  scope here, same as on iOS.
 - **No secrets in this repo.** Sign-in tokens go to the tvOS Keychain;
   provider credentials stay in memory and the encrypted account vault.
 - **First-build caveat:** `Library.swift` is shared with the iPhone target

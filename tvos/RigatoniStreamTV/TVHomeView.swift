@@ -82,7 +82,7 @@ struct TVHomeView: View {
             VStack(alignment: .leading, spacing: 12) {
                 ZStack(alignment: .topLeading) {
                     ZStack {
-                        Color.white.opacity(0.06)
+                        TVTheme.card
                         if let url = record.poster.flatMap(URL.init(string:)) {
                             ProviderPoster(url: url, kind: isLive ? .live : .movies)
                         } else {

@@ -53,6 +53,15 @@ struct TVCatalogBrowser: View {
                     ProgressView(store.progress.isEmpty ? "Loading \(kind.title.lowercased())…" : store.progress)
                 } else {
                     categoryBar(store)
+                    if kind == .movies, let hero = store.items.first, !store.loading {
+                        TVHeroBanner(
+                            title: hero.name,
+                            subtitle: selectedName.isEmpty ? "Movie" : selectedName,
+                            badge: "FEATURED MOVIE",
+                            poster: hero.poster,
+                            posterKind: .movies
+                        ) { playing = hero }
+                    }
                     if store.loading {
                         ProgressView(store.progress.isEmpty ? "Loading…" : store.progress)
                     } else if !store.error.isEmpty {
@@ -139,6 +148,12 @@ struct TVCatalogBrowser: View {
                     }
                     .buttonStyle(.card)
                     .focused($focusedCard, equals: item.id)
+                    .contextMenu {
+                        Button(TVFavorites.contains(item: item, provider: model.provider)
+                               ? "Remove from Saved" : "Save to Favorites") {
+                            TVFavorites.toggle(item: item, provider: model.provider)
+                        }
+                    }
                 }
             }
             if store.items.count > visibleCount {

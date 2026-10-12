@@ -235,6 +235,15 @@ struct TVShowsView: View {
                     } else if store.series.isEmpty {
                         Text("No shows in this category.").foregroundStyle(TVTheme.muted)
                     } else {
+                        if let hero = store.series.first {
+                            TVHeroBanner(
+                                title: hero.name,
+                                subtitle: "TV show",
+                                badge: "FEATURED SHOW",
+                                poster: hero.poster,
+                                posterKind: .movies
+                            ) { selectedSeries = hero }
+                        }
                         LazyVGrid(
                             columns: [GridItem(.adaptive(minimum: 220), spacing: 28)],
                             spacing: 32
@@ -250,6 +259,12 @@ struct TVShowsView: View {
                                     }
                                 }
                                 .buttonStyle(.card)
+                                .contextMenu {
+                                    Button(TVFavorites.contains(id: item.id, kind: "series", provider: model.provider)
+                                           ? "Remove from Saved" : "Save to Favorites") {
+                                        TVFavorites.toggleSeries(item, provider: model.provider)
+                                    }
+                                }
                             }
                         }
                         Text("\(store.series.count) shows")
@@ -283,7 +298,7 @@ private struct TVSeriesPoster: View {
 
     var body: some View {
         ZStack {
-            Color.white.opacity(0.06)
+            TVTheme.card
             if let url = series.poster {
                 ProviderPoster(url: url, kind: .movies)
             } else {
@@ -298,8 +313,9 @@ private struct TVSeriesPoster: View {
 }
 
 // MARK: - Series detail: seasons -> episodes -> player
+// Internal (not private): TVSavedView presents this for saved shows.
 
-private struct TVSeriesDetailView: View {
+struct TVSeriesDetailView: View {
     let series: TVSeries
     @ObservedObject var store: TVSeriesStore
     @EnvironmentObject private var model: AppModel
@@ -375,7 +391,7 @@ private struct TVSeriesDetailView: View {
                                         }
                                         .padding(.horizontal, 24)
                                         .padding(.vertical, 14)
-                                        .background(Color.white.opacity(0.05))
+                                        .background(TVTheme.card)
                                         .clipShape(RoundedRectangle(cornerRadius: 12))
                                     }
                                     .buttonStyle(.card)

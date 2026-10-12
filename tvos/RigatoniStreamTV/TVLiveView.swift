@@ -111,9 +111,9 @@ struct TVLiveView: View {
                             .padding(.horizontal, 20)
                             .padding(.vertical, 16)
                             .background(
-                                selected ? TVTheme.red
-                                : focused ? Color.white.opacity(0.18)
-                                : Color.white.opacity(0.05)
+                                selected ? TVTheme.accent
+                                : focused ? TVTheme.focusCard
+                                : TVTheme.card
                             )
                             .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
@@ -190,11 +190,17 @@ struct TVLiveView: View {
                                     }
                                     .padding(.horizontal, 24)
                                     .padding(.vertical, 12)
-                                    .background(Color.white.opacity(0.05))
+                                    .background(TVTheme.card)
                                     .clipShape(RoundedRectangle(cornerRadius: 12))
                                 }
                                 .buttonStyle(.card)
                                 .focused($focusedChannel, equals: item.id)
+                                .contextMenu {
+                                    Button(TVFavorites.contains(item: item, provider: model.provider)
+                                           ? "Remove from Saved" : "Save to Favorites") {
+                                        TVFavorites.toggle(item: item, provider: model.provider)
+                                    }
+                                }
                             }
                         }
                         .padding(24)
@@ -240,7 +246,7 @@ struct TVChannelLogo: View {
 
     var body: some View {
         ZStack {
-            Color.white.opacity(0.06)
+            TVTheme.card
             if let url = item.poster {
                 ProviderPoster(url: url, kind: .live)
             } else {
