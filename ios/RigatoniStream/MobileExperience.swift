@@ -241,118 +241,187 @@ struct MobilePinnedShelf: View {
     }
 }
 
+// Starred (pinned) live channels, persisted per provider in UserDefaults.
+enum PinnedChannels {
+    static func read(key: String?) -> Set<String> {
+        guard let key, let ids = UserDefaults.standard.stringArray(forKey: key + "-pinned-channels") else { return [] }
+        return Set(ids)
+    }
+    static func write(_ ids: Set<String>, key: String?) {
+        guard let key else { return }
+        UserDefaults.standard.set(Array(ids), forKey: key + "-pinned-channels")
+    }
+}
+
 struct MobileGuideView: View {
     @EnvironmentObject private var model: AppModel
     @State private var categories: [CatalogCategory] = []
-    @State private var selected = ""
+    @State private var selected = "all"
     @State private var items: [CatalogItem] = []
+    @State private var pinned: Set<String> = []
     @State private var loading = false
     @State private var error = ""
     @State private var playing: CatalogItem?
     @State private var page = 0
     @State private var retry = 0
+    @State private var nowTick = Date()
+    private var selectedName: String {
+        if selected == "all" { return "All channels" }
+        return categories.first { $0.id == selected }?.name ?? "Guide"
+    }
+    // Pinned channels always float to the top, in every category view.
+    private var ordered: [CatalogItem] {
+        items.filter { pinned.contains($0.id) } + items.filter { !pinned.contains($0.id) }
+    }
+    // Current half-hour window, e.g. "Now – 11:00p" with "11:30p" next.
+    private var slot: (end: String, next: String) {
+        let cal = Calendar.current
+        let comps = cal.dateComponents([.year, .month, .day, .hour, .minute], from: nowTick)
+        var startComps = comps
+        startComps.minute = (comps.minute ?? 0) < 30 ? 0 : 30
+        startComps.second = 0
+        let start = cal.date(from: startComps) ?? nowTick
+        let end = cal.date(byAdding: .minute, value: 30, to: start) ?? nowTick
+        let next = cal.date(byAdding: .minute, value: 30, to: end) ?? nowTick
+        let formatter = DateFormatter()
+        formatter.dateFormat = "h:mma"; formatter.amSymbol = "a"; formatter.pmSymbol = "p"
+        return (formatter.string(from: end), formatter.string(from: next))
+    }
     var body: some View {
         NavigationStack {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
-                    StreamHeading(title: "Guide", subtitle: "On now and coming up.")
+                    StreamHeading(title: selectedName, subtitle: "On now and coming up.")
                     if !model.providerReady {
                         Button("Add your provider") { model.settingsVisible = true }
                     }
+                    HStack {
+                        Text("Now – \(slot.end)").font(.subheadline).foregroundStyle(.secondary)
+                        Spacer()
+                        Text(slot.next).font(.subheadline).foregroundStyle(.secondary)
+                    }.padding(.horizontal, 4)
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack {
+                            guidePill(id: "all", name: "All")
                             ForEach(categories) { category in
-                                Button { selected = category.id } label: {
-                                    Text(category.name).font(.subheadline.bold()).lineLimit(1).fixedSize()
-                                        .padding(.horizontal, 16).padding(.vertical, 12)
-                                        .background(selected == category.id ? StreamTheme.accent : StreamTheme.panel, in: Capsule())
-                                        .foregroundStyle(selected == category.id ? .white : StreamTheme.text)
-                                }.buttonStyle(.plain)
+                                guidePill(id: category.id, name: category.name)
                             }
                         }
                     }
                     if loading { ProgressView("Loading guide…") }
                     if !error.isEmpty { Text(error); Button("Retry") { retry += 1 } }
-                    if !loading && items.isEmpty && error.isEmpty && model.providerReady { Text("No visible channels in this category.").foregroundStyle(.secondary) }
-                    ForEach(Array(items.dropFirst(page * 40).prefix(40))) { item in
-                        MobileGuideRow(item: item) { playing = item }
+                    if !loading && ordered.isEmpty && error.isEmpty && model.providerReady { Text("No visible channels in this category.").foregroundStyle(.secondary) }
+                    ForEach(Array(ordered.dropFirst(page * 40).prefix(40))) { item in
+                        MobileGuideRow(item: item, pinned: pinned.contains(item.id), togglePin: { togglePin(item.id) }) { playing = item }
                     }
-                    if items.count > 40 {
+                    if ordered.count > 40 {
                         HStack {
                             Button("Previous") { page -= 1 }.disabled(page == 0)
                             Spacer(); Text("Page \(page + 1)").font(.caption); Spacer()
-                            Button("Next") { page += 1 }.disabled((page + 1) * 40 >= items.count)
+                            Button("Next") { page += 1 }.disabled((page + 1) * 40 >= ordered.count)
                         }
                     }
                 }.padding(18)
             }.background { StreamBackdrop() }
                 .navigationTitle("Guide").navigationBarTitleDisplayMode(.inline)
                 .task(id: "\(model.libraryRevision)-\(retry)") {
-                    categories = []; items = []; selected = ""; error = ""
+                    categories = []; items = []; selected = "all"; error = ""
                     guard model.providerReady else { return }
+                    pinned = PinnedChannels.read(key: model.preferenceKey)
                     do {
                         let loaded = try await model.catalog.categories(kind: .live, model: model)
                         try Task.checkCancellation()
                         categories = loaded.filter { model.preferences.categoryVisible($0.id, kind: .live) }
-                        selected = categories.first?.id ?? ""
                     } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
                 }
                 .task(id: "\(selected)-\(model.libraryRevision)-\(retry)") {
                     items = []; page = 0
-                    guard !selected.isEmpty, model.providerReady else { return }
+                    guard model.providerReady else { return }
                     loading = true; defer { loading = false }
                     do {
-                        let loaded = try await model.catalog.items(kind: .live, category: selected, model: model)
+                        let loaded: [CatalogItem]
+                        if selected == "all" {
+                            loaded = try await model.catalog.items(kind: .live, category: nil, model: model)
+                        } else {
+                            loaded = try await model.catalog.items(kind: .live, category: selected, model: model)
+                        }
                         try Task.checkCancellation(); items = loaded.filter(model.preferences.visible); error = ""
                     } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
                 }
+                .task {
+                    while !Task.isCancelled {
+                        do { try await Task.sleep(for: .seconds(60)) } catch { return }
+                        nowTick = Date()
+                    }
+                }
                 .fullScreenCover(item: $playing) { CatalogDestination(item: $0, channels: items) }
         }
+    }
+    private func guidePill(id: String, name: String) -> some View {
+        Button { selected = id } label: {
+            Text(name).font(.subheadline.bold()).lineLimit(1).fixedSize()
+                .padding(.horizontal, 16).padding(.vertical, 12)
+                .background(selected == id ? StreamTheme.accent : StreamTheme.panel, in: Capsule())
+                .foregroundStyle(selected == id ? .white : StreamTheme.text)
+        }.buttonStyle(.plain)
+    }
+    private func togglePin(_ id: String) {
+        if pinned.contains(id) { pinned.remove(id) } else { pinned.insert(id) }
+        PinnedChannels.write(pinned, key: model.preferenceKey)
     }
 }
 
 struct MobileGuideRow: View {
     @EnvironmentObject private var model: AppModel
     let item: CatalogItem
+    let pinned: Bool
+    let togglePin: () -> Void
     let play: () -> Void
     @State private var programs: [EPGProgram] = []
     @State private var loading = true
+    private var nowNext: EPGNowNext { EPGParser.nowNext(programs) }
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Button(action: play) {
-                HStack(spacing: 12) {
-                    ProviderPoster(url: item.poster, kind: .live).frame(width: 58, height: 40).clipShape(RoundedRectangle(cornerRadius: 8))
-                    Text(item.name).font(.headline).lineLimit(2)
-                    Spacer(); Image(systemName: "play.circle.fill").font(.title2)
-                }.foregroundStyle(StreamTheme.text)
-            }.buttonStyle(.plain).contextMenu { MobileSaveButton(record: MobileRecords.record(item)) }
-            if loading { ProgressView().controlSize(.small) }
-            else if programs.isEmpty { Text("Live · Program information unavailable").font(.caption).foregroundStyle(.secondary) }
-            else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(alignment: .top, spacing: 12) {
-                        ForEach(programs) { program in
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(program.start <= Date() && program.end > Date() ? "ON NOW" : program.timeRange)
-                                    .font(.caption2.bold()).foregroundStyle(StreamTheme.accent)
-                                Text(program.title).font(.subheadline.weight(.medium)).lineLimit(3)
-                            }.frame(width: 200, alignment: .leading).padding(12)
-                                .background(StreamTheme.background, in: RoundedRectangle(cornerRadius: 10))
-                        }
+        HStack(spacing: 12) {
+            Button(action: togglePin) {
+                Image(systemName: pinned ? "star.fill" : "star")
+                    .font(.title3)
+                    .foregroundStyle(pinned ? StreamTheme.accent : StreamTheme.muted)
+                    .frame(width: 44, height: 44)
+            }.buttonStyle(.plain).accessibilityLabel(pinned ? "Unpin channel" : "Pin channel")
+            HStack(spacing: 12) {
+                VStack(spacing: 2) {
+                    ProviderPoster(url: item.poster, kind: .live).frame(width: 64, height: 40).clipShape(RoundedRectangle(cornerRadius: 8))
+                    if !item.number.isEmpty {
+                        Text(item.number).font(.caption2).foregroundStyle(.secondary)
+                    }
+                }.frame(width: 64)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(nowNext.now?.title ?? (loading ? "Loading…" : item.name))
+                        .font(.headline).lineLimit(1)
+                    if let next = nowNext.next {
+                        Text(next.title).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                    } else if !loading {
+                        Text("Live").font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
+                Spacer()
             }
-        }.padding(14).background(StreamTheme.card, in: RoundedRectangle(cornerRadius: 16))
-            .task(id: "\(model.libraryRevision)-\(item.id)") {
-                programs = []; loading = true
-                guard let scope = model.preferenceKey else { loading = false; return }
-                while !Task.isCancelled {
-                    let loaded = await EPGCache.shared.programs(streamID: item.id, provider: model.provider, scope: scope + "-\(model.libraryRevision)")
-                    guard !Task.isCancelled else { return }
-                    programs = Array(loaded.filter { $0.end > Date() }.prefix(6)); loading = false
-                    do { try await Task.sleep(for: .seconds(60)) } catch { return }
-                }
+            .contentShape(Rectangle())
+            .onTapGesture(perform: play)
+        }
+        .padding(10)
+        .background(StreamTheme.card, in: RoundedRectangle(cornerRadius: 16))
+        .contextMenu { MobileSaveButton(record: MobileRecords.record(item)) }
+        .task(id: "\(model.libraryRevision)-\(item.id)") {
+            programs = []; loading = true
+            guard let scope = model.preferenceKey else { loading = false; return }
+            while !Task.isCancelled {
+                let loaded = await EPGCache.shared.programs(streamID: item.id, provider: model.provider, scope: scope + "-\(model.libraryRevision)")
+                guard !Task.isCancelled else { return }
+                programs = Array(loaded.filter { $0.end > Date() }.prefix(6)); loading = false
+                do { try await Task.sleep(for: .seconds(60)) } catch { return }
             }
+        }
     }
 }
 
