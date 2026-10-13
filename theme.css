@@ -1,6 +1,377 @@
-:root{color-scheme:dark;--bg:#09090b;--fg:#fafafa;--muted:#a1a1aa;--red:#e50914;--panel:#17171b;--border:#ffffff22;--radius:16px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 80% 0%,#6b111c77,transparent 55%),var(--bg);color:var(--fg);min-height:100dvh;font-size:16px}button,input{font:inherit}button{cursor:pointer}button:disabled{opacity:.6;cursor:wait}a{color:#ff8189}button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid #ff8189;outline-offset:4px}input{color:var(--fg);background:#0c0c10;border:1px solid #52525b;border-radius:7px;padding:14px;width:100%;min-width:0}input:focus{border-color:#ff8189}label{display:block;font-size:13px;color:#d4d4d8;margin:18px 0 7px}p{line-height:1.6}.muted{color:var(--muted)}.brand{font-weight:900;font-size:28px;letter-spacing:-1px;color:var(--fg);text-decoration:none;white-space:nowrap}.brand b{color:#ed1c2e}.eyebrow,.badge{color:#ff9aa2;font-size:11px;letter-spacing:2px;font-weight:800}.button{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid transparent;border-radius:7px;background:var(--red);color:#fff;padding:14px 20px;font-weight:800;text-decoration:none;min-height:48px}.button.secondary{background:#ffffff0a;border-color:var(--border);color:#e4e4e7}.button:hover{filter:brightness(1.12)}.card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:28px;box-shadow:0 20px 60px #0008}.hidden{display:none!important}
-.account-page{display:grid;place-items:center;padding:32px 24px}.account-main{width:100%;max-width:430px}.account-main>.brand{display:block;text-align:center;margin:0 0 28px}.account-main h1{font-size:25px;letter-spacing:-.7px;margin:10px 0 9px}.account-main p{font-size:14px;color:var(--muted)}.account-main .button{width:100%;margin-top:20px}.account-main .links{display:flex;justify-content:space-between;gap:14px;margin-top:18px;flex-wrap:wrap}.text-button{width:auto;border:0;background:none;padding:0;color:#e4e4e7;font-size:13px;cursor:pointer;min-height:32px}.text-button:hover{color:#ff8189}.account-main .status{color:#e4e4e7;white-space:pre-wrap;overflow-wrap:anywhere;margin:16px 0 0}.account-main .status:empty{display:none}.account-main .status.error{color:#ff9aa2}.account-main .note{text-align:center;margin-top:22px;font-size:12px;color:#a1a1aa}.password-field{position:relative}.password-field input{padding-right:68px}.password-toggle{position:absolute;right:12px;top:50%;transform:translateY(-50%);border:0;background:none;color:#d4d4d8;font-size:12px;padding:8px 0;cursor:pointer}.password-hint{font-size:12px!important;margin:8px 0 0}.account-main .secondary{margin-top:10px}.back-link{display:block;text-align:center;font-size:13px;margin-top:20px}
-.landing{max-width:1120px;margin:auto;padding:0 28px 32px}.landing-header{display:flex;justify-content:space-between;align-items:center;gap:20px;padding:28px 0}.landing-header .brand{font-size:24px}.landing-nav{display:flex;gap:16px;align-items:center}.landing-nav>a:not(.button){color:#d4d4d8;text-decoration:none;font-size:14px}.landing-hero{display:grid;grid-template-columns:1.25fr 1fr;gap:60px;align-items:center;min-height:570px;padding:50px 0 70px}.landing h1{font-size:clamp(42px,6vw,72px);letter-spacing:-2.5px;line-height:1.05;margin:18px 0 22px}.landing h1 span{color:#ff8189}.landing-lead{color:#b9b9c1;max-width:490px;font-size:17px}.landing-actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:28px}.landing-small{font-size:12px;color:var(--muted);margin-top:20px}.preview-card{transform:rotate(2deg);padding:24px}.preview-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:30px}.live-pill{color:#ff9aa2;background:#e509141a;border:1px solid #e5091444;border-radius:99px;padding:6px 10px;font-size:11px;font-weight:800;letter-spacing:1px}.preview-screen{height:200px;border:1px solid var(--border);border-radius:10px;background:radial-gradient(ellipse at 70% 20%,#6b111c,transparent 65%),#0c0c10;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;color:#e4e4e7;font-weight:600}.play-symbol{height:62px;width:62px;border:1px solid #ffffff33;border-radius:50%;display:grid;place-items:center;background:#ffffff0b;font-size:23px;padding-left:3px}.preview-bars{display:flex;gap:8px;margin-top:18px}.preview-bars span{height:7px;border-radius:8px;background:#303038;flex:1}.preview-bars span:first-child{background:var(--red)}.preview-caption{font-size:12px;color:var(--muted);margin:16px 0 0}.features{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.feature{padding:24px;box-shadow:none}.feature h2{font-size:17px;margin:14px 0 8px}.feature p{font-size:14px;margin:0;color:var(--muted)}.feature-icon{color:#ff8189;font-size:24px}.landing-footer{display:flex;justify-content:space-between;gap:16px;color:var(--muted);font-size:12px;padding:30px 0 0;margin-top:36px;border-top:1px solid var(--border)}
-.player-page header{background:#09090bef;border-bottom:1px solid var(--border)}.player-page .brand{font-size:23px}.player-page .account,.player-page .btn{border-radius:7px;min-height:44px}.player-page .account{background:var(--panel);border-color:var(--border)}.player-page #login{width:calc(100% - 36px);max-width:530px;margin:48px auto;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:28px;box-shadow:0 20px 60px #0008}.player-page #login h2{font-size:25px;letter-spacing:-.7px;margin:10px 0 9px}.player-page #login input{border-radius:7px;background:#0c0c10;border-color:#52525b;padding:14px}.player-page #login label{color:#d4d4d8}.player-page .hero{background:radial-gradient(ellipse at 80% 0%,#6b111c77,transparent 55%),#09090b}.player-page .tile{border-color:var(--border);border-radius:12px;background:linear-gradient(145deg,#25252b,var(--panel))}.player-page .searchbar{background:var(--panel);border-color:var(--border);border-radius:7px}.player-page .btn.ghost{background:#ffffff0a;border:1px solid var(--border)}.player-page .footnote{color:var(--muted)}.player-page #vault{border-top:1px solid var(--border);margin-top:20px;padding-top:18px}.player-page .account-links{display:flex;gap:8px;flex-wrap:wrap}.player-page .account-links a{text-decoration:none}.player-page #acctStatus{color:var(--muted);margin:0 0 10px}
-@media(max-width:700px){.landing{padding:0 20px 24px}.landing-header{padding:20px 0;flex-wrap:wrap}.landing-header .brand{font-size:19px}.landing-nav{gap:12px;white-space:nowrap}.landing-nav .button{padding:10px 12px;font-size:12px;min-height:40px}.landing-hero{grid-template-columns:1fr;gap:36px;min-height:0;padding:38px 0 40px}.landing h1{letter-spacing:-1.5px}.preview-card{transform:none}.preview-screen{height:160px}.features{grid-template-columns:1fr}.landing-footer{flex-direction:column}.account-page{padding:24px 18px}.card{padding:24px}.player-page .brand{font-size:20px}}
-@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto!important}*,*:before,*:after{transition:none!important}}
+/* ============================================================
+   Ant Streams — web theme system
+   Mirrors the native app's AppAppearance themes (Dark, iOS Light,
+   Ghost, Nebula). Theme is set on <html data-theme="..."> by an
+   inline pre-paint snippet; localStorage key: ant-appearance.
+   Default (no JS / unknown value) is Dark.
+   ============================================================ */
+
+/* ---------- Tokens ---------- */
+:root{
+  color-scheme:dark;
+  --bg:#09090B; --panel:#17171B; --panel-2:#0D0D11; --input:#0C0C10;
+  --text:#FAFAFA; --muted:#A1A1AA; --faint:#71717A;
+  --accent:#E50914; --accent-ink:#FFFFFF;
+  --accent-soft:rgba(229,9,20,.14); --accent-line:rgba(229,9,20,.42);
+  --border:rgba(255,255,255,.13); --border-soft:rgba(255,255,255,.07);
+  --wash:rgba(255,255,255,.09);
+  --glow:rgba(127,17,31,.45); --hero-a:#282028;
+  --eyebrow:#FF9AA2; --focus:#FF8189;
+  --tile-a:#25252B; --tile-b:#131317;
+  --header-bg:rgba(9,9,11,.92);
+  --shadow:0 20px 60px rgba(0,0,0,.5);
+  --radius:18px;
+}
+html[data-theme="light"]{
+  color-scheme:light;
+  --bg:#F2F2F7; --panel:#FFFFFF; --panel-2:#EDEDF1; --input:#FFFFFF;
+  --text:#1C1C1E; --muted:#6B7280; --faint:#9AA0AE;
+  --accent:#E50914; --accent-ink:#FFFFFF;
+  --accent-soft:rgba(229,9,20,.10); --accent-line:rgba(229,9,20,.34);
+  --border:rgba(0,0,0,.14); --border-soft:rgba(0,0,0,.06);
+  --wash:rgba(0,0,0,.05);
+  --glow:rgba(229,9,20,.10); --hero-a:#E3E3EA;
+  --eyebrow:#B90A14; --focus:#E50914;
+  --tile-a:#FFFFFF; --tile-b:#EBEBF0;
+  --header-bg:rgba(242,242,247,.9);
+  --shadow:0 18px 44px rgba(28,28,30,.10);
+}
+html[data-theme="ghost"]{
+  color-scheme:dark;
+  --bg:#0A0A0B; --panel:#141416; --panel-2:#0C0C0E; --input:#0C0C0E;
+  --text:#FFFFFF; --muted:#A1A1AA; --faint:#6E6E76;
+  --accent:#FFFFFF; --accent-ink:#0A0A0B;
+  --accent-soft:rgba(255,255,255,.10); --accent-line:rgba(255,255,255,.34);
+  --border:rgba(255,255,255,.13); --border-soft:rgba(255,255,255,.07);
+  --wash:rgba(255,255,255,.09);
+  --glow:rgba(255,255,255,.07); --hero-a:#1C1C1F;
+  --eyebrow:#EDEDEF; --focus:#FFFFFF;
+  --tile-a:#1E1E22; --tile-b:#101013;
+  --header-bg:rgba(10,10,11,.92);
+  --shadow:0 20px 60px rgba(0,0,0,.55);
+}
+html[data-theme="nebula"]{
+  color-scheme:dark;
+  --bg:#060609; --panel:#0E0E14; --panel-2:#0A0A10; --input:#0A0A10;
+  --text:#EDEBF5; --muted:#8F8DA3; --faint:#5F5D75;
+  --accent:#A78BFA; --accent-ink:#14082E;
+  --accent-soft:rgba(167,139,250,.13); --accent-line:rgba(167,139,250,.40);
+  --border:rgba(255,255,255,.10); --border-soft:rgba(255,255,255,.06);
+  --wash:rgba(255,255,255,.08);
+  --glow:rgba(124,93,250,.16); --hero-a:#151522;
+  --eyebrow:#C9BFF5; --focus:#A78BFA;
+  --tile-a:#16161F; --tile-b:#0C0C12;
+  --header-bg:rgba(6,6,9,.92);
+  --shadow:0 20px 60px rgba(0,0,0,.6);
+}
+
+/* ---------- Base ---------- */
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font:16px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  min-height:100dvh; -webkit-font-smoothing:antialiased;
+}
+button,input,select{font:inherit}
+button{cursor:pointer}
+button:disabled{opacity:.55; cursor:wait}
+a{color:var(--accent)}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{
+  outline:2px solid var(--focus); outline-offset:3px;
+}
+.hidden{display:none!important}
+.hide{display:none!important}
+.muted{color:var(--muted)}
+::selection{background:var(--accent-soft)}
+
+/* ---------- Brand / eyebrow / badges ---------- */
+.brand{
+  display:inline-flex; align-items:center; gap:10px;
+  font-weight:900; font-size:24px; letter-spacing:-1px;
+  color:var(--text); text-decoration:none; white-space:nowrap;
+}
+.brand img{border-radius:8px; display:block}
+.brand b{color:var(--accent); font-weight:900}
+.eyebrow{
+  font-size:11px; font-weight:800; letter-spacing:3px;
+  color:var(--eyebrow); text-transform:uppercase;
+}
+.badge{
+  display:inline-block; font-size:11px; font-weight:800; letter-spacing:3px;
+  color:var(--accent); text-transform:uppercase;
+  background:var(--accent-soft); border:1px solid var(--accent-line);
+  border-radius:999px; padding:7px 12px; margin-bottom:14px;
+}
+.live-pill,.live-badge{
+  display:inline-flex; align-items:center; gap:6px;
+  color:var(--accent-ink); background:var(--accent);
+  border-radius:999px; padding:6px 12px;
+  font-size:11px; font-weight:800; letter-spacing:2px;
+}
+
+/* ---------- Buttons (pill) ---------- */
+.button{
+  display:inline-flex; align-items:center; justify-content:center; gap:8px;
+  border:1px solid transparent; border-radius:999px;
+  background:var(--accent); color:var(--accent-ink);
+  padding:14px 22px; font-weight:800; text-decoration:none; min-height:48px;
+}
+.button.secondary{
+  background:var(--wash); border-color:var(--border); color:var(--text);
+}
+.button:hover{filter:brightness(1.08)}
+.btn{
+  border-radius:999px; padding:12px 20px; font-weight:750;
+  background:var(--panel-2); color:var(--text); border:1px solid var(--border);
+}
+.btn.red{background:var(--accent); color:var(--accent-ink); border-color:transparent}
+.btn.ghost{background:var(--wash); color:var(--text); border:1px solid var(--border)}
+.btn:hover{filter:brightness(1.08)}
+.text-button{
+  border:0; background:none; padding:6px 2px; color:var(--text);
+  font-size:13px; cursor:pointer; min-height:32px; width:auto;
+}
+.text-button:hover{color:var(--accent)}
+
+/* ---------- Cards ---------- */
+.card{
+  background:var(--panel); border:1px solid var(--border);
+  border-radius:var(--radius); padding:28px; box-shadow:var(--shadow);
+}
+
+/* ---------- Forms ---------- */
+label{display:block; font-size:13px; color:var(--muted); margin:16px 0 7px}
+input,select{
+  color:var(--text); background:var(--input);
+  border:1px solid var(--border); border-radius:12px;
+  padding:13px 14px; width:100%; min-width:0;
+}
+input:focus,select:focus{border-color:var(--focus)}
+input::placeholder{color:var(--faint)}
+.password-field{position:relative}
+.password-field input{padding-right:68px}
+.password-toggle{
+  position:absolute; right:12px; top:50%; transform:translateY(-50%);
+  border:0; background:none; color:var(--muted); font-size:12px;
+  padding:8px 0; cursor:pointer; width:auto;
+}
+.password-hint{font-size:12px!important; margin:8px 0 0}
+p{line-height:1.6}
+
+/* ---------- Theme switcher ---------- */
+.theme-switch{
+  width:auto; min-width:0; padding:9px 34px 9px 14px; border-radius:999px;
+  background-color:var(--wash); border:1px solid var(--border);
+  color:var(--text); font-size:13px; font-weight:700; cursor:pointer;
+  appearance:none; -webkit-appearance:none;
+  background-image:
+    linear-gradient(45deg,transparent 50%,var(--muted) 50%),
+    linear-gradient(135deg,var(--muted) 50%,transparent 50%);
+  background-position:calc(100% - 18px) 55%,calc(100% - 13px) 55%;
+  background-size:5px 5px; background-repeat:no-repeat;
+}
+.theme-switch option{color:#1C1C1E}
+
+/* ---------- Account pages (auth.html) ---------- */
+.account-page{display:grid; place-items:center; padding:32px 24px}
+.account-main{width:100%; max-width:430px}
+.account-main>.brand{display:flex; justify-content:center; margin:0 0 28px}
+.account-main h1{font-size:25px; letter-spacing:-.7px; margin:10px 0 9px}
+.account-main p{font-size:14px; color:var(--muted)}
+.account-main .button{width:100%; margin-top:20px}
+.account-main .links{display:flex; justify-content:space-between; gap:14px; margin-top:18px; flex-wrap:wrap}
+.account-main .status{color:var(--text); white-space:pre-wrap; overflow-wrap:anywhere; margin:16px 0 0}
+.account-main .status:empty{display:none}
+.account-main .status.error{color:var(--accent)}
+.account-main .note{text-align:center; margin-top:22px; font-size:12px; color:var(--muted)}
+.account-main .secondary{margin-top:10px}
+.back-link{display:block; text-align:center; font-size:13px; margin-top:20px}
+
+/* ---------- Landing (index.html) ---------- */
+.landing{max-width:1120px; margin:auto; padding:0 28px 32px}
+.landing-header{
+  display:flex; justify-content:space-between; align-items:center;
+  gap:20px; padding:28px 0;
+}
+.landing-nav{display:flex; gap:16px; align-items:center}
+.landing-nav>a:not(.button){color:var(--muted); text-decoration:none; font-size:14px}
+.landing-nav>a:not(.button):hover{color:var(--text)}
+.landing-nav .button{min-height:44px; padding:12px 18px; font-size:14px}
+.landing-hero{
+  display:grid; grid-template-columns:1.25fr 1fr; gap:60px; align-items:center;
+  min-height:570px; padding:50px 0 70px;
+}
+.landing h1{
+  font-size:clamp(42px,6vw,72px); letter-spacing:-2.5px; line-height:1.05;
+  margin:18px 0 22px;
+}
+.landing h1 span{color:var(--accent)}
+.landing-lead{color:var(--muted); max-width:490px; font-size:17px}
+.landing-actions{display:flex; gap:12px; flex-wrap:wrap; margin-top:28px}
+.landing-small{font-size:12px; color:var(--muted); margin-top:20px}
+.preview-card{transform:rotate(2deg); padding:24px}
+.preview-top{display:flex; align-items:center; justify-content:space-between; margin-bottom:30px}
+.preview-screen{
+  height:200px; border:1px solid var(--border); border-radius:12px;
+  background:radial-gradient(ellipse at 70% 20%,var(--glow),transparent 65%),var(--panel-2);
+  display:flex; align-items:center; justify-content:center;
+  flex-direction:column; gap:14px; color:var(--text); font-weight:600;
+}
+.play-symbol{
+  height:62px; width:62px; border:1px solid var(--border); border-radius:50%;
+  display:grid; place-items:center; background:var(--wash);
+  font-size:23px; padding-left:3px; color:var(--text);
+}
+.preview-bars{display:flex; gap:8px; margin-top:18px}
+.preview-bars span{height:7px; border-radius:8px; background:var(--panel-2); border:1px solid var(--border-soft); flex:1}
+.preview-bars span:first-child{background:var(--accent); border-color:transparent}
+.preview-caption{font-size:12px; color:var(--muted); margin:16px 0 0}
+.features{display:grid; grid-template-columns:repeat(3,1fr); gap:16px}
+.feature{padding:24px; box-shadow:none}
+.feature h2{font-size:17px; margin:14px 0 8px}
+.feature p{font-size:14px; margin:0; color:var(--muted)}
+.feature-icon{color:var(--accent); font-size:24px}
+.landing-footer{
+  display:flex; justify-content:space-between; gap:16px;
+  color:var(--muted); font-size:12px; padding:30px 0 0; margin-top:36px;
+  border-top:1px solid var(--border-soft);
+}
+
+/* ---------- Player (xtream.html) ---------- */
+.player-page header{
+  position:sticky; top:0; z-index:10;
+  background:var(--header-bg); backdrop-filter:blur(15px); -webkit-backdrop-filter:blur(15px);
+  display:flex; align-items:center; gap:20px;
+  padding:14px max(18px,4vw); border-bottom:1px solid var(--border-soft);
+}
+.player-page .brand{font-size:23px}
+.player-page nav{display:flex; gap:18px; overflow:auto; scrollbar-width:none}
+.player-page nav button{
+  background:none; border:0; color:var(--muted); padding:10px 2px;
+  white-space:nowrap; font-weight:600; border-bottom:2px solid transparent;
+}
+.player-page nav button:hover{color:var(--text)}
+.player-page nav button.active{color:var(--text); border-bottom-color:var(--accent)}
+.spacer{flex:1}
+.player-page .account{
+  background:var(--wash); border:1px solid var(--border);
+  color:var(--text); padding:9px 16px; border-radius:999px; font-weight:700;
+}
+.player-page main{max-width:1600px; margin:auto}
+.hero{
+  position:relative; min-height:300px; display:flex; align-items:flex-end;
+  padding:48px max(20px,5vw);
+  background:
+    radial-gradient(ellipse at 80% 15%,var(--glow),transparent 55%),
+    linear-gradient(125deg,var(--hero-a),var(--bg) 70%);
+}
+.hero:after{
+  content:""; position:absolute; inset:auto 0 0; height:90px;
+  background:linear-gradient(transparent,var(--bg)); pointer-events:none;
+}
+.hero-inner{position:relative; z-index:1; max-width:700px}
+.hero h1{font-size:clamp(35px,7vw,72px); line-height:1.02; letter-spacing:-2px; margin:10px 0}
+.hero p{font-size:16px; line-height:1.5; color:var(--muted); max-width:520px}
+.actions{display:flex; gap:10px; flex-wrap:wrap; margin-top:20px; align-items:center}
+.content{padding:0 max(18px,4vw) 100px}
+.rowhead{display:flex; align-items:center; justify-content:space-between; gap:12px; margin:27px 0 12px}
+.rowhead h2{font-size:21px; letter-spacing:-.5px; margin:0}
+.rowhead span{font-size:12px; color:var(--muted)}
+.rail{
+  display:flex; gap:14px; overflow-x:auto; padding:4px 2px 16px;
+  scroll-snap-type:x mandatory; scrollbar-color:var(--faint) transparent;
+}
+.tile{
+  position:relative; flex:0 0 165px; min-height:136px;
+  background:linear-gradient(145deg,var(--tile-a),var(--tile-b));
+  border:1px solid var(--border-soft); border-radius:var(--radius);
+  overflow:hidden; color:var(--text); text-align:left;
+  scroll-snap-align:start; padding:0;
+  transition:transform .18s ease, border-color .18s ease, box-shadow .18s ease;
+}
+.tile:hover{border-color:var(--accent-line); box-shadow:0 8px 28px rgba(0,0,0,.28)}
+.tile:active{transform:scale(.97)}
+.tile img{width:100%; height:90px; object-fit:contain; padding:12px}
+.tile .fallback{
+  height:90px; display:grid; place-items:center;
+  font-size:35px; color:var(--faint); font-weight:900;
+}
+.tile .name{
+  display:block; padding:10px 12px 13px; font-size:13px; font-weight:650;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.tile .fav{
+  position:absolute; top:8px; right:8px; border:0; border-radius:50%;
+  background:rgba(0,0,0,.65); color:#fff; font-size:18px;
+  width:32px; height:32px; display:grid; place-items:center; padding:0;
+}
+.tile .fav.saved{color:#FF3D50}
+.searchbar{
+  width:100%; padding:14px 18px; background:var(--panel);
+  border:1px solid var(--border); border-radius:999px; color:var(--text); margin:14px 0;
+}
+.empty{color:var(--muted); padding:30px 0}
+#login{
+  width:calc(100% - 36px); max-width:530px; margin:48px auto;
+  background:var(--panel); border:1px solid var(--border);
+  border-radius:var(--radius); padding:28px; box-shadow:var(--shadow);
+}
+#login h2{font-size:25px; letter-spacing:-.7px; margin:10px 0 9px}
+#login p{font-size:14px; color:var(--muted)}
+#login .btn{margin-top:8px}
+#status{color:var(--text); overflow-wrap:anywhere; white-space:pre-wrap; margin-top:14px}
+#vault{border-top:1px solid var(--border-soft); margin-top:20px; padding-top:18px}
+#acctStatus{color:var(--muted); margin:0 0 12px; font-size:14px}
+.account-links{display:flex; gap:8px; flex-wrap:wrap}
+.account-links a{text-decoration:none}
+.footnote{font-size:12px; color:var(--faint); margin:50px 0}
+#count{color:var(--muted); font-size:13px}
+#movieCategory{
+  width:100%; padding:12px 14px; background:var(--input); color:var(--text);
+  border:1px solid var(--border); border-radius:12px; margin-bottom:12px;
+}
+
+/* ---------- Watch overlay (always a dark video surface) ---------- */
+#watch{position:fixed; inset:0; z-index:30; background:#050505; display:flex; flex-direction:column}
+#watchbar{padding:14px 20px; display:flex; align-items:center; gap:12px; color:#fff}
+#watchbar strong{flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:15px}
+#watchbar .btn{background:rgba(255,255,255,.12); border-color:rgba(255,255,255,.18); color:#fff}
+#watch video{width:100%; flex:1; min-height:0; background:#000}
+#watch small{padding:10px 20px; color:#aaa}
+#watch .btn{margin:0 20px 16px; background:rgba(255,255,255,.12); border-color:rgba(255,255,255,.18); color:#fff}
+
+/* ---------- Responsive ---------- */
+@media(min-width:800px){
+  .tile{flex-basis:210px; min-height:165px}
+  .tile img,.tile .fallback{height:115px}
+  .hero{min-height:420px}
+}
+@media(max-width:700px){
+  .landing{padding:0 20px 24px}
+  .landing-header{padding:20px 0; flex-wrap:wrap}
+  .landing-header .brand{font-size:19px}
+  .landing-nav{gap:12px; white-space:nowrap; flex-wrap:wrap}
+  .landing-nav .button{padding:10px 14px; font-size:12px; min-height:40px}
+  .landing-hero{grid-template-columns:1fr; gap:36px; min-height:0; padding:38px 0 40px}
+  .landing h1{letter-spacing:-1.5px}
+  .preview-card{transform:none}
+  .preview-screen{height:160px}
+  .features{grid-template-columns:1fr}
+  .landing-footer{flex-direction:column}
+  .account-page{padding:24px 18px}
+  .card{padding:24px}
+  .player-page .brand{font-size:20px}
+}
+@media(max-width:600px){
+  .player-page header{gap:12px; padding:12px 16px; flex-wrap:wrap}
+  .player-page nav{order:3; width:100%; gap:22px}
+  .hero{min-height:300px; padding:32px 20px}
+  .tile{flex-basis:145px}
+  .rowhead h2{font-size:19px}
+  .theme-switch{padding:8px 30px 8px 12px; font-size:12px}
+}
+@media(prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto!important}
+  *,*:before,*:after{transition:none!important}
+}
