@@ -141,13 +141,25 @@ export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.gi
     clean();
     try {
       const path=new URL(req.url,'http://localhost').pathname;
-      if(path==='/health'&&req.method==='GET')return json(res,200,{ok:true,service:'rigatoni-gateway'});
+      if(path==='/health'&&req.method==='GET')return json(res,200,{ok:true,service:'rigatoni-gateway',multi_provider:true});
       if(path==='/api/connect'&&req.method==='POST') {
         const auth=req.headers.authorization;
         if(!auth?.startsWith('Bearer ')||auth.length>8192)return json(res,401,{error:'sign_in_required'});
-        const vault=await fetchVault(supabaseUrl+'/functions/v1/provider-vault',{headers:{Authorization:auth,apikey:publicKey},cache:'no-store',signal:AbortSignal.timeout(15000)});
+        // Optional multi-provider selection. Legacy clients send no body and
+        // keep the original single-provider behavior below.
+        let providerId=null;
+        const rawBody=await boundedBody(req,4096).catch(()=>null);
+        if(rawBody){
+          let parsed;try{parsed=JSON.parse(rawBody)}catch{return json(res,400,{error:'invalid_request'})}
+          const candidate=parsed&&parsed.provider_id;
+          if(candidate!==undefined&&candidate!==null&&candidate!==''){
+            if(typeof candidate!=='string'||!/^[0-9a-fA-F-]{36}$/.test(candidate))return json(res,400,{error:'invalid_provider_id'});
+            providerId=candidate;
+          }
+        }
+        const vault=await fetchVault(supabaseUrl+'/functions/v1/provider-vault'+(providerId?'?id='+encodeURIComponent(providerId):''),{headers:{Authorization:auth,apikey:publicKey},cache:'no-store',signal:AbortSignal.timeout(15000)});
         if(!vault.ok)return json(res,vault.status===401?401:502,{error:'provider_vault_unavailable'});
-        const saved=await vault.json();if(!saved.saved)return json(res,409,{error:'save_provider_first'});
+        const saved=await vault.json();if(!saved.saved)return json(res,providerId?404:409,{error:providerId?'provider_not_found':'save_provider_first'});
         if(sessions.size>=maxSessions)return json(res,503,{error:'gateway_busy'});
         const base=new URL(saved.server_url);if(base.search||base.hash)throw Error('unsafe_target');
         const api=async (action,project,maxItems,categoryId)=>{

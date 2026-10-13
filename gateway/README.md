@@ -2,6 +2,22 @@
 
 Run this on the Raspberry Pi already connected to your Tailscale network. The GitHub Pages player stays where it is. Tailscale Serve terminates HTTPS and forwards requests to the gateway's loopback-only Docker port. No router port forwarding is needed. Every playback device must have Tailscale connected and permission to reach the Pi.
 
+## Multi-provider update
+
+The gateway now accepts an optional `provider_id` on `POST /api/connect` so the
+web player can connect through any one of several saved providers, and
+`GET /health` reports `multi_provider: true`. To pick it up on the Pi:
+
+```bash
+cd ~/rigatoni-stream-gateway/gateway && docker compose up -d --build
+```
+
+This rebuild is only needed for multi-provider connections through the gateway.
+Single-provider users change nothing: the old gateway and the old web player
+keep working exactly as before. The web player checks `/health` itself and will
+tell you to rebuild if you have more than one saved provider and the gateway is
+still the old build.
+
 ## Start on the Pi
 
 Docker Compose and Tailscale must already be installed. These commands create a dedicated checkout, without changing your other Pi services:
