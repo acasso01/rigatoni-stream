@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
-const code=fs.readFileSync(new URL('../xtream.html',import.meta.url),'utf8').match(/<script>([\s\S]*?)<\/script>/)[1];
+const scripts=[...fs.readFileSync(new URL('../xtream.html',import.meta.url),'utf8').matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m=>m[1]);
+const code=scripts[1];
 const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{value:'',textContent:'',classList:{add(){},remove(){},toggle(){}},pause(){},load(){},removeAttribute(){},replaceChildren(){},play:()=>new Promise(()=>{})});return nodes.get(id)};
 const timers=new Map();let tid=0;const requests=[];let reply,inspection=null;
-const ctx=vm.createContext({document:{getElementById:get,querySelectorAll:()=>[]},window:{scrollTo(){}},localStorage:{getItem:()=>null},location:{protocol:'https:'},URL,AbortController,setTimeout:(fn,ms)=>{const id=++tid;timers.set(id,{fn,ms});return id},clearTimeout:id=>timers.delete(id),fetch:async(url,options)=>{requests.push({url,options});if(url.includes('/inspect/'))return new Response(JSON.stringify(inspection||{}),{status:inspection?200:404});return typeof reply==='function'?reply():reply}});
+const ctx=vm.createContext({document:{getElementById:get,querySelectorAll:()=>[],querySelector:()=>null,documentElement:{setAttribute(){}}},window:{scrollTo(){}},localStorage:{getItem:()=>null},location:{protocol:'https:'},URL,AbortController,setTimeout:(fn,ms)=>{const id=++tid;timers.set(id,{fn,ms});return id},clearTimeout:id=>timers.delete(id),fetch:async(url,options)=>{requests.push({url,options});if(url.includes('/inspect/'))return new Response(JSON.stringify(inspection||{}),{status:inspection?200:404});return typeof reply==='function'?reply():reply}});
 vm.runInContext(code,ctx);
 vm.runInContext("credentials={base:'http://provider.example.invalid',user:'dummy-user',pass:'dummy-password'};gatewayStreams={7:'https://homepi.test.ts.net/media/session/resource'}",ctx);
 const tick=()=>new Promise(r=>setImmediate(r));

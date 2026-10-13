@@ -12,8 +12,9 @@ class Element{
  pause(){} load(){} async play(){} scrollIntoView(){}
 }
 const elements=new Map(),get=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id)};
-const document={getElementById:get,querySelectorAll:()=>[],createElement:tag=>new Element(tag)};
-const code=fs.readFileSync(new URL('../xtream.html',import.meta.url),'utf8').match(/<script>([\s\S]*?)<\/script>/)[1];
+const document={getElementById:get,querySelectorAll:()=>[],querySelector:()=>null,createElement:tag=>new Element(tag),documentElement:{setAttribute(){},getAttribute:()=>'dark'}};
+const scripts=[...fs.readFileSync(new URL('../xtream.html',import.meta.url),'utf8').matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m=>m[1]);
+const code=scripts[1];
 const writes=[],window={scrollTo(){}};
 const context=vm.createContext({document,window,localStorage:{getItem:()=>null,setItem:(...args)=>writes.push(args)},URL,setTimeout,clearTimeout,confirm:()=>true,location:{protocol:'https:',port:''}});
 vm.runInContext(code,context);

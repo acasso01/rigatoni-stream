@@ -32,8 +32,11 @@ const fakeUpstream=async(input,options={})=>{
  return{url,response:fakeResponse('dummy-media-bytes',{'content-type':'video/mp2t','content-length':'17'})};
 };
 const gateway=createGateway({supabaseUrl:'https://vault.example.invalid',publicKey:'dummy-public-key',now:()=>clock,upstream:fakeUpstream,probe:async url=>{assert.match(url,/^http:\/\/127\.0\.0\.1:\d+\/media\//);return{streams:[{type:'video',codec:'h264',width:1920,height:1080}]}},fetchVault:async(url,options)=>{
- assert.equal(url,'https://vault.example.invalid/functions/v1/provider-vault');assert.equal(options.cache,'no-store');
+ assert.ok(url.startsWith('https://vault.example.invalid/functions/v1/provider-vault'));assert.equal(options.cache,'no-store');
  if(options.headers.Authorization!=='Bearer dummy-auth')return{ok:false,status:401};
+ const idq=new URL(url).searchParams.get('id');
+ if(idq==='aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa')return{ok:true,json:async()=>({saved:true,server_url:'http://provider2.example.invalid',username:'user2',password:'pass2'})};
+ if(idq)return{ok:true,json:async()=>({saved:false})};
  return{ok:true,json:async()=>({saved:true,server_url:'http://provider.example.invalid',username:'dummy-user',password:'dummy-password'})};
 }});
 await new Promise(resolve=>gateway.listen(0,'127.0.0.1',resolve));
@@ -44,6 +47,11 @@ try{
  r=await fetch(root+'/api/connect',{method:'POST',headers:{Origin:'https://untrusted.example.invalid',Authorization:'Bearer dummy-auth'}});assert.equal(r.status,403);
  r=await fetch(root+'/api/connect',{method:'OPTIONS',headers:{Origin:'https://acasso01.github.io'}});assert.equal(r.status,204);assert.equal(r.headers.get('access-control-allow-origin'),'https://acasso01.github.io');
  r=await fetch(root+'/api/connect',{method:'POST',headers:{Authorization:'Bearer dummy-auth',Origin:'https://acasso01.github.io'}});assert.equal(r.status,200);assert.equal(r.headers.get('cache-control'),'no-store');const data=await r.json();assert.equal(data.channels.length,1);assert.equal(data.channels[0].stream_icon,'');assert.ok(!JSON.stringify(data).includes('dummy-password'));assert.ok(!JSON.stringify(data).includes('dummy-user'));
+ r=await fetch(root+'/health');assert.equal(r.status,200);assert.deepEqual(await r.json(),{ok:true,service:'rigatoni-gateway',multi_provider:true});
+ r=await fetch(root+'/api/connect',{method:'POST',headers:{Authorization:'Bearer dummy-auth',Origin:'https://acasso01.github.io','Content-Type':'application/json'},body:JSON.stringify({provider_id:'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa'})});assert.equal(r.status,200);const mpConnect=await r.json();assert.equal(mpConnect.channels.length,1);
+ r=await fetch(root+'/api/connect',{method:'POST',headers:{Authorization:'Bearer dummy-auth',Origin:'https://acasso01.github.io','Content-Type':'application/json'},body:JSON.stringify({provider_id:'not-a-uuid'})});assert.equal(r.status,400);assert.equal((await r.json()).error,'invalid_provider_id');
+ r=await fetch(root+'/api/connect',{method:'POST',headers:{Authorization:'Bearer dummy-auth',Origin:'https://acasso01.github.io','Content-Type':'application/json'},body:JSON.stringify({provider_id:'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb'})});assert.equal(r.status,404);assert.equal((await r.json()).error,'provider_not_found');
+ console.log('PASS multi-provider gateway: health flag, provider_id connect, invalid id rejected, unknown id 404');
  assert.ok(!requests.some(r=>r.url.searchParams.get('action')?.startsWith('get_vod')));
  const movieReplies=await Promise.all([fetch(root+data.movies_path),fetch(root+data.movies_path)]);for(const response of movieReplies)assert.equal(response.status,200);const movieData=await movieReplies[0].json();await movieReplies[1].json();
  assert.equal(requests.filter(r=>r.url.searchParams.get('action')==='get_vod_streams').length,1);assert.equal(movieData.movies[0].kind,'movie');assert.equal(movieData.movies[0].container_extension,'mp4');assert.equal(movieData.categories[0].category_name,'Test Movies');assert.ok(!JSON.stringify(movieData).includes('dummy-password'));assert.ok(!JSON.stringify(movieData).includes('dummy-user'));assert.ok(!JSON.stringify(movieData).includes('unused'));
