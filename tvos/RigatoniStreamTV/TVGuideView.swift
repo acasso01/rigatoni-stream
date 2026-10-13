@@ -271,17 +271,17 @@ private struct TVGuideRow: View {
             }
             .buttonStyle(TVCompactButtonStyle())
             .accessibilityLabel(isPinned ? "Unpin channel" : "Pin channel")
-            .onFocusChange { (focused: Bool) in
+            .background(FocusChangeReader { focused in
                 if focused { onHover(channel) } else { onHover(nil) }
-            }
+            })
 
             Button(action: play) {
                 TVGuideRowLabel(channel: channel, nowNext: nowNext, loading: loading)
             }
             .buttonStyle(TVCompactButtonStyle())
-            .onFocusChange { (focused: Bool) in
+            .background(FocusChangeReader { focused in
                 if focused { onHover(channel) } else { onHover(nil) }
-            }
+            })
         }
         .task(id: "\(model.libraryRevision)-\(channel.id)") {
             programs = []; loading = true
@@ -422,6 +422,18 @@ extension TVGuideView {
 }
 
 // MARK: - Hover preview player (muted VLC)
+
+// Reports focus changes on the enclosing focusable view (e.g. a Button) via
+// @Environment(\.isFocused). Attach with .background so it reads the button's
+// own focus state. Avoids View.onFocusChange, which is unavailable here.
+private struct FocusChangeReader: View {
+    let onChange: (Bool) -> Void
+    @Environment(\.isFocused) private var isFocused
+    var body: some View {
+        Color.clear
+            .onChange(of: isFocused) { _, newValue in onChange(newValue) }
+    }
+}
 
 // Lightweight VLC player for the guide's hover preview. Audio is disabled
 // entirely (--no-audio) so browsing the guide never makes sound. One
