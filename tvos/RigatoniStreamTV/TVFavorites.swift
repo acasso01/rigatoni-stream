@@ -11,24 +11,24 @@ typealias TVFavoriteRecord = SavedRecord
     }
     static func key(model: AppModel) -> String? { model.preferenceKey.map { $0 + "-favorites-v2" } }
     static func items(model: AppModel) -> [SavedRecord] { SavedCollection.items(key: key(model: model)) }
-    static func contains(id: String, kind: String, model: AppModel) -> Bool {
-        items(model: model).contains { $0.id == kind + ":" + id }
+    static func contains(id: String, kind: String, providerID: UUID? = nil, model: AppModel) -> Bool {
+        items(model: model).contains { $0.id == SavedRecord.makeID(kind: kind, itemID: id, providerID: providerID) }
     }
     static func contains(item: CatalogItem, model: AppModel) -> Bool {
-        contains(id: item.id, kind: item.kind == .live ? "live" : "movie", model: model)
+        contains(id: item.id, kind: item.kind == .live ? "live" : "movie", providerID: item.providerID, model: model)
     }
     static func poster(_ record: SavedRecord, model: AppModel) -> URL? {
         key(model: model).flatMap { artwork[$0 + ":" + record.id] }
     }
     @discardableResult static func toggle(item: CatalogItem, model: AppModel) -> Bool {
-        toggle(id: item.id, name: item.name, kind: item.kind == .live ? "live" : "movie", ext: item.fileExtension, categoryID: item.categoryID, poster: item.poster, model: model)
+        toggle(id: item.id, name: item.name, kind: item.kind == .live ? "live" : "movie", ext: item.fileExtension, categoryID: item.categoryID, poster: item.poster, providerID: item.providerID, model: model)
     }
     @discardableResult static func toggleSeries(_ series: SeriesItem, model: AppModel) -> Bool {
-        toggle(id: series.id, name: series.name, kind: "series", ext: "mp4", categoryID: "", poster: series.poster, model: model)
+        toggle(id: series.id, name: series.name, kind: "series", ext: "mp4", categoryID: "", poster: series.poster, providerID: series.providerID, model: model)
     }
-    @discardableResult static func toggle(id: String, name: String, kind: String, ext: String, categoryID: String, poster: URL?, model: AppModel) -> Bool {
+    @discardableResult static func toggle(id: String, name: String, kind: String, ext: String, categoryID: String, poster: URL?, providerID: UUID? = nil, model: AppModel) -> Bool {
         guard let key = key(model: model) else { return false }
-        let record = SavedRecord(kind: kind, itemID: id, name: name, ext: ext, categoryID: categoryID, addedAt: Date())
+        let record = SavedRecord(kind: kind, itemID: id, name: name, ext: ext, categoryID: categoryID, addedAt: Date(), providerID: providerID)
         let adding = SavedCollection.toggle(record, key: key)
         let artKey = key + ":" + record.id
         if adding { artwork[artKey] = poster } else { artwork[artKey] = nil }

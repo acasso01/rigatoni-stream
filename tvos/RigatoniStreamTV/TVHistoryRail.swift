@@ -38,7 +38,7 @@ struct TVHistoryRail: View {
         .onChange(of: model.libraryRevision) { _, _ in reload() }
         .fullScreenCover(item: $playing, onDismiss: { reload() }) { item in
             if playingKind == "series" {
-                DirectPlayerView(item: item, provider: model.provider,
+                DirectPlayerView(item: item, provider: model.provider(for: item),
                              startSeconds: model.preferences.progress["series-" + item.id]?.seconds ?? 0,
                              progressID: "series-" + item.id)
             } else { CatalogDestination(item: item) }
@@ -51,7 +51,7 @@ struct TVHistoryRail: View {
     private func reload() {
         records = TVLastWatched.items(model: model).filter {
             let kind: LibraryKind = $0.kind == "live" ? .live : .movies
-            return $0.kind == "series" || model.preferences.visible(CatalogItem(id: $0.itemID, name: $0.name, kind: kind, fileExtension: $0.ext, poster: nil, categoryID: $0.categoryID))
+            return $0.kind == "series" || model.preferences.visible(CatalogItem(id: $0.itemID, name: $0.name, kind: kind, fileExtension: $0.ext, poster: nil, categoryID: $0.categoryID, providerID: $0.providerID))
         }
     }
 
@@ -59,13 +59,14 @@ struct TVHistoryRail: View {
         let scope = model.preferenceKey
         notice = ""; playingKind = record.kind
         let kind: LibraryKind = record.kind == "live" ? .live : .movies
-        var item = CatalogItem(id: record.itemID, name: record.name, kind: kind, fileExtension: record.ext, poster: nil, categoryID: record.categoryID)
+        var item = CatalogItem(id: record.itemID, name: record.name, kind: kind, fileExtension: record.ext, poster: nil, categoryID: record.categoryID, providerID: record.providerID)
         do {
+            let owner = model.provider(for: item)
             if record.kind == "series" {
-                guard model.provider.kind == .xtream else {
+                guard owner.kind == .xtream else {
                     notice = "This episode requires an Xtream Codes provider."; return
                 }
-                item.playbackURL = try SeriesStore.seriesStreamURL(provider: model.provider, episodeID: item.id, ext: item.fileExtension)
+                item.playbackURL = try SeriesStore.seriesStreamURL(provider: owner, episodeID: item.id, ext: item.fileExtension)
             } else { item = try await model.resolve(item) }
             guard scope == model.preferenceKey else { return }
             if record.kind == "movie" { detailItem = item; showingDetail = true }

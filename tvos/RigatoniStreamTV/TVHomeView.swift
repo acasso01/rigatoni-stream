@@ -91,7 +91,7 @@ private struct TVPinnedRow: View {
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 24) {
-                        ForEach(items.filter(model.preferences.visible).prefix(20)) { item in
+                        ForEach(items.filter(model.preferences.visible).prefix(20), id: \.scopedID) { item in
                             Button { playing = item } label: {
                                 VStack(alignment: .leading, spacing: 8) {
                                     ProviderPoster(url: item.poster, kind: .live)

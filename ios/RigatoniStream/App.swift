@@ -28,6 +28,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var providers = false
     @AppStorage("rigatoni-appearance") private var appearance = "dark"
+    @AppStorage("ant-library-mode") private var libraryModeRaw = LibraryMode.separate.rawValue
     @AppStorage("rigatoni-live-buffer-ms") private var liveBuffer = 1500
     @AppStorage("rigatoni-movie-buffer-ms") private var movieBuffer = 4000
     @AppStorage("ant-playback-engine") private var engine = "auto"
@@ -40,8 +41,26 @@ struct SettingsView: View {
                     Button("Refresh provider") { model.refreshProvider() }
                     if model.provider.usesHTTP { Label("This provider uses unencrypted HTTP.", systemImage: "lock.open").font(.footnote) }
                 }
+                Section("Library") {
+                    StreamOptionPicker(options: LibraryMode.allCases.map { ($0, $0.title) }, selection: Binding(
+                        get: { LibraryMode(rawValue: libraryModeRaw) ?? .separate },
+                        set: { model.setLibraryMode($0) }
+                    ))
+                    .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 4, trailing: 16))
+                    Text(model.libraryMode.blurb).font(.footnote).foregroundStyle(.secondary)
+                }
                 Section("Appearance") {
-                    Picker("Theme", selection: $appearance) { ForEach(AppAppearance.allCases) { Text($0.title).tag($0.rawValue) } }
+                    ForEach(AppAppearance.allCases) { theme in
+                        Button { appearance = theme.rawValue } label: {
+                            HStack {
+                                Text(theme.title)
+                                Spacer()
+                                if appearance == theme.rawValue {
+                                    Image(systemName: "checkmark").foregroundStyle(StreamTheme.accent)
+                                }
+                            }
+                        }.foregroundStyle(StreamTheme.text)
+                    }
                     NavigationLink("Hidden categories / channels") { LibraryCustomizationView() }
                 }
                 Section("Playback") {

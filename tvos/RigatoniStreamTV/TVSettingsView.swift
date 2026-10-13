@@ -3,6 +3,7 @@ import SwiftUI
 struct TVSettingsView: View {
     @EnvironmentObject private var model: AppModel
     @AppStorage("rigatoni-appearance") private var appearance = "dark"
+    @AppStorage("ant-library-mode") private var libraryModeRaw = LibraryMode.separate.rawValue
     @AppStorage("rigatoni-live-buffer-ms") private var liveBuffer = 1500
     @AppStorage("rigatoni-movie-buffer-ms") private var movieBuffer = 4000
     @AppStorage("ant-playback-engine") private var engine = "auto"
@@ -15,24 +16,28 @@ struct TVSettingsView: View {
                 Text("Settings").font(.system(size: 36, weight: .bold))
                 group("Providers") {
                     Text(model.provider.name).font(.headline)
-                    Button("Add, edit or switch providers") { providers = true }.focused($entryFocused)
-                    Button("Refresh provider") { model.refreshProvider() }
+                    Button("Add, edit or switch providers") { providers = true }.focused($entryFocused).buttonStyle(TVCompactButtonStyle())
+                    Button("Refresh provider") { model.refreshProvider() }.buttonStyle(TVCompactButtonStyle())
                     if model.provider.usesHTTP { Label("This provider uses unencrypted HTTP.", systemImage: "lock.open").font(.system(size: 20)) }
                 }
+                group("Library") {
+                    StreamOptionPicker(options: LibraryMode.allCases.map { ($0, $0.title) }, selection: Binding(
+                        get: { LibraryMode(rawValue: libraryModeRaw) ?? .separate },
+                        set: { model.setLibraryMode($0) }
+                    ))
+                    Text(model.libraryMode.blurb).font(.system(size: 20)).foregroundStyle(.secondary)
+                }
                 group("Appearance") {
-                    Picker("Theme", selection: $appearance) { ForEach(AppAppearance.allCases) { Text($0.title).tag($0.rawValue) } }.pickerStyle(.segmented)
-                    Button("Hidden categories / channels") { customization = true }
+                    StreamOptionPicker(options: AppAppearance.allCases.map { ($0.rawValue, $0.title) }, selection: $appearance)
+                    Button("Hidden categories / channels") { customization = true }.buttonStyle(TVCompactButtonStyle())
                 }
                 group("Playback") {
-                    Picker("Player", selection: $engine) {
-                        Text("Automatic").tag("auto"); Text("VLC compatibility").tag("vlc"); Text("Apple player").tag("apple")
-                    }
-                    Picker("Live TV buffer (VLC)", selection: $liveBuffer) {
-                        Text("Low delay · 1.5 seconds").tag(1500); Text("Balanced · 3 seconds").tag(3000); Text("More stable · 6 seconds").tag(6000)
-                    }
-                    Picker("Movie buffer (VLC)", selection: $movieBuffer) {
-                        Text("4 seconds").tag(4000); Text("8 seconds").tag(8000); Text("12 seconds").tag(12000)
-                    }
+                    Text("Player").font(.system(size: 22, weight: .semibold))
+                    StreamOptionPicker(options: [("auto", "Automatic"), ("vlc", "VLC compatibility"), ("apple", "Apple player")], selection: $engine)
+                    Text("Live TV buffer (VLC)").font(.system(size: 22, weight: .semibold))
+                    StreamOptionPicker(options: [(1500, "Low delay · 1.5 seconds"), (3000, "Balanced · 3 seconds"), (6000, "More stable · 6 seconds")], selection: $liveBuffer)
+                    Text("Movie buffer (VLC)").font(.system(size: 22, weight: .semibold))
+                    StreamOptionPicker(options: [(4000, "4 seconds"), (8000, "8 seconds"), (12000, "12 seconds")], selection: $movieBuffer)
                     Text("Automatic uses Apple playback for HLS/MP4 and VLC for other containers or decoding failures. Original quality is preserved.")
                         .font(.system(size: 20)).foregroundStyle(.secondary)
                 }

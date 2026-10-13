@@ -2,13 +2,20 @@ import Foundation
 
 // Only catalog metadata is persisted. Artwork and playback URLs stay in memory.
 struct SavedRecord: Codable, Identifiable {
-    var id: String { kind + ":" + itemID }
+    var id: String { Self.makeID(kind: kind, itemID: itemID, providerID: providerID) }
     let kind: String
     let itemID: String
     let name: String
     let ext: String
     let categoryID: String
     let addedAt: Date
+    /// Owning provider in combined-library mode. Nil for separate mode and
+    /// all previously saved records (their ids are unchanged).
+    var providerID: UUID? = nil
+    static func makeID(kind: String, itemID: String, providerID: UUID?) -> String {
+        if let providerID { return kind + ":" + providerID.uuidString + ":" + itemID }
+        return kind + ":" + itemID
+    }
 }
 enum SavedCollection {
     static func items(key: String?) -> [SavedRecord] {

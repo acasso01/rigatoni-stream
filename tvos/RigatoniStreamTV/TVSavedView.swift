@@ -129,15 +129,15 @@ struct TVSavedView: View {
         notice = ""
         playingKind = record.kind
         if record.kind == "series" {
-            guard model.provider.kind == .xtream else {
+            let seriesItem = SeriesItem(id: record.itemID, name: record.name,
+                                        poster: TVFavorites.poster(record, model: model),
+                                        providerID: record.providerID)
+            let seriesStore = SeriesStore(model: model)
+            guard seriesStore.provider(for: seriesItem).kind == .xtream else {
                 notice = "TV Shows requires an Xtream Codes provider."
                 return
             }
-            let store = SeriesStore(model: model)
-            detailSeries = TVSeriesDetailRequest(
-                series: SeriesItem(id: record.itemID, name: record.name,
-                                 poster: TVFavorites.poster(record, model: model)),
-                store: store)
+            detailSeries = TVSeriesDetailRequest(series: seriesItem, store: seriesStore)
             showingSeriesDetail = true
             return
         }
@@ -147,7 +147,8 @@ struct TVSavedView: View {
             name: record.name,
             kind: kind,
             fileExtension: record.ext,
-            poster: TVFavorites.poster(record, model: model), categoryID: record.categoryID
+            poster: TVFavorites.poster(record, model: model), categoryID: record.categoryID,
+            providerID: record.providerID
         )
         Task {
             connecting = true; defer { connecting = false }
