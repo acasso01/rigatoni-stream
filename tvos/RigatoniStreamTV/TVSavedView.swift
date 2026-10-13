@@ -119,8 +119,8 @@ struct TVSavedView: View {
             .font(.caption2.bold())
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(red ? TVTheme.accent : Color.black.opacity(0.7))
-            .foregroundStyle(.white)
+            .background(red ? AnyShapeStyle(TVTheme.accentFill) : AnyShapeStyle(Color.black.opacity(0.7)))
+            .foregroundStyle(red ? TVTheme.onAccent : .white)
             .clipShape(Capsule())
             .padding(12)
     }

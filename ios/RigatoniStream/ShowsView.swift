@@ -67,8 +67,8 @@ private struct ShowsBrowser: View {
                                 Button { category = entry.id } label: {
                                     Text(entry.name).font(.subheadline.weight(.semibold)).lineLimit(1)
                                         .padding(.horizontal, 18).frame(height: 54)
-                                        .background(category == entry.id ? StreamTheme.accent : StreamTheme.panel, in: Capsule())
-                                        .foregroundStyle(category == entry.id ? Color.white : StreamTheme.text)
+                                        .background(category == entry.id ? AnyShapeStyle(StreamTheme.accentFill) : AnyShapeStyle(StreamTheme.panel), in: Capsule())
+                                        .foregroundStyle(category == entry.id ? StreamTheme.onAccent : StreamTheme.text)
                                 }.buttonStyle(.plain).fixedSize(horizontal: true, vertical: false)
                             }
                         }.padding(.horizontal).padding(.vertical, 8)
@@ -165,8 +165,8 @@ struct ShowDetailView: View {
                             ForEach(seasons) { item in
                                 Button { season = item.number } label: {
                                     Text(item.name).padding(.horizontal, 18).frame(height: 48)
-                                        .background(season == item.number ? StreamTheme.accent : StreamTheme.panel, in: Capsule())
-                                        .foregroundStyle(season == item.number ? Color.white : StreamTheme.text)
+                                        .background(season == item.number ? AnyShapeStyle(StreamTheme.accentFill) : AnyShapeStyle(StreamTheme.panel), in: Capsule())
+                                        .foregroundStyle(season == item.number ? StreamTheme.onAccent : StreamTheme.text)
                                 }.buttonStyle(.plain).fixedSize(horizontal: true, vertical: false)
                             }
                         }.padding(.vertical, 6)

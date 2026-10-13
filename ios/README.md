@@ -77,7 +77,7 @@ VLCKit 4.0.0a25 is pinned using VideoLAN's official podspec (source commit 2e086
 TV Shows is available in the iPhone tab bar. Categories load separately; open a show to fetch seasons and episodes. Episodes use the native VLC player, retain original quality and support Continue/Restart with progress stored separately from movies. Series requires direct provider access (approved local HTTP configuration or HTTPS); the HTTPS gateway does not expose series yet. Existing installations can add the new source files with `bundle exec ruby update_project.rb` from `ios/`, then build and run the workspace.
 
 
-The interface update includes Dark, iOS Light and Midnight themes. Apple TV has a left navigation rail with Guide and Saved, plus movie/show hero banners. The guide uses provider short-EPG data with at most four concurrent requests and a bounded, account/provider-scoped memory cache; gateway/no-EPG providers retain playable Live rows. Saved favorites persist IDs and metadata only, respect hidden movie/live categories and channels, and open movie details with Continue/Restart. New source files are added to existing Xcode projects by `bundle exec ruby update_project.rb`; signing and local HTTP exceptions are preserved.
+The interface update includes Dark, iOS Light, Ghost and Nebula themes. Apple TV has a left navigation rail with Guide and Saved, plus movie/show hero banners. The guide uses provider short-EPG data with at most four concurrent requests and a bounded, account/provider-scoped memory cache; gateway/no-EPG providers retain playable Live rows. Saved favorites persist IDs and metadata only, respect hidden movie/live categories and channels, and open movie details with Continue/Restart. New source files are added to existing Xcode projects by `bundle exec ruby update_project.rb`; signing and local HTTP exceptions are preserved.
 
 ### Matching the Apple TV experience
 
@@ -92,3 +92,8 @@ These lists are device-local, just like the Apple TV lists.
 Run `bundle exec ruby update_project.rb` in `ios` after pulling this update so
 existing Xcode projects include MobileExperience.swift without changing signing
 or private HTTP settings.
+
+Ghost uses #0A0A0B / #141416 surfaces and white accents. Nebula uses #060609 /
+#0E0E14 surfaces with a #A78BFA to #22D3EE accent gradient. Midnight has been
+removed from both native theme pickers; existing Midnight selections migrate to
+Nebula without changing provider profiles or preferences unrelated to appearance.

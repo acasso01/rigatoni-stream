@@ -275,9 +275,9 @@ struct TVGuideView: View {
         }
         .buttonStyle(TVCompactButtonStyle())
         .focused($chipFocus, equals: "chip-\(id)")
-        .background(selectedCategory == id ? TVTheme.accent : TVTheme.card)
+        .background(selectedCategory == id ? AnyShapeStyle(TVTheme.accentFill) : AnyShapeStyle(TVTheme.card))
         .clipShape(RoundedRectangle(cornerRadius: 12))
-        .foregroundStyle(selectedCategory == id ? Color.white : TVTheme.text)
+        .foregroundStyle(selectedCategory == id ? TVTheme.onAccent : TVTheme.text)
     }
 }
 

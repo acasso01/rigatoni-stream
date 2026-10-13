@@ -351,8 +351,8 @@ struct MobileGuideView: View {
         Button { selected = id } label: {
             Text(name).font(.subheadline.bold()).lineLimit(1).fixedSize()
                 .padding(.horizontal, 16).padding(.vertical, 12)
-                .background(selected == id ? StreamTheme.accent : StreamTheme.panel, in: Capsule())
-                .foregroundStyle(selected == id ? .white : StreamTheme.text)
+                .background(selected == id ? AnyShapeStyle(StreamTheme.accentFill) : AnyShapeStyle(StreamTheme.panel), in: Capsule())
+                .foregroundStyle(selected == id ? StreamTheme.onAccent : StreamTheme.text)
         }.buttonStyle(.plain)
     }
     private func togglePin(_ id: String) {

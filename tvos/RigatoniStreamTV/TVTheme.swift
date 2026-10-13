@@ -1,13 +1,14 @@
 import SwiftUI
 
-// Design tokens mirrored from the web app's theme.css so the TV build
-// looks like Ant Streams: dark background, off-white text, red accent.
+// Native theme tokens shared with the iPhone app.
 enum TVTheme {
     static var background: Color { StreamTheme.background } // #09090b
     static var panel: Color { StreamTheme.panel }      // #17171b
-    static let text = Color.primary       // #fafafa
+    static var text: Color { StreamTheme.text }
     static var card: Color { StreamTheme.card }
     static var accent: Color { StreamTheme.accent }
+    static var accentFill: LinearGradient { StreamTheme.accentFill }
+    static var onAccent: Color { StreamTheme.onAccent }
     static var red: Color { StreamTheme.accent }        // #e50914
     static var muted: Color { StreamTheme.muted }
     static let corner: CGFloat = 18

@@ -44,8 +44,8 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Ant Streams
         INFOPLIST_KEY_NSHumanReadableCopyright: 'Ant Streams; VLCKit licensed under LGPL 2.1'
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        MARKETING_VERSION: '0.2.2'
-        CURRENT_PROJECT_VERSION: '4'
+        MARKETING_VERSION: '0.2.3'
+        CURRENT_PROJECT_VERSION: '5'
   RigatoniStreamTVTests:
     type: bundle.unit-test
     platform: tvOS

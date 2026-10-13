@@ -220,44 +220,57 @@ enum StreamTheme {
         switch appearance {
         case .light: return rgb(242, 242, 247)
         case .dark: return rgb(9, 9, 11)
-        case .midnight: return rgb(11, 16, 38)
+        case .ghost: return rgb(10, 10, 11)
+        case .nebula: return rgb(6, 6, 9)
         }
     }
     static func panel(for appearance: AppAppearance) -> Color {
         switch appearance {
         case .light: return rgb(255, 255, 255)
         case .dark: return rgb(23, 23, 27)
-        case .midnight: return rgb(22, 29, 56)
+        case .ghost: return rgb(20, 20, 22)
+        case .nebula: return rgb(14, 14, 20)
         }
     }
-    /// Elevated card surface: matches panel on Dark/Light, a step above
-    /// panel on Midnight.
-    static func card(for appearance: AppAppearance) -> Color {
-        switch appearance {
-        case .midnight: return rgb(30, 38, 71)
-        default: return panel(for: appearance)
-        }
-    }
+    static func card(for appearance: AppAppearance) -> Color { panel(for: appearance) }
     static func text(for appearance: AppAppearance) -> Color {
         switch appearance {
         case .light: return rgb(28, 28, 30)
         case .dark: return rgb(250, 250, 250)
-        case .midnight: return rgb(255, 255, 255)
+        case .ghost: return .white
+        case .nebula: return rgb(237, 235, 245)
         }
     }
     static func muted(for appearance: AppAppearance) -> Color {
         switch appearance {
         case .light: return rgb(107, 114, 128)
         case .dark: return rgb(161, 161, 170)
-        case .midnight: return rgb(139, 147, 184)
+        case .ghost: return rgb(161, 161, 170)
+        case .nebula: return rgb(143, 141, 163)
         }
     }
     static func accent(for appearance: AppAppearance) -> Color {
         switch appearance {
-        case .midnight: return rgb(124, 108, 255)
+        case .ghost: return .white
+        case .nebula: return rgb(167, 139, 250)
         default: return rgb(229, 9, 20)
         }
     }
+    static func accentFill(for appearance: AppAppearance) -> LinearGradient {
+        let colors = appearance == .nebula
+            ? [rgb(167, 139, 250), rgb(34, 211, 238)]
+            : [accent(for: appearance), accent(for: appearance)]
+        return LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing)
+    }
+    // White/aurora fills need dark labels, including selected chips and badges.
+    static func onAccent(for appearance: AppAppearance) -> Color {
+        switch appearance {
+        case .ghost, .nebula: return rgb(6, 6, 9)
+        default: return .white
+        }
+    }
+    static var accentFill: LinearGradient { accentFill(for: appearance) }
+    static var onAccent: Color { onAccent(for: appearance) }
     static var text: Color { text(for: appearance) }
     static var background: Color { background(for: appearance) }
     static var panel: Color { panel(for: appearance) }
@@ -311,8 +324,8 @@ struct LiveChannelRow: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Text("LIVE").font(.caption2.weight(.bold))
                         .padding(.horizontal, 8).padding(.vertical, 4)
-                        .foregroundStyle(.white)
-                        .background(StreamTheme.accent(for: theme), in: Capsule())
+                        .foregroundStyle(StreamTheme.onAccent(for: theme))
+                        .background(StreamTheme.accentFill(for: theme), in: Capsule())
                         .accessibilityHidden(true)
                 }
                 if let now = guide?.now {

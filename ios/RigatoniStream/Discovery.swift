@@ -215,7 +215,7 @@ struct MovieShelf: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
                 Capsule()
-                    .fill(StreamTheme.accent(for: AppAppearance(rawValue: appearance) ?? .dark))
+                    .fill(StreamTheme.accentFill(for: AppAppearance(rawValue: appearance) ?? .dark))
                     .frame(width: 4, height: 22)
                 Text(category.name).font(.title3.bold()).lineLimit(1)
                 Spacer()
@@ -425,11 +425,20 @@ struct LibraryPreferences: Codable {
     }
 }
 enum AppAppearance: String, CaseIterable, Identifiable {
-    case dark, light, midnight
+    case dark, light, ghost, nebula
     var id: String { rawValue }
-    var title: String { switch self { case .dark: return "Dark"; case .light: return "iOS Light"; case .midnight: return "Midnight" } }
+    var title: String { switch self { case .dark: return "Dark"; case .light: return "iOS Light"; case .ghost: return "Ghost"; case .nebula: return "Nebula" } }
     var scheme: ColorScheme { self == .light ? .light : .dark }
     var accent: Color { StreamTheme.accent(for: self) }
+
+    static func migrateStoredSelection(in defaults: UserDefaults = .standard) {
+        let key = "rigatoni-appearance"
+        switch defaults.string(forKey: key) {
+        case "netflix": defaults.set(AppAppearance.dark.rawValue, forKey: key)
+        case "xfinity", "midnight": defaults.set(AppAppearance.nebula.rawValue, forKey: key)
+        default: break
+        }
+    }
 }
 
 struct LibraryCustomizationView: View {

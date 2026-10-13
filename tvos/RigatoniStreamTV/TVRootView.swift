@@ -101,12 +101,11 @@ struct TVRootView: View {
                     }
                     .padding(.horizontal, 18)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                    .background(
-                        selected ? TVTheme.accent
-                        : focused ? TVTheme.focusCard
-                        : Color.clear
-                    )
-                    .foregroundStyle(selected ? .white : TVTheme.text)
+                    .background {
+                        if selected { TVTheme.accentFill }
+                        else { focused ? TVTheme.focusCard : Color.clear }
+                    }
+                    .foregroundStyle(selected ? TVTheme.onAccent : TVTheme.text)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
                 }
                 .buttonStyle(TVCompactButtonStyle())

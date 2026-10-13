@@ -5,12 +5,7 @@ struct RigatoniStreamApp: App {
     @StateObject private var model = AppModel()
     @AppStorage("rigatoni-appearance") private var appearance = "dark"
     init() {
-        if UserDefaults.standard.string(forKey: "rigatoni-appearance") == "netflix" {
-            UserDefaults.standard.set("dark", forKey: "rigatoni-appearance")
-        }
-        if UserDefaults.standard.string(forKey: "rigatoni-appearance") == "xfinity" {
-            UserDefaults.standard.set("midnight", forKey: "rigatoni-appearance")
-        }
+        AppAppearance.migrateStoredSelection()
     }
     var body: some Scene {
         WindowGroup {

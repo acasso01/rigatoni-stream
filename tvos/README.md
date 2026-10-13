@@ -77,9 +77,9 @@ TV Shows uses direct provider access and supports season/episode browsing. Live 
 The Ant Streams update keeps the original bundle identifiers, Keychain service and preference keys so installed apps retain settings. From the repository root, run `cd ios && bundle exec ruby update_project.rb` for iPhone or `cd tvos && bundle exec ruby update_project.rb` for Apple TV, then build and run the corresponding workspace.
 
 
-The interface update includes Dark, iOS Light and Midnight themes. Apple TV has a left navigation rail with Guide and Saved, plus movie/show hero banners. The guide uses provider short-EPG data with at most four concurrent requests and a bounded, account/provider-scoped memory cache; gateway/no-EPG providers retain playable Live rows. Saved favorites persist IDs and metadata only, respect hidden movie/live categories and channels, and open movie details with Continue/Restart. New source files are added to existing Xcode projects by `bundle exec ruby update_project.rb`; signing and local HTTP exceptions are preserved.
+The interface update includes Dark, iOS Light, Ghost and Nebula themes. Apple TV has a left navigation rail with Guide and Saved, plus movie/show hero banners. The guide uses provider short-EPG data with at most four concurrent requests and a bounded, account/provider-scoped memory cache; gateway/no-EPG providers retain playable Live rows. Saved favorites persist IDs and metadata only, respect hidden movie/live categories and channels, and open movie details with Continue/Restart. New source files are added to existing Xcode projects by `bundle exec ruby update_project.rb`; signing and local HTTP exceptions are preserved.
 
-## Refresh an existing installation (0.2.2, build 4)
+## Refresh an existing installation (0.2.3, build 5)
 
 The generated Xcode project is local and ignored by Git. Matching branch HEAD
 alone does not establish target membership or which app was installed. Previously
@@ -111,14 +111,14 @@ sets AppIcon and updates the Info.plist/version without changing bundle identity
    any customized identifier so Xcode updates the same app and preserves data.
 3. **Product > Clean Build Folder** (Shift-Command-K), then **Product > Run**
    (Command-R). Confirm Xcode launches the app on that TV.
-4. Settings must show **Version 0.2.2 (4)**. Live TV and Guide should show
+4. Settings must show **Version 0.2.3 (5)**. Live TV and Guide should show
    **All Channels**, a time bar, category chips and the preview pane.
 5. Pause focus on a channel for 250 ms: VLC starts a preview with sound after buffering.
    Rapid focus moves, category changes, leaving the guide and opening playback
    cancel pending previews and stop the old stream. Click the channel for fullscreen
    playback with sound through the selected normal playback engine. Test Back,
    star pins and page/category controls too.
-6. Check the Home Screen icon. If Settings confirms build 4 but the icon still
+6. Check the Home Screen icon. If Settings confirms build 5 but the icon still
    shows cached artwork, restart Apple TV and check again. Keep the app installed
    so local profiles and preferences remain available.
 
@@ -129,3 +129,8 @@ The 0.2.2 layout widens the menu and distributes its buttons through the full le
 column. The guide heading and preview share one row, category chips have a bounded
 height, and channel rows fill the remaining height. Previews automatically play
 with sound; selecting a channel stops the preview before fullscreen playback starts.
+
+Ghost uses #0A0A0B / #141416 surfaces and white accents. Nebula uses #060609 /
+#0E0E14 surfaces with a #A78BFA to #22D3EE accent gradient. Midnight has been
+removed from both native theme pickers; existing Midnight selections migrate to
+Nebula without changing provider profiles or preferences unrelated to appearance.

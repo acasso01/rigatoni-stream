@@ -22,16 +22,16 @@ target.resources_build_phase.add_file_reference(asset) unless target.resources_b
 target.build_configurations.each do |config|
   config.build_settings['ASSETCATALOG_COMPILER_APPICON_NAME'] = 'AppIcon'
   config.build_settings['INFOPLIST_KEY_CFBundleDisplayName'] = 'Ant Streams'
-  config.build_settings['MARKETING_VERSION'] = '0.2.2'
-  config.build_settings['CURRENT_PROJECT_VERSION'] = '4'
+  config.build_settings['MARKETING_VERSION'] = '0.2.3'
+  config.build_settings['CURRENT_PROJECT_VERSION'] = '5'
   path = config.build_settings['INFOPLIST_FILE']
   abort 'Expected a local generated Info.plist' unless path && !path.include?('$')
   info = Xcodeproj::Plist.read_from_path(path)
   info['NSAppTransportSecurity'] = { 'NSAllowsArbitraryLoads' => true }
   info['CFBundleDisplayName'] = 'Ant Streams'
   info['CFBundleName'] = 'Ant Streams'
-  info['CFBundleShortVersionString'] = '0.2.2'
-  info['CFBundleVersion'] = '4'
+  info['CFBundleShortVersionString'] = '0.2.3'
+  info['CFBundleVersion'] = '5'
   Xcodeproj::Plist.write_to_path(info, path)
 end
 project.save
