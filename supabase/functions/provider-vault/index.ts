@@ -86,10 +86,25 @@ Deno.serve(async (req) => {
           password: await decryptPassword(key, data) });
       }
       const { data, error } = await admin.from("iptv_providers")
-        .select("id, label, server_url, username, updated_at")
+        .select("id, label, server_url, username, password_ciphertext, password_iv, updated_at")
         .eq("user_id", user.id).order("updated_at", { ascending: false });
       if (error) throw error;
-      return json({ providers: data ?? [] });
+      const providers = (data ?? []).map(
+        ({ password_ciphertext, password_iv, ...rest }) => rest);
+      if (data && data.length === 1) {
+        // Legacy single-provider shape: the old Pi gateway does a bare GET and
+        // expects {saved, server_url, username, password}. Include it alongside
+        // the list so single-provider users keep working without a Pi rebuild.
+        const row = data[0];
+        const plain = await crypto.subtle.decrypt(
+          { name: "AES-GCM", iv: fromB64(row.password_iv) }, key,
+          fromB64(row.password_ciphertext),
+        );
+        return json({ saved: true, id: row.id, label: row.label,
+          server_url: row.server_url, username: row.username,
+          password: new TextDecoder().decode(plain), providers });
+      }
+      return json({ providers });
     }
 
     if (req.method === "POST") {
