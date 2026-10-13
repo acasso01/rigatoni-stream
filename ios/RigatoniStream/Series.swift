@@ -6,6 +6,9 @@ struct SeriesItem: Identifiable {
     let id: String
     let name: String
     let poster: URL?
+    /// Owning provider in combined-library mode. Nil = selected provider.
+    var providerID: UUID? = nil
+    var scopedID: String { CatalogItem.namespaced(providerID: providerID, id: id) }
 }
 
 struct SeriesSeason: Identifiable {
@@ -39,10 +42,19 @@ final class SeriesStore: ObservableObject {
         guard model.providerReady else {
             return "Add your provider in Settings to browse TV shows."
         }
-        if model.provider.kind == .m3u {
+        let kinds = model.libraryMode == .combined
+            ? model.combinedProfiles.map(\.provider.kind)
+            : [model.provider.kind]
+        if !kinds.contains(.xtream) {
             return "M3U playlists do not supply seasons and episodes. Add an Xtream Codes provider for TV Shows; playlist video entries remain available in Movies."
         }
         return nil
+    }
+    /// Owning provider for a series item in combined mode.
+    func provider(for series: SeriesItem) -> Provider {
+        if model.libraryMode == .combined, let pid = series.providerID,
+           let profile = model.vault.profiles.first(where: { $0.id == pid }) { return profile.provider }
+        return model.provider
     }
 
     /// Series stream URL: {server}/series/{username}/{password}/{episode_id}.{ext}.
@@ -63,8 +75,8 @@ final class SeriesStore: ObservableObject {
         return url
     }
 
-    private func fetchJSON(action: String, extra: [String: String] = [:]) async throws -> Any {
-        var components = URLComponents(url: try model.provider.apiURL(action: action),
+    private func fetchJSON(action: String, extra: [String: String] = [:], provider: Provider? = nil) async throws -> Any {
+        var components = URLComponents(url: try (provider ?? model.provider).apiURL(action: action),
                                        resolvingAgainstBaseURL: false)!
         var items = components.queryItems ?? []
         for (key, value) in extra { items.append(URLQueryItem(name: key, value: value)) }
@@ -80,14 +92,34 @@ final class SeriesStore: ObservableObject {
         loading = true
         defer { loading = false }
         do {
-            guard let rows = try await fetchJSON(action: "get_series_categories") as? [[String: Any]] else {
-                throw AppFailure("The provider returned an invalid category list.")
-            }
-            try Task.checkCancellation()
-            categories = rows.compactMap { row in
-                let id = row["category_id"].map { String(describing: $0) } ?? ""
-                guard !id.isEmpty, id.allSatisfy(\.isNumber) else { return nil }
-                return CatalogCategory(id: id, name: row["category_name"] as? String ?? "Category")
+            if model.libraryMode == .combined {
+                let profiles = model.combinedProfiles.filter { $0.provider.kind == .xtream }
+                var merged: [CatalogCategory] = []
+                for profile in profiles {
+                    try Task.checkCancellation()
+                    do {
+                        let rows = try await fetchJSON(action: "get_series_categories", provider: profile.provider) as? [[String: Any]] ?? []
+                        let prefix = profiles.count > 1 ? profile.provider.name + " · " : ""
+                        merged += rows.compactMap { row in
+                            let id = row["category_id"].map { String(describing: $0) } ?? ""
+                            guard !id.isEmpty, id.allSatisfy(\.isNumber) else { return nil }
+                            return CatalogCategory(id: CatalogItem.namespaced(providerID: profile.id, id: id),
+                                                   name: prefix + (row["category_name"] as? String ?? "Category"))
+                        }
+                    } catch { continue }
+                }
+                try Task.checkCancellation()
+                categories = merged
+            } else {
+                guard let rows = try await fetchJSON(action: "get_series_categories") as? [[String: Any]] else {
+                    throw AppFailure("The provider returned an invalid category list.")
+                }
+                try Task.checkCancellation()
+                categories = rows.compactMap { row in
+                    let id = row["category_id"].map { String(describing: $0) } ?? ""
+                    guard !id.isEmpty, id.allSatisfy(\.isNumber) else { return nil }
+                    return CatalogCategory(id: id, name: row["category_name"] as? String ?? "Category")
+                }
             }
         } catch {
             guard !Task.isCancelled else { return }
@@ -101,11 +133,19 @@ final class SeriesStore: ObservableObject {
         loading = true
         defer { loading = false }
         do {
-            guard let rows = try await fetchJSON(action: "get_series", extra: ["category_id": categoryID]) as? [[String: Any]] else {
+            var owner: Provider? = nil
+            var rawID = categoryID
+            var tag: UUID? = nil
+            if model.libraryMode == .combined,
+               let (pid, raw) = CatalogItem.splitNamespaced(categoryID),
+               let profile = model.vault.profiles.first(where: { $0.id == pid }) {
+                owner = profile.provider; rawID = raw; tag = pid
+            }
+            guard let rows = try await fetchJSON(action: "get_series", extra: ["category_id": rawID], provider: owner) as? [[String: Any]] else {
                 throw AppFailure("The provider returned an invalid series list.")
             }
             try Task.checkCancellation()
-            series = Self.parseSeries(rows)
+            series = Self.parseSeries(rows, providerID: tag)
         } catch {
             guard !Task.isCancelled else { return }
             self.error = error.localizedDescription
@@ -116,6 +156,18 @@ final class SeriesStore: ObservableObject {
     /// provider supports it, otherwise per-category. Deduped by series id.
     func loadAllSeries() async -> [SeriesItem] {
         guard unavailableReason == nil else { return [] }
+        if model.libraryMode == .combined {
+            var seen = Set<String>()
+            var all: [SeriesItem] = []
+            for profile in model.combinedProfiles.filter({ $0.provider.kind == .xtream }) {
+                do { try Task.checkCancellation() } catch { break }
+                let rows = (try? await fetchJSON(action: "get_series", provider: profile.provider) as? [[String: Any]]) ?? []
+                for item in Self.parseSeries(rows, providerID: profile.id) where seen.insert(item.scopedID).inserted {
+                    all.append(item)
+                }
+            }
+            return all
+        }
         if let rows = try? await fetchJSON(action: "get_series") as? [[String: Any]], !rows.isEmpty {
             return Self.parseSeries(rows)
         }
@@ -133,13 +185,14 @@ final class SeriesStore: ObservableObject {
         return all
     }
 
-    private static func parseSeries(_ rows: [[String: Any]]) -> [SeriesItem] {
+    private static func parseSeries(_ rows: [[String: Any]], providerID: UUID? = nil) -> [SeriesItem] {
         rows.compactMap { row in
             let id = row["series_id"].map { String(describing: $0) } ?? ""
             guard !id.isEmpty, id.allSatisfy(\.isNumber) else { return nil }
             return SeriesItem(id: id,
                             name: row["name"] as? String ?? "Untitled",
-                            poster: validURL(row["cover"] as? String))
+                            poster: validURL(row["cover"] as? String),
+                            providerID: providerID)
         }
     }
 
@@ -153,6 +206,22 @@ final class SeriesStore: ObservableObject {
         detailError = ""
         do {
             guard let root = try await fetchJSON(action: "get_series_info", extra: ["series_id": seriesID]) as? [String: Any] else {
+                throw AppFailure("The provider returned invalid series details.")
+            }
+            try Task.checkCancellation()
+            return Self.parseDetail(root)
+        } catch {
+            if !Task.isCancelled { detailError = error.localizedDescription }
+            return ([], [:])
+        }
+    }
+    /// Detail load for a series list item: resolves the owning provider in
+    /// combined mode, otherwise behaves exactly like loadDetail(seriesID:).
+    func loadDetail(series: SeriesItem) async -> (seasons: [SeriesSeason], episodes: [Int: [SeriesEpisode]]) {
+        detailError = ""
+        do {
+            let owner = provider(for: series)
+            guard let root = try await fetchJSON(action: "get_series_info", extra: ["series_id": series.id], provider: owner) as? [String: Any] else {
                 throw AppFailure("The provider returned invalid series details.")
             }
             try Task.checkCancellation()

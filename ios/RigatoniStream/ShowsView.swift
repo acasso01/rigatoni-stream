@@ -89,7 +89,7 @@ private struct ShowsBrowser: View {
                             }.buttonStyle(.plain).padding(.horizontal)
                         }
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 14)], spacing: 20) {
-                            ForEach(Array(matches.prefix(visibleCount))) { series in
+                            ForEach(Array(matches.prefix(visibleCount)), id: \.scopedID) { series in
                                 NavigationLink { ShowDetailView(series: series, store: store) } label: {
                                     VStack(alignment: .leading, spacing: 0) {
                                         ProviderPoster(url: series.poster, kind: .movies).aspectRatio(2 / 3, contentMode: .fit)
@@ -99,7 +99,7 @@ private struct ShowsBrowser: View {
                                     .foregroundStyle(StreamTheme.text).background(StreamTheme.card)
                                     .clipShape(RoundedRectangle(cornerRadius: 16))
                                 }.buttonStyle(.plain).contextMenu {
-                                    MobileSaveButton(record: SavedRecord(kind: "series", itemID: series.id, name: series.name, ext: "", categoryID: category, addedAt: Date()))
+                                    MobileSaveButton(record: SavedRecord(kind: "series", itemID: series.id, name: series.name, ext: "", categoryID: category, addedAt: Date(), providerID: series.providerID))
                                 }
                             }
                         }.padding(.horizontal)
@@ -152,7 +152,7 @@ struct ShowDetailView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 16))
                     Text(series.name).font(.title2.bold()).frame(maxWidth: .infinity, alignment: .leading)
                 }
-                MobileSaveButton(record: SavedRecord(kind: "series", itemID: series.id, name: series.name, ext: "", categoryID: "", addedAt: Date()))
+                MobileSaveButton(record: SavedRecord(kind: "series", itemID: series.id, name: series.name, ext: "", categoryID: "", addedAt: Date(), providerID: series.providerID))
                     .buttonStyle(.bordered)
                 if loading { ProgressView("Loading episodes…") }
                 else if !store.detailError.isEmpty {
@@ -179,7 +179,7 @@ struct ShowDetailView: View {
                                 HStack {
                                     Button(progress.map { "Continue from \($0.label)" } ?? "Play episode") {
                                         play(episode, seconds: progress?.seconds ?? 0)
-                                    }.buttonStyle(.borderedProminent)
+                                    }.buttonStyle(.borderedProminent).foregroundStyle(StreamTheme.onAccent)
                                     if progress != nil {
                                         Button("Restart") {
                                             model.preferences.progress[episode.progressID] = nil
@@ -199,14 +199,14 @@ struct ShowDetailView: View {
         .background { StreamBackdrop() }
         .foregroundStyle(StreamTheme.text(for: AppAppearance(rawValue: appearance) ?? .dark))
         .navigationTitle("Episodes").navigationBarTitleDisplayMode(.inline)
-        .task(id: "\(model.libraryRevision)-\(retry)") {
+        .task(id: "\(model.libraryRevision)-\(retry)-\(series.scopedID)") {
             loading = true; defer { loading = false }
-            let result = await store.loadDetail(seriesID: series.id)
+            let result = await store.loadDetail(series: series)
             guard !Task.isCancelled else { return }
             seasons = result.seasons; episodes = result.episodes; season = seasons.first?.number ?? 0
         }
         .fullScreenCover(item: $playing) { item in
-            DirectPlayerView(item: item, provider: model.provider, startSeconds: startSeconds, progressID: "series-" + item.id)
+            DirectPlayerView(item: item, provider: model.provider(for: item), startSeconds: startSeconds, progressID: "series-" + item.id)
         }
     }
 
@@ -214,8 +214,9 @@ struct ShowDetailView: View {
         playbackError = ""
         do {
             guard store.unavailableReason == nil else { throw AppFailure(store.unavailableReason ?? "Provider unavailable.") }
-            var item = CatalogItem(id: episode.id, name: "\(series.name) · S\(season) E\(episode.number) — \(episode.title)", kind: .movies, fileExtension: episode.ext, poster: series.poster)
-            item.playbackURL = try SeriesStore.seriesStreamURL(provider: model.provider, episodeID: episode.id, ext: episode.ext)
+            let owner = store.provider(for: series)
+            var item = CatalogItem(id: episode.id, name: "\(series.name) · S\(season) E\(episode.number) — \(episode.title)", kind: .movies, fileExtension: episode.ext, poster: series.poster, providerID: series.providerID)
+            item.playbackURL = try SeriesStore.seriesStreamURL(provider: owner, episodeID: episode.id, ext: episode.ext)
             startSeconds = seconds; playing = item
         } catch { playbackError = error.localizedDescription }
     }

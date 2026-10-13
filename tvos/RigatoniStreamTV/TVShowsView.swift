@@ -108,7 +108,7 @@ private struct TVSeriesBrowser: View {
                             columns: [GridItem(.adaptive(minimum: 220), spacing: 28)],
                             spacing: 32
                         ) {
-                            ForEach(Array(store.series.prefix(visibleCount))) { item in
+                            ForEach(Array(store.series.prefix(visibleCount)), id: \.scopedID) { item in
                                 Button { openSeries(item) } label: {
                                     VStack(alignment: .leading, spacing: 10) {
                                         TVSeriesPoster(series: item)
@@ -120,7 +120,7 @@ private struct TVSeriesBrowser: View {
                                 }
                                 .buttonStyle(TVCardButtonStyle())
                                 .contextMenu {
-                                    Button(TVFavorites.contains(id: item.id, kind: "series", model: model) ? "Remove from Saved" : "Save to Favorites") { TVFavorites.toggleSeries(item, model: model) }
+                                    Button(TVFavorites.contains(id: item.id, kind: "series", providerID: item.providerID, model: model) ? "Remove from Saved" : "Save to Favorites") { TVFavorites.toggleSeries(item, model: model) }
                                 }
                             }
                         }
@@ -257,20 +257,21 @@ struct TVSeriesDetailView: View {
         .task {
             loading = true
             defer { loading = false }
-            let detail = await store.loadDetail(seriesID: series.id)
+            let detail = await store.loadDetail(series: series)
             seasons = detail.seasons
             episodes = detail.episodes
             selectedSeason = seasons.first?.number ?? 0
         }
         .fullScreenCover(item: $playing) { item in
-            DirectPlayerView(item: item, provider: model.provider, startSeconds: model.preferences.progress["series-" + item.id]?.seconds ?? 0, progressID: "series-" + item.id)
+            DirectPlayerView(item: item, provider: model.provider(for: item), startSeconds: model.preferences.progress["series-" + item.id]?.seconds ?? 0, progressID: "series-" + item.id)
         }
     }
 
     private func play(_ episode: SeriesEpisode) {
         do {
+            let owner = store.provider(for: series)
             let url = try SeriesStore.seriesStreamURL(
-                provider: model.provider,
+                provider: owner,
                 episodeID: episode.id,
                 ext: episode.ext
             )
@@ -279,7 +280,8 @@ struct TVSeriesDetailView: View {
                 name: "\(series.name) · S\(selectedSeason) E\(episode.number) — \(episode.title)",
                 kind: .movies,
                 fileExtension: episode.ext,
-                poster: series.poster
+                poster: series.poster,
+                providerID: series.providerID
             )
             item.playbackURL = url
             playing = item

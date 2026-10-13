@@ -101,7 +101,7 @@ final class TVNativePlayer: ObservableObject {
 // which lives in the iOS-only Player.swift and is not shared.
 private enum TVChannelNavigation {
     static func adjacent(in channels: [CatalogItem], currentID: String, offset: Int) -> CatalogItem? {
-        guard let current = channels.firstIndex(where: { $0.id == currentID && $0.kind == .live }) else { return nil }
+        guard let current = channels.firstIndex(where: { $0.scopedID == currentID && $0.kind == .live }) else { return nil }
         let next = current + offset
         guard channels.indices.contains(next), channels[next].kind == .live else { return nil }
         return channels[next]
@@ -157,16 +157,18 @@ struct TVPlayerView: View {
         self.startSeconds = startSeconds
         self.lastWatchedKind = lastWatchedKind
         self.progressID = progressID
-        _currentID = State(initialValue: item.id)
+        _currentID = State(initialValue: item.scopedID)
     }
 
     private var currentItem: CatalogItem {
-        channels.first { $0.id == currentID } ?? item
+        channels.first { $0.scopedID == currentID } ?? item
     }
+
+    private var owner: Provider { model.provider(for: currentItem) }
 
     private var playbackURL: URL? {
         currentItem.playbackURL
-            ?? (try? provider.streamURL(item: currentItem))
+            ?? (try? owner.streamURL(item: currentItem))
     }
 
     private var cache: Int { currentItem.kind == .live ? liveBuffer : movieBuffer }
@@ -307,13 +309,13 @@ struct TVPlayerView: View {
     }
 
     private func adjacentChannel(_ offset: Int) -> CatalogItem? {
-        TVChannelNavigation.adjacent(in: channels, currentID: currentItem.id, offset: offset)
+        TVChannelNavigation.adjacent(in: channels, currentID: currentItem.scopedID, offset: offset)
     }
 
     private func changeChannel(_ offset: Int) {
         guard let next = adjacentChannel(offset) else { return }
         hideTask?.cancel(); controlsVisible = true; seeking = false
-        currentID = next.id
+        currentID = next.scopedID
     }
 
     private func showControls() {
