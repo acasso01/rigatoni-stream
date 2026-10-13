@@ -23,6 +23,11 @@ struct TVGuideView: View {
     @State private var previewItem: CatalogItem?
     @State private var previewNowTitle = ""
     @State private var guideVisible = false
+    @State private var pinnedCatIDs: [String] = []
+    /// "All" stays first; pinned categories follow in pin order, then the rest.
+    private func orderedCats(_ categories: [CatalogCategory]) -> [CatalogCategory] {
+        PinnedCategories.ordered(categories, pins: pinnedCatIDs)
+    }
 
     private let pageSize = 40
 
@@ -35,7 +40,7 @@ struct TVGuideView: View {
     private var ordered: [CatalogItem] {
         guard let store else { return [] }
         let visible = store.items.filter(model.preferences.visible)
-        return visible.filter { pinned.contains($0.id) } + visible.filter { !pinned.contains($0.id) }
+        return visible.filter { pinned.contains($0.scopedID) } + visible.filter { !pinned.contains($0.scopedID) }
     }
 
     // Current half-hour window, e.g. "Now – 11:00p" with "11:30p" next.
@@ -130,10 +135,10 @@ struct TVGuideView: View {
                 } else {
                     ScrollView {
                         LazyVStack(spacing: 12) {
-                            ForEach(Array(ordered.dropFirst(page * pageSize).prefix(pageSize))) { channel in
+                            ForEach(Array(ordered.dropFirst(page * pageSize).prefix(pageSize)), id: \.scopedID) { channel in
                                 TVGuideRow(channel: channel,
-                                          isPinned: pinned.contains(channel.id),
-                                          togglePin: { togglePin(channel.id) },
+                                          isPinned: pinned.contains(channel.scopedID),
+                                          togglePin: { togglePin(channel.scopedID) },
                                           onHover: { focused in updatePreview(channel, focused: focused) }) { playChannel(channel) }
                             }
                         }
@@ -161,6 +166,7 @@ struct TVGuideView: View {
         }
         .task(id: "\(model.libraryRevision)-\(retry)") {
             pinned = PinnedChannels.read(key: model.preferenceKey)
+            pinnedCatIDs = PinnedCategories.read(key: model.pinKey)
             await store.loadCategories()
             guard !Task.isCancelled else { return }
             let ids = Set(store.categories.filter { model.preferences.categoryVisible($0.id, kind: .live) }.map(\.id))
@@ -191,16 +197,14 @@ struct TVGuideView: View {
             do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
             guard !Task.isCancelled else { return }
             do {
-                let url = try model.provider.streamURL(item: item)
+                let url = try model.provider(for: item).streamURL(item: item)
                 try Task.checkCancellation()
                 guard guideVisible, playing == nil, previewItem?.id == item.id else { return }
                 previewPlayer.play(url: url)
                 // Best-effort "now playing" label; must not block video.
-                if let scope = model.preferenceKey {
-                    let progs = await EPGCache.shared.programs(streamID: item.id, provider: model.provider, scope: scope + "-\(model.libraryRevision)")
-                    if !Task.isCancelled {
-                        previewNowTitle = EPGParser.nowNext(progs).now?.title ?? ""
-                    }
+                let progs = await EPGCache.shared.programs(streamID: item.id, provider: model.provider(for: item), scope: model.epgScope(for: item))
+                if !Task.isCancelled {
+                    previewNowTitle = EPGParser.nowNext(progs).now?.title ?? ""
                 }
             } catch {
                 if !Task.isCancelled { previewPlayer.failed = true }
@@ -246,7 +250,7 @@ struct TVGuideView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 16) {
                 guideChip(id: "all", name: "All")
-                ForEach(store.categories.filter { model.preferences.categoryVisible($0.id, kind: .live) }) { category in
+                ForEach(orderedCats(store.categories.filter { model.preferences.categoryVisible($0.id, kind: .live) })) { category in
                     guideChip(id: category.id, name: category.name)
                 }
             }
@@ -267,7 +271,7 @@ struct TVGuideView: View {
 
     private func guideChip(id: String, name: String) -> some View {
         Button { selectedCategory = id } label: {
-            Text(name)
+            Text((id != "all" && pinnedCatIDs.contains(id) ? "★ " : "") + name)
                 .font(.system(size: 23, weight: .semibold))
                 .lineLimit(1)
                 .padding(.horizontal, 24)
@@ -278,6 +282,14 @@ struct TVGuideView: View {
         .background(selectedCategory == id ? AnyShapeStyle(TVTheme.accentFill) : AnyShapeStyle(TVTheme.card))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .foregroundStyle(selectedCategory == id ? TVTheme.onAccent : TVTheme.text)
+        .contextMenu {
+            if id != "all" {
+                Button(pinnedCatIDs.contains(id) ? "Unpin category" : "Pin category to front") {
+                    pinnedCatIDs = PinnedCategories.toggled(id, in: pinnedCatIDs)
+                    PinnedCategories.write(pinnedCatIDs, key: model.pinKey)
+                }
+            }
+        }
     }
 }
 
@@ -315,13 +327,12 @@ private struct TVGuideRow: View {
         }
         .onChange(of: focusedControl) { _, control in onHover(control != nil) }
         .onDisappear { onHover(false) }
-        .task(id: "\(model.libraryRevision)-\(channel.id)") {
+        .task(id: "\(model.libraryRevision)-\(channel.scopedID)") {
             programs = []; loading = true
-            guard let scope = model.preferenceKey else { loading = false; return }
             while !Task.isCancelled {
                 let loaded = await EPGCache.shared.programs(streamID: channel.id,
-                                                            provider: model.provider,
-                                                            scope: scope + "-\(model.libraryRevision)")
+                                                            provider: model.provider(for: channel),
+                                                            scope: model.epgScope(for: channel))
                 guard !Task.isCancelled else { return }
                 programs = Array(loaded.filter { $0.end > Date() }.prefix(6)); loading = false
                 do { try await Task.sleep(for: .seconds(60)) } catch { return }

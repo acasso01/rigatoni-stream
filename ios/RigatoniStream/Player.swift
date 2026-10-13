@@ -223,7 +223,7 @@ struct PlayerSurface: UIViewRepresentable {
 
 enum ChannelNavigation {
     static func adjacent(in channels: [CatalogItem], currentID: String, offset: Int) -> CatalogItem? {
-        guard let current = channels.firstIndex(where: { $0.id == currentID && $0.kind == .live }) else { return nil }
+        guard let current = channels.firstIndex(where: { $0.scopedID == currentID && $0.kind == .live }) else { return nil }
         let next = current + offset
         guard channels.indices.contains(next), channels[next].kind == .live else { return nil }
         return channels[next]
@@ -239,6 +239,7 @@ struct PlayerView: View {
     @EnvironmentObject private var model: AppModel
     @State private var selectedChannel: CatalogItem?
     private var currentItem: CatalogItem { selectedChannel ?? item }
+    private var owner: Provider { model.provider(for: currentItem) }
     @Environment(\.dismiss) private var dismiss
     @StateObject private var player = NativePlayer()
     @State private var controlsVisible = true
@@ -250,7 +251,7 @@ struct PlayerView: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            if let url = currentItem.playbackURL ?? (try? provider.streamURL(item: currentItem)) {
+            if let url = currentItem.playbackURL ?? (try? owner.streamURL(item: currentItem)) {
                 PlayerSurface(player: player, url: url, cache: currentItem.kind == .live ? liveBuffer : movieBuffer, mode: displayMode, onTap: toggleControls)
                     .ignoresSafeArea()
                     .accessibilityLabel("Video. Tap to toggle playback controls.")
@@ -311,8 +312,8 @@ struct PlayerView: View {
         .persistentSystemOverlays(controlsVisible ? .automatic : .hidden)
         .onChange(of: currentItem.id) { _, _ in MobileRecords.watched(currentItem, episode: progressID != nil, model: model) }
         .onAppear { MobileRecords.watched(currentItem, episode: progressID != nil, model: model); player.resumeSeconds = startSeconds; player.progressRecorder = { seconds, duration in model.saveProgress(id: progressID ?? item.id, seconds: seconds, duration: duration) }; player.title = currentItem.name; player.isLive = currentItem.kind == .live; showControls() }
-        .onChange(of: currentItem.id) { _, _ in
-            guard let url = currentItem.playbackURL ?? (try? provider.streamURL(item: currentItem)) else {
+        .onChange(of: currentItem.scopedID) { _, _ in
+            guard let url = currentItem.playbackURL ?? (try? owner.streamURL(item: currentItem)) else {
                 player.stop(); return
             }
             player.title = currentItem.name; player.isLive = currentItem.kind == .live
@@ -326,7 +327,7 @@ struct PlayerView: View {
         }
     }
     private func adjacentChannel(_ offset: Int) -> CatalogItem? {
-        ChannelNavigation.adjacent(in: channels, currentID: currentItem.id, offset: offset)
+        ChannelNavigation.adjacent(in: channels, currentID: currentItem.scopedID, offset: offset)
     }
     private func changeChannel(_ offset: Int) {
         guard let next = adjacentChannel(offset) else { return }

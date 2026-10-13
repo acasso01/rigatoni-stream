@@ -90,6 +90,21 @@ struct CatalogItem: Identifiable, Equatable {
     var playbackURL: URL? = nil
     var categoryID: String = ""
     var number: String = "" // Channel number (Xtream `num`); empty for M3U playlists.
+    /// Owning provider in combined-library mode. Nil means the currently
+    /// selected provider (separate mode, and all pre-combined data).
+    var providerID: UUID? = nil
+    /// Collision-free identity for ForEach, pins and favorites in combined
+    /// mode. Identical to `id` in separate mode.
+    var scopedID: String { Self.namespaced(providerID: providerID, id: id) }
+    static func namespaced(providerID: UUID?, id: String) -> String {
+        guard let providerID else { return id }
+        return providerID.uuidString + ":" + id
+    }
+    static func splitNamespaced(_ value: String) -> (UUID, String)? {
+        let parts = value.split(separator: ":", maxSplits: 1).map(String.init)
+        guard parts.count == 2, let uuid = UUID(uuidString: parts[0]) else { return nil }
+        return (uuid, parts[1])
+    }
     static func parse(_ row: [String: Any], kind: LibraryKind) -> CatalogItem? {
         let id = row["stream_id"].map { String(describing: $0) } ?? ""
         guard !id.isEmpty, id.allSatisfy(\.isNumber) else { return nil }
@@ -152,6 +167,20 @@ enum ProviderKeychain {
     }
 }
 
+/// Library scope: per-provider libraries (default, today's behavior) or one
+/// merged library across every saved provider profile.
+enum LibraryMode: String, CaseIterable, Identifiable {
+    case separate, combined
+    var id: String { rawValue }
+    var title: String { self == .separate ? "Separate providers" : "Combined library" }
+    var blurb: String {
+        switch self {
+        case .separate: return "Each provider keeps its own guide, pins and favorites. Switch providers to change libraries."
+        case .combined: return "Merges every saved provider into one guide. Channels stay tied to their own provider for playback."
+        }
+    }
+}
+
 @MainActor final class AppModel: ObservableObject {
     @Published var starting = true
     @Published var busy = false
@@ -164,9 +193,46 @@ enum ProviderKeychain {
     let catalog = SessionCatalog()
     private var restored = false
     private var warmup: Task<Void, Never>?
-    var providerReady: Bool { vault.selectedID != nil && (try? provider.baseURL()) != nil }
-    var preferenceKey: String? { vault.selectedID.map { "ant-provider-" + $0.uuidString + "-library-v1" } }
-    var pinKey: String? { vault.selectedID.map { "ant-provider-" + $0.uuidString + "-pins" } }
+    /// Saved profiles with a usable base URL. Used for the combined library.
+    var combinedProfiles: [ProviderProfile] {
+        vault.profiles.filter { (try? $0.provider.baseURL()) != nil }
+    }
+    var libraryMode: LibraryMode {
+        get { LibraryMode(rawValue: UserDefaults.standard.string(forKey: "ant-library-mode") ?? "") ?? .separate }
+        set { setLibraryMode(newValue) }
+    }
+    var providerReady: Bool {
+        if libraryMode == .combined { return !combinedProfiles.isEmpty }
+        return vault.selectedID != nil && (try? provider.baseURL()) != nil
+    }
+    var preferenceKey: String? {
+        if libraryMode == .combined { return "ant-combined-library-v1" }
+        return vault.selectedID.map { "ant-provider-" + $0.uuidString + "-library-v1" }
+    }
+    var pinKey: String? {
+        if libraryMode == .combined { return "ant-combined-library-v1-pins" }
+        return vault.selectedID.map { "ant-provider-" + $0.uuidString + "-pins" }
+    }
+    /// The provider that owns an item: its tagged profile in combined mode,
+    /// otherwise the currently selected provider.
+    func provider(for item: CatalogItem) -> Provider {
+        if libraryMode == .combined, let pid = item.providerID,
+           let profile = vault.profiles.first(where: { $0.id == pid }) { return profile.provider }
+        return provider
+    }
+    /// EPG cache scope, namespaced per owning provider in combined mode so
+    /// identical stream IDs on two providers never share guide data.
+    func epgScope(for item: CatalogItem) -> String {
+        var scope = (preferenceKey ?? "ant") + "-\(libraryRevision)"
+        if libraryMode == .combined, let pid = item.providerID { scope += "-" + pid.uuidString }
+        return scope
+    }
+    func setLibraryMode(_ mode: LibraryMode) {
+        guard mode != libraryMode else { return }
+        UserDefaults.standard.set(mode.rawValue, forKey: "ant-library-mode")
+        resetCatalog()
+        if providerReady { preload() }
+    }
     func savePreferences() { preferences.write(key: preferenceKey); libraryRevision += 1 }
     func saveProgress(id: String, seconds: Double, duration: Double) {
         guard preferenceKey != nil, seconds.isFinite, duration.isFinite, seconds >= 10, duration > 0 else { return }
@@ -227,7 +293,12 @@ enum ProviderKeychain {
         guard !busy else { return }
         var next = vault; next.profiles.removeAll { $0.id == id }
         if next.selectedID == id { next.selectedID = next.profiles.first?.id }
-        if next.profiles.isEmpty { try ProviderKeychain.clear() } else { try ProviderKeychain.write(next) }
+        if next.profiles.isEmpty {
+            try ProviderKeychain.clear()
+            for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("ant-combined-library-v1") {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        } else { try ProviderKeychain.write(next) }
         let switched = next.selectedID != vault.selectedID
         vault = next
         let prefix = "ant-provider-" + id.uuidString
@@ -242,6 +313,7 @@ enum ProviderKeychain {
         resetCatalog(); if providerReady { preload() }
     }
     private func preload() {
+        guard libraryMode == .separate else { return }
         let source = provider; let revision = libraryRevision
         warmup = Task { @MainActor in
             // Load category indexes automatically, fetch large catalogs only when opened/searched.
@@ -256,12 +328,39 @@ enum ProviderKeychain {
         }
     }
     func resolve(_ item: CatalogItem) async throws -> CatalogItem {
-        guard provider.kind == .m3u else { return item }
+        let owner = self.provider(for: item)
+        guard owner.kind == .m3u else { return item }
         let revision = libraryRevision
-        let playlist = try await PlaylistStore.shared.load(provider)
+        let playlist = try await PlaylistStore.shared.load(owner)
         guard revision == libraryRevision else { throw CancellationError() }
         guard let fresh = playlist.items.first(where: { $0.id == item.id }) else { throw AppFailure("This title is no longer in the playlist.") }
         return fresh
+    }
+}
+
+// Pinned live categories, persisted per scope in UserDefaults. "All" always
+// stays first; pinned categories follow in pin order, then the rest.
+// Shared by the iPhone guide and the Apple TV guide.
+enum PinnedCategories {
+    static func read(key: String?) -> [String] {
+        guard let key, let ids = UserDefaults.standard.stringArray(forKey: key + "-pinned-categories") else { return [] }
+        return ids
+    }
+    static func write(_ ids: [String], key: String?) {
+        guard let key else { return }
+        UserDefaults.standard.set(ids, forKey: key + "-pinned-categories")
+    }
+    static func toggled(_ id: String, in pins: [String]) -> [String] {
+        guard !id.isEmpty else { return pins }
+        if pins.contains(id) { return pins.filter { $0 != id } }
+        return Array((pins + [id]).suffix(100))
+    }
+    /// "All" is handled by callers; pinned categories (in pin order) come
+    /// first, then every remaining category in its original order.
+    static func ordered(_ categories: [CatalogCategory], pins: [String]) -> [CatalogCategory] {
+        let byID = Dictionary(categories.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let ids = Set(pins)
+        return pins.compactMap { byID[$0] } + categories.filter { !ids.contains($0.id) }
     }
 }
 
