@@ -1,5 +1,5 @@
 name: RigatoniStreamTV
-# Generated Xcode project lives in tvos/Generated/. Run `bash setup.sh` on a Mac.
+# Generated project lives in tvos/; its Info.plist lives in Generated/.
 options:
   bundleIdPrefix: com.acasso01
   deploymentTarget:
@@ -44,8 +44,8 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Ant Streams
         INFOPLIST_KEY_NSHumanReadableCopyright: 'Ant Streams; VLCKit licensed under LGPL 2.1'
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        MARKETING_VERSION: '0.2.0'
-        CURRENT_PROJECT_VERSION: '2'
+        MARKETING_VERSION: '0.2.1'
+        CURRENT_PROJECT_VERSION: '3'
   RigatoniStreamTVTests:
     type: bundle.unit-test
     platform: tvOS

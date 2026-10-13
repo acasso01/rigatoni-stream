@@ -22,11 +22,12 @@ struct TVGuideView: View {
     @StateObject private var previewPlayer = TVPreviewPlayer()
     @State private var previewItem: CatalogItem?
     @State private var previewNowTitle = ""
+    @State private var guideVisible = false
 
     private let pageSize = 40
 
     private var selectedName: String {
-        if selectedCategory == "all" { return "All channels" }
+        if selectedCategory == "all" { return "All Channels" }
         return store?.categories.first { $0.id == selectedCategory }?.name ?? "Guide"
     }
 
@@ -59,9 +60,11 @@ struct TVGuideView: View {
         }
         .background(TVTheme.background)
         .onAppear {
+            guideVisible = true
             if store == nil { store = TVLibraryStore(kind: .live, model: model) }
         }
         .onDisappear {
+            guideVisible = false
             previewPlayer.stop()
             previewItem = nil
         }
@@ -119,7 +122,7 @@ struct TVGuideView: View {
                                 TVGuideRow(channel: channel,
                                           isPinned: pinned.contains(channel.id),
                                           togglePin: { togglePin(channel.id) },
-                                          onHover: { previewItem = $0 }) { playChannel(channel) }
+                                          onHover: { focused in updatePreview(channel, focused: focused) }) { playChannel(channel) }
                             }
                         }
                         .padding(.horizontal, 60)
@@ -162,10 +165,11 @@ struct TVGuideView: View {
                 do { try await Task.sleep(for: .seconds(60)) } catch { return }
             }
         }
-        .task(id: "\(previewItem?.id ?? "-")-\(model.libraryRevision)") {
+        .task(id: "\(previewItem?.id ?? "-")-\(model.libraryRevision)-\(guideVisible)-\(playing?.id ?? "-")") {
+            previewPlayer.stop()
             previewPlayer.failed = false
             previewNowTitle = ""
-            guard let item = previewItem, model.providerReady else {
+            guard let item = previewItem, model.providerReady, guideVisible, playing == nil else {
                 previewPlayer.stop()
                 return
             }
@@ -175,6 +179,7 @@ struct TVGuideView: View {
             do {
                 let url = try model.provider.streamURL(item: item)
                 try Task.checkCancellation()
+                guard guideVisible, playing == nil, previewItem?.id == item.id else { return }
                 previewPlayer.play(url: url)
                 // Best-effort "now playing" label; must not block video.
                 if let scope = model.preferenceKey {
@@ -193,6 +198,18 @@ struct TVGuideView: View {
         }
         .fullScreenCover(item: $playing) { item in
             CatalogDestination(item: item, channels: store.items.filter(model.preferences.visible))
+        }
+    }
+
+    private func updatePreview(_ channel: CatalogItem, focused: Bool) {
+        guard guideVisible, playing == nil else { return }
+        if focused {
+            guard previewItem?.id != channel.id else { return }
+            previewPlayer.stop()
+            previewItem = channel
+        } else if previewItem?.id == channel.id {
+            previewPlayer.stop()
+            previewItem = nil
         }
     }
 
@@ -255,7 +272,8 @@ private struct TVGuideRow: View {
     let channel: CatalogItem
     let isPinned: Bool
     let togglePin: () -> Void
-    let onHover: (CatalogItem?) -> Void
+    let onHover: (Bool) -> Void
+    @FocusState private var focusedControl: String?
     let play: () -> Void
     @State private var programs: [EPGProgram] = []
     @State private var loading = true
@@ -271,18 +289,16 @@ private struct TVGuideRow: View {
             }
             .buttonStyle(TVCompactButtonStyle())
             .accessibilityLabel(isPinned ? "Unpin channel" : "Pin channel")
-            .background(FocusChangeReader { focused in
-                if focused { onHover(channel) } else { onHover(nil) }
-            })
+            .focused($focusedControl, equals: "pin")
 
             Button(action: play) {
                 TVGuideRowLabel(channel: channel, nowNext: nowNext, loading: loading)
             }
             .buttonStyle(TVCompactButtonStyle())
-            .background(FocusChangeReader { focused in
-                if focused { onHover(channel) } else { onHover(nil) }
-            })
+            .focused($focusedControl, equals: "play")
         }
+        .onChange(of: focusedControl) { _, control in onHover(control != nil) }
+        .onDisappear { onHover(false) }
         .task(id: "\(model.libraryRevision)-\(channel.id)") {
             programs = []; loading = true
             guard let scope = model.preferenceKey else { loading = false; return }
@@ -423,22 +439,11 @@ extension TVGuideView {
 
 // MARK: - Hover preview player (muted VLC)
 
-// Reports focus changes on the enclosing focusable view (e.g. a Button) via
-// @Environment(\.isFocused). Attach with .background so it reads the button's
-// own focus state. Avoids View.onFocusChange, which is unavailable here.
-private struct FocusChangeReader: View {
-    let onChange: (Bool) -> Void
-    @Environment(\.isFocused) private var isFocused
-    var body: some View {
-        Color.clear
-            .onChange(of: isFocused) { _, newValue in onChange(newValue) }
-    }
-}
-
 // Lightweight VLC player for the guide's hover preview. Audio is disabled
 // entirely (--no-audio) so browsing the guide never makes sound. One
 // instance only; in-flight loads are cancelled by the guide's debounced
 // preview task when focus moves.
+@MainActor
 final class TVPreviewPlayer: ObservableObject {
     let engine = VLCMediaPlayer(options: ["--quiet", "--no-video-title-show", "--no-audio"])
     @Published var playing = false
@@ -458,13 +463,15 @@ final class TVPreviewPlayer: ObservableObject {
         timer?.invalidate()
         let started = Date()
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            if self.engine.state == .error {
-                self.fail()
-            } else if self.engine.isPlaying {
-                self.playing = true
-            } else if Date().timeIntervalSince(started) > 20 {
-                self.fail()
+            Task { @MainActor [weak self] in
+                guard let self, self.timer != nil else { return }
+                if self.engine.state == .error {
+                    self.fail()
+                } else if self.engine.isPlaying {
+                    self.playing = true
+                } else if Date().timeIntervalSince(started) > 20 {
+                    self.fail()
+                }
             }
         }
     }

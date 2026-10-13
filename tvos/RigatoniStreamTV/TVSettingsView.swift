@@ -36,6 +36,8 @@ struct TVSettingsView: View {
                     Text("Automatic uses Apple playback for HLS/MP4 and VLC for other containers or decoding failures. Original quality is preserved.")
                         .font(.system(size: 20)).foregroundStyle(.secondary)
                 }
+                Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?") (\(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"))")
+                    .font(.system(size: 20)).foregroundStyle(.secondary)
                 if !model.notice.isEmpty { Text(model.notice).font(.system(size: 22)) }
                 Text("Ant Streams · Bring your own authorized provider. No channels or subscriptions supplied.")
                     .font(.system(size: 20)).foregroundStyle(.secondary)
