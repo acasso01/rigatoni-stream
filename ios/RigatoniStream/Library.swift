@@ -131,6 +131,52 @@ enum CatalogSearchScope: String, CaseIterable {
     case category = "This category", all = "All categories"
 }
 
+/// Capsule option picker with explicit selected styling: the selected option
+/// always pairs an accent fill with `StreamTheme.onAccent` text, so it stays
+/// readable in every theme (Ghost's white accent would wash out a default
+/// segmented control or a prominent button with light text).
+struct StreamOptionPicker<Value: Hashable>: View {
+    let options: [(Value, String)]
+    @Binding var selection: Value
+    var body: some View {
+        HStack(spacing: 10) {
+            ForEach(options, id: \.0) { value, title in
+                let selected = value == selection
+                Button { selection = value } label: {
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .padding(.horizontal, 18).padding(.vertical, 12)
+                        .frame(maxWidth: .infinity)
+                        .foregroundStyle(selected ? StreamTheme.onAccent : StreamTheme.text)
+                        .background(selected ? AnyShapeStyle(StreamTheme.accentFill) : AnyShapeStyle(StreamTheme.panel), in: Capsule())
+                }
+                .buttonStyle(StreamOptionButtonStyle())
+                .accessibilityAddTraits(selected ? .isSelected : [])
+            }
+        }
+    }
+}
+
+private struct StreamOptionButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        StreamOptionBody(configuration: configuration)
+    }
+    private struct StreamOptionBody: View {
+        let configuration: ButtonStyleConfiguration
+        @Environment(\.isFocused) private var focused
+        var body: some View {
+            configuration.label
+                .opacity(configuration.isPressed ? 0.8 : 1)
+                .overlay {
+                    #if os(tvOS)
+                    Capsule().stroke(focused ? TVTheme.focusRing : Color.clear, lineWidth: 3)
+                    #endif
+                }
+        }
+    }
+}
+
 struct CatalogIndex {
     static let maximumItems = 100000
     private(set) var items: [CatalogItem] = []
@@ -397,13 +443,10 @@ struct LibraryView: View {
                         .padding(.vertical, 12)
                     if !model.providerReady {
                         Text("Add or restore your provider settings to browse.")
-                        Button("Provider settings") { model.settingsVisible = true }.buttonStyle(.borderedProminent).foregroundStyle(.white)
+                        Button("Provider settings") { model.settingsVisible = true }.buttonStyle(.borderedProminent).foregroundStyle(StreamTheme.onAccent)
                     } else {
                         if kind == .movies {
-                            Picker("Browse movies", selection: $scope) {
-                                Text("All titles").tag(CatalogSearchScope.all)
-                                Text("Categories").tag(CatalogSearchScope.category)
-                            }.pickerStyle(.segmented)
+                            StreamOptionPicker(options: [(CatalogSearchScope.all, "All titles"), (.category, "Categories")], selection: $scope)
                         }
                         if kind == .movies && scope == .category {
                             ScrollView(.horizontal, showsIndicators: true) {
@@ -431,8 +474,8 @@ struct LibraryView: View {
                                 .background(.thinMaterial, in: Capsule())
                                 if kind == .live {
                                     Button {
-                                        pinnedIDs = CategoryPins.toggled(selected, in: pinnedIDs)
-                                        if let pinKey { UserDefaults.standard.set(pinnedIDs, forKey: pinKey) }
+                                        pinnedIDs = PinnedCategories.toggled(selected, in: pinnedIDs)
+                                        PinnedCategories.write(pinnedIDs, key: pinKey)
                                     } label: { Image(systemName: pinnedIDs.contains(selected) ? "pin.fill" : "pin").frame(width: 44, height: 44) }
                                     .accessibilityLabel(pinnedIDs.contains(selected) ? "Unpin category" : "Pin category")
                                     .disabled(selected.isEmpty)
@@ -457,15 +500,15 @@ struct LibraryView: View {
                         } else if !loading && filtered.isEmpty { Text(query.isEmpty ? "No titles available." : "No matching titles.").foregroundStyle(.secondary) }
                         if kind == .live {
                             LazyVStack(spacing: 10) {
-                                ForEach(visible) { item in
+                                ForEach(visible, id: \.scopedID) { item in
                                     Button { playing = item } label: {
-                                        LiveChannelRow(item: item, provider: model.provider, epgEnabled: true, scope: (model.preferenceKey ?? "") + "-\(model.libraryRevision)")
+                                        LiveChannelRow(item: item, provider: model.provider(for: item), epgEnabled: true, scope: model.epgScope(for: item))
                                     }.buttonStyle(.plain)
                                 }
                             }
                         } else {
                             LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 16)], spacing: 22) {
-                                ForEach(visible) { item in
+                                ForEach(visible, id: \.scopedID) { item in
                                     Button { playing = item } label: { MovieCard(item: item) }.buttonStyle(.plain)
                                 }
                             }
@@ -499,7 +542,13 @@ struct LibraryView: View {
 
     private func loadCategories() async {
         categories = []; selected = ""; replaceItems([]); error = ""; query = ""; page = 0; progress = ""; categoryCache = [:]; allCache = nil
-        pinnedIDs = pinKey.flatMap { UserDefaults.standard.stringArray(forKey: $0) } ?? []
+        var pins = PinnedCategories.read(key: pinKey)
+        if pins.isEmpty, let legacy = pinKey.flatMap({ UserDefaults.standard.stringArray(forKey: $0) }), !legacy.isEmpty {
+            // Adopt pins saved by the older inline pin button (same scope, no suffix).
+            pins = legacy
+            PinnedCategories.write(pins, key: pinKey)
+        }
+        pinnedIDs = pins
         guard model.providerReady else { return }
         loading = true
         do {
