@@ -657,10 +657,14 @@ struct MovieDetailView: View {
     @State private var metadataNotice = ""
     @State private var playing = false
     @State private var resumeSeconds = 0.0
+    // tvOS focus entry point: the focus engine can lose its way in a pushed
+    // detail view, so the primary action is focused explicitly on appear.
+    @FocusState private var detailFocus: String?
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 Button { dismiss() } label: { Label("Back", systemImage: "chevron.left") }
+                    .focused($detailFocus, equals: "back")
                 HStack(alignment: .top, spacing: 28) {
                     ProviderPoster(url: item.poster, kind: .movies).aspectRatio(2.0 / 3.0, contentMode: .fit)
                         .frame(maxWidth: posterWidth).clipShape(RoundedRectangle(cornerRadius: 18))
@@ -670,9 +674,12 @@ struct MovieDetailView: View {
                         if !info.genre.isEmpty { Text(info.genre).foregroundStyle(.secondary) }
                         if let saved = model.preferences.progress[item.id] {
                             Button { resumeSeconds = saved.seconds; playing = true } label: { Label("Continue from \(saved.label)", systemImage: "play.fill") }.buttonStyle(.borderedProminent).foregroundStyle(StreamTheme.onAccent)
+                                .focused($detailFocus, equals: "play")
                             Button("Restart movie") { restart() }.buttonStyle(.bordered)
+                                .focused($detailFocus, equals: "restart")
                         } else {
                             Button { resumeSeconds = 0; playing = true } label: { Label("Play movie", systemImage: "play.fill") }.buttonStyle(.borderedProminent).foregroundStyle(StreamTheme.onAccent)
+                                .focused($detailFocus, equals: "play")
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -685,6 +692,7 @@ struct MovieDetailView: View {
                 if !metadataNotice.isEmpty { Text(metadataNotice).font(.footnote).foregroundStyle(.secondary) }
             }.padding(28).frame(maxWidth: 1200, alignment: .leading).frame(maxWidth: .infinity)
         }.background { StreamBackdrop() }
+        .onAppear { detailFocus = "play" }
         .task {
             defer { loading = false }
             do {
