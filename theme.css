@@ -387,3 +387,5 @@ p{line-height:1.6}
 .provider-info small{display:block;color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .provider-actions{display:flex;gap:8px;flex-shrink:0}
 .provider-actions .btn{min-height:36px;padding:8px 12px;font-size:13px}
+.auto-connect{display:inline-flex;align-items:center;gap:8px;margin:0;font-size:14px;color:var(--muted);cursor:pointer;min-height:44px}
+.auto-connect input{width:auto;padding:0;accent-color:var(--accent)}
