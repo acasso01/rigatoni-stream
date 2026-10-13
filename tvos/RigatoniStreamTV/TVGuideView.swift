@@ -271,13 +271,17 @@ private struct TVGuideRow: View {
             }
             .buttonStyle(TVCompactButtonStyle())
             .accessibilityLabel(isPinned ? "Unpin channel" : "Pin channel")
-            .onFocusChange { onHover($0 ? channel : nil) }
+            .onFocusChange { (focused: Bool) in
+                if focused { onHover(channel) } else { onHover(nil) }
+            }
 
             Button(action: play) {
                 TVGuideRowLabel(channel: channel, nowNext: nowNext, loading: loading)
             }
             .buttonStyle(TVCompactButtonStyle())
-            .onFocusChange { onHover($0 ? channel : nil) }
+            .onFocusChange { (focused: Bool) in
+                if focused { onHover(channel) } else { onHover(nil) }
+            }
         }
         .task(id: "\(model.libraryRevision)-\(channel.id)") {
             programs = []; loading = true
