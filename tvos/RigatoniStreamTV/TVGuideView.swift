@@ -170,7 +170,7 @@ struct TVGuideView: View {
                 return
             }
             // Debounce so fast scrolling doesn't thrash streams.
-            do { try await Task.sleep(for: .milliseconds(600)) } catch { return }
+            do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
             guard !Task.isCancelled else { return }
             do {
                 let url = try model.provider.streamURL(item: item)
