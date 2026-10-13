@@ -264,3 +264,17 @@ enum ProviderKeychain {
         return fresh
     }
 }
+
+// Starred (pinned) live channels, persisted per provider in UserDefaults.
+// Shared by the iPhone guide and the Apple TV guide so pins sync across
+// devices (same key, same provider scope).
+enum PinnedChannels {
+    static func read(key: String?) -> Set<String> {
+        guard let key, let ids = UserDefaults.standard.stringArray(forKey: key + "-pinned-channels") else { return [] }
+        return Set(ids)
+    }
+    static func write(_ ids: Set<String>, key: String?) {
+        guard let key else { return }
+        UserDefaults.standard.set(Array(ids), forKey: key + "-pinned-channels")
+    }
+}

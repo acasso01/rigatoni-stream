@@ -241,18 +241,8 @@ struct MobilePinnedShelf: View {
     }
 }
 
-// Starred (pinned) live channels, persisted per provider in UserDefaults.
-enum PinnedChannels {
-    static func read(key: String?) -> Set<String> {
-        guard let key, let ids = UserDefaults.standard.stringArray(forKey: key + "-pinned-channels") else { return [] }
-        return Set(ids)
-    }
-    static func write(_ ids: Set<String>, key: String?) {
-        guard let key else { return }
-        UserDefaults.standard.set(Array(ids), forKey: key + "-pinned-channels")
-    }
-}
 
+// Starred (pinned) live channels now live in Core.swift (shared with tvOS).
 struct MobileGuideView: View {
     @EnvironmentObject private var model: AppModel
     @State private var categories: [CatalogCategory] = []

@@ -72,6 +72,21 @@ final class TVLibraryStore: ObservableObject {
         }
     }
 
+    /// Load channels from every category at once (the guide's "All" view).
+    func loadAllItems() async {
+        guard model.providerReady else { return }
+        error = ""; progress = ""; items = []; loading = true
+        defer { loading = false }
+        do {
+            let result = try await fetchItems(category: nil)
+            try Task.checkCancellation()
+            items = result
+        } catch {
+            guard !Task.isCancelled else { return }
+            self.error = error.localizedDescription
+        }
+    }
+
     /// Load the whole catalog for search (full-catalog fast path, then
     /// category fallback with progress), like the iPhone build.
     func loadAllForSearch(update: @escaping ([CatalogItem], String) -> Void) async {
