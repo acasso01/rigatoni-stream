@@ -379,8 +379,8 @@ private struct TVGuideRowLabel: View {
 // MARK: - Hover preview pane
 
 extension TVGuideView {
-    // 16:9 preview with audio beside the guide heading. Shows the focused
-    // channel's live stream; one click on the row still goes fullscreen.
+    // 16:9 muted preview beside the guide heading. Shows the focused
+    // channel's live stream; one click on the row still goes fullscreen with sound.
     @ViewBuilder
     fileprivate func previewPane() -> some View {
         ZStack(alignment: .bottomLeading) {
@@ -420,7 +420,7 @@ extension TVGuideView {
                                 .font(.system(size: 15, weight: .bold))
                                 .padding(.horizontal, 10).padding(.vertical, 5)
                                 .background(.white.opacity(0.22), in: Capsule())
-                            Label("SOUND ON", systemImage: "speaker.wave.2.fill")
+                            Label("MUTED", systemImage: "speaker.slash.fill")
                                 .font(.system(size: 15, weight: .bold))
                                 .padding(.horizontal, 10).padding(.vertical, 5)
                                 .background(.white.opacity(0.22), in: Capsule())
@@ -454,11 +454,11 @@ extension TVGuideView {
 
 // MARK: - Hover preview player (VLC)
 
-// One VLC preview with audio. Pending starts are cancelled by the guide's
+// One muted VLC preview. Pending starts are cancelled by the guide's
 // debounced task; focus loss and fullscreen playback stop this player.
 @MainActor
 final class TVPreviewPlayer: ObservableObject {
-    let engine = VLCMediaPlayer(options: ["--quiet", "--no-video-title-show"])
+    let engine = VLCMediaPlayer(options: ["--quiet", "--no-video-title-show", "--no-audio"])
     @Published var playing = false
     @Published var failed = false
     private var timer: Timer?
