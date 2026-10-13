@@ -60,6 +60,7 @@ struct TVGuideView: View {
 
     @ViewBuilder
     private func content(_ store: TVLibraryStore) -> some View {
+        Group {
         if !model.providerReady {
             Text("Save your provider in Settings to browse the guide.")
                 .foregroundStyle(TVTheme.muted)
@@ -127,6 +128,7 @@ struct TVGuideView: View {
                 }
             }
             .foregroundStyle(TVTheme.text)
+        }
         }
         .task(id: "\(model.libraryRevision)-\(retry)") {
             pinned = PinnedChannels.read(key: model.preferenceKey)
