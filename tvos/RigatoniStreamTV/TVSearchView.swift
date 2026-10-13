@@ -74,7 +74,7 @@ struct TVSearchView: View {
                         if !seriesMatches.isEmpty {
                             Text("TV Shows").font(.title2.bold()).padding(.top, 12)
                             LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 32)], alignment: .leading, spacing: 36) {
-                                ForEach(Array(seriesMatches.prefix(limit))) { series in
+                                ForEach(Array(seriesMatches.prefix(limit)), id: \.scopedID) { series in
                                     Button { openSeries(series) } label: {
                                         VStack(alignment: .leading, spacing: 10) {
                                             ProviderPoster(url: series.poster, kind: .movies)

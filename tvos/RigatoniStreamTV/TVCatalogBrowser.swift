@@ -156,7 +156,7 @@ struct TVCatalogBrowser: View {
         } else {
             if kind == .live {
                 LazyVStack(spacing: 10) {
-                    ForEach(visible) { item in
+                    ForEach(visible, id: \.scopedID) { item in
                         Button { playing = item } label: {
                             HStack(spacing: 22) {
                                 ProviderPoster(url: item.poster, kind: .live).frame(width: 100, height: 56)
@@ -172,7 +172,7 @@ struct TVCatalogBrowser: View {
                 }.padding(.vertical, 12)
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: 22)], spacing: 36) {
-                    ForEach(visible) { item in
+                    ForEach(visible, id: \.scopedID) { item in
                         Button { openDetail(item) } label: { TVCatalogCard(item: item) }
                             .buttonStyle(TVCardButtonStyle()).focused($focusedCard, equals: item.id)
                             .contextMenu {

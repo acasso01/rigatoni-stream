@@ -117,7 +117,7 @@ private struct TVMovieShelf: View {
             }
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: 28) {
-                    ForEach(items) { item in
+                    ForEach(items, id: \.scopedID) { item in
                         Button { play(item) } label: { TVCatalogCard(item: item) }.buttonStyle(TVCardButtonStyle()).contextMenu {
                             Button(TVFavorites.contains(item: item, model: model) ? "Remove from Saved" : "Save to Favorites") { TVFavorites.toggle(item: item, model: model) }
                         }

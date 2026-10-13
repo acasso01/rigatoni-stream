@@ -137,9 +137,9 @@ struct DirectPlayerView: View {
                         if !apple.notice.isEmpty { Text(apple.notice).padding().background(.black.opacity(0.8)) }
                     }.foregroundStyle(.white)
                 }
-                .task(id: current.id) {
+                .task(id: current.scopedID) {
                     do {
-                        let url = try provider.streamURL(item: current)
+                        let url = try model.provider(for: current).streamURL(item: current)
                         apple.record = { seconds, duration in model.saveProgress(id: progressID ?? current.id, seconds: seconds, duration: duration) }
                         apple.open(url, live: current.kind == .live, start: selected == nil ? startSeconds : 0)
                         #if os(iOS)
@@ -153,9 +153,9 @@ struct DirectPlayerView: View {
                 .onDisappear { apple.stop() }
             } else {
                 #if os(iOS)
-                PlayerView(item: current, provider: provider, channels: channels, startSeconds: fallback ? fallbackSeconds : startSeconds, progressID: progressID)
+                PlayerView(item: current, provider: model.provider(for: current), channels: channels, startSeconds: fallback ? fallbackSeconds : startSeconds, progressID: progressID)
                 #else
-                TVPlayerView(item: current, provider: provider, channels: channels, startSeconds: fallback ? fallbackSeconds : startSeconds,
+                TVPlayerView(item: current, provider: model.provider(for: current), channels: channels, startSeconds: fallback ? fallbackSeconds : startSeconds,
                              lastWatchedKind: progressID == nil ? nil : "series", progressID: progressID)
                 #endif
             }
@@ -163,7 +163,7 @@ struct DirectPlayerView: View {
     }
     private func switchToVLC() { fallbackSeconds = max(startSeconds, apple.seconds); apple.stop(); fallback = true }
     private func adjacent(_ offset: Int) -> CatalogItem? {
-        guard let index = channels.firstIndex(where: { $0.id == current.id }), channels.indices.contains(index + offset) else { return nil }
+        guard let index = channels.firstIndex(where: { $0.scopedID == current.scopedID }), channels.indices.contains(index + offset) else { return nil }
         return channels[index + offset]
     }
     private func change(_ offset: Int) { if let next = adjacent(offset) { selected = next } }

@@ -16,7 +16,7 @@ struct ProviderWelcomeView: View {
                 Text("Welcome to Ant Streams").font(.largeTitle.bold())
                 Text("Bring your own authorized IPTV provider. No Ant Streams account is needed.").foregroundStyle(.secondary)
                 Button("Add Xtream Codes Provider") { editor = ProviderEditorRequest(profile: nil, kind: .xtream) }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.borderedProminent).foregroundStyle(StreamTheme.onAccent)
                 Button("Add M3U Playlist") { editor = ProviderEditorRequest(profile: nil, kind: .m3u) }
                     .buttonStyle(.bordered)
                 if !model.notice.isEmpty {
