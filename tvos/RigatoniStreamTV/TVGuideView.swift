@@ -1,4 +1,6 @@
 import SwiftUI
+import UIKit
+import VLCKit
 
 // Live TV guide matching the iPhone "All channels" layout: title +
 // time-slot bar, category chips with "All" first, and rows of
@@ -17,6 +19,9 @@ struct TVGuideView: View {
     @State private var nowTick = Date()
     @State private var playing: CatalogItem?
     @FocusState private var chipFocus: String?
+    @StateObject private var previewPlayer = TVPreviewPlayer()
+    @State private var previewItem: CatalogItem?
+    @State private var previewNowTitle = ""
 
     private let pageSize = 40
 
@@ -56,6 +61,10 @@ struct TVGuideView: View {
         .onAppear {
             if store == nil { store = TVLibraryStore(kind: .live, model: model) }
         }
+        .onDisappear {
+            previewPlayer.stop()
+            previewItem = nil
+        }
     }
 
     @ViewBuilder
@@ -85,6 +94,8 @@ struct TVGuideView: View {
                 .padding(.horizontal, 60)
                 .padding(.top, 8)
 
+                previewPane()
+
                 categoryChips(store)
                     .padding(.top, 12)
 
@@ -107,7 +118,8 @@ struct TVGuideView: View {
                             ForEach(Array(ordered.dropFirst(page * pageSize).prefix(pageSize))) { channel in
                                 TVGuideRow(channel: channel,
                                           isPinned: pinned.contains(channel.id),
-                                          togglePin: { togglePin(channel.id) }) { playing = channel }
+                                          togglePin: { togglePin(channel.id) },
+                                          onHover: { previewItem = $0 }) { playChannel(channel) }
                             }
                         }
                         .padding(.horizontal, 60)
@@ -150,6 +162,35 @@ struct TVGuideView: View {
                 do { try await Task.sleep(for: .seconds(60)) } catch { return }
             }
         }
+        .task(id: "\(previewItem?.id ?? "-")-\(model.libraryRevision)") {
+            previewPlayer.failed = false
+            previewNowTitle = ""
+            guard let item = previewItem, model.providerReady else {
+                previewPlayer.stop()
+                return
+            }
+            // Debounce so fast scrolling doesn't thrash streams.
+            do { try await Task.sleep(for: .milliseconds(600)) } catch { return }
+            guard !Task.isCancelled else { return }
+            do {
+                let url = try model.provider.streamURL(item: item)
+                try Task.checkCancellation()
+                previewPlayer.play(url: url)
+                // Best-effort "now playing" label; must not block video.
+                if let scope = model.preferenceKey {
+                    let progs = await EPGCache.shared.programs(streamID: item.id, provider: model.provider, scope: scope + "-\(model.libraryRevision)")
+                    if !Task.isCancelled {
+                        previewNowTitle = EPGParser.nowNext(progs).now?.title ?? ""
+                    }
+                }
+            } catch {
+                if !Task.isCancelled { previewPlayer.failed = true }
+            }
+        }
+        .onChange(of: selectedCategory) { _, _ in
+            previewPlayer.stop()
+            previewItem = nil
+        }
         .fullScreenCover(item: $playing) { item in
             CatalogDestination(item: item, channels: store.items.filter(model.preferences.visible))
         }
@@ -158,6 +199,14 @@ struct TVGuideView: View {
     private func togglePin(_ id: String) {
         if pinned.contains(id) { pinned.remove(id) } else { pinned.insert(id) }
         PinnedChannels.write(pinned, key: model.preferenceKey)
+    }
+
+    // One click on a row: stop the muted preview and go fullscreen with audio.
+    private func playChannel(_ channel: CatalogItem) {
+        previewPlayer.stop()
+        previewItem = nil
+        previewNowTitle = ""
+        playing = channel
     }
 
     // MARK: - Category chips
@@ -206,6 +255,7 @@ private struct TVGuideRow: View {
     let channel: CatalogItem
     let isPinned: Bool
     let togglePin: () -> Void
+    let onHover: (CatalogItem?) -> Void
     let play: () -> Void
     @State private var programs: [EPGProgram] = []
     @State private var loading = true
@@ -221,11 +271,13 @@ private struct TVGuideRow: View {
             }
             .buttonStyle(TVCompactButtonStyle())
             .accessibilityLabel(isPinned ? "Unpin channel" : "Pin channel")
+            .onFocusChange { onHover($0 ? channel : nil) }
 
             Button(action: play) {
                 TVGuideRowLabel(channel: channel, nowNext: nowNext, loading: loading)
             }
             .buttonStyle(TVCompactButtonStyle())
+            .onFocusChange { onHover($0 ? channel : nil) }
         }
         .task(id: "\(model.libraryRevision)-\(channel.id)") {
             programs = []; loading = true
@@ -286,4 +338,148 @@ private struct TVGuideRowLabel: View {
         .background(focused ? TVTheme.focusFill : TVTheme.card)
         .clipShape(RoundedRectangle(cornerRadius: 14))
     }
+}
+
+// MARK: - Hover preview pane
+
+extension TVGuideView {
+    // 16:9 muted preview pinned above the channel rows. Shows the focused
+    // channel's live stream; one click on the row still goes fullscreen.
+    @ViewBuilder
+    fileprivate func previewPane() -> some View {
+        ZStack(alignment: .bottomLeading) {
+            RoundedRectangle(cornerRadius: 18)
+                .fill(TVTheme.card)
+                .frame(width: 600, height: 338)
+            if let item = previewItem {
+                if previewPlayer.failed {
+                    VStack(spacing: 12) {
+                        Image(systemName: "tv.slash")
+                            .font(.system(size: 44))
+                            .foregroundStyle(TVTheme.muted)
+                        Text("Preview unavailable")
+                            .font(.system(size: 22, weight: .medium))
+                            .foregroundStyle(TVTheme.muted)
+                        Text(item.name)
+                            .font(.system(size: 20))
+                            .foregroundStyle(TVTheme.muted)
+                            .lineLimit(1)
+                    }
+                    .frame(width: 600, height: 338)
+                } else {
+                    TVPreviewSurface(player: previewPlayer)
+                        .frame(width: 600, height: 338)
+                        .clipShape(RoundedRectangle(cornerRadius: 18))
+                    if !previewPlayer.playing {
+                        ProgressView()
+                            .tint(.white)
+                            .frame(width: 600, height: 338)
+                    }
+                    LinearGradient(colors: [.clear, .black.opacity(0.72)], startPoint: .center, endPoint: .bottom)
+                        .frame(width: 600, height: 338)
+                        .clipShape(RoundedRectangle(cornerRadius: 18))
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            Text("PREVIEW")
+                                .font(.system(size: 15, weight: .bold))
+                                .padding(.horizontal, 10).padding(.vertical, 5)
+                                .background(.white.opacity(0.22), in: Capsule())
+                            Text("MUTED")
+                                .font(.system(size: 15, weight: .bold))
+                                .padding(.horizontal, 10).padding(.vertical, 5)
+                                .background(.white.opacity(0.22), in: Capsule())
+                        }
+                        Text(item.name)
+                            .font(.system(size: 27, weight: .semibold))
+                            .lineLimit(1)
+                        Text(previewNowTitle.isEmpty ? "Live" : previewNowTitle)
+                            .font(.system(size: 20))
+                            .foregroundStyle(.white.opacity(0.82))
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(.white)
+                    .padding(22)
+                }
+            } else {
+                VStack(spacing: 12) {
+                    Image(systemName: "tv")
+                        .font(.system(size: 44))
+                        .foregroundStyle(TVTheme.muted)
+                    Text("Focus a channel to preview it live")
+                        .font(.system(size: 22))
+                        .foregroundStyle(TVTheme.muted)
+                }
+                .frame(width: 600, height: 338)
+            }
+        }
+        .padding(.horizontal, 60)
+        .padding(.top, 14)
+    }
+}
+
+// MARK: - Hover preview player (muted VLC)
+
+// Lightweight VLC player for the guide's hover preview. Audio is disabled
+// entirely (--no-audio) so browsing the guide never makes sound. One
+// instance only; in-flight loads are cancelled by the guide's debounced
+// preview task when focus moves.
+final class TVPreviewPlayer: ObservableObject {
+    let engine = VLCMediaPlayer(options: ["--quiet", "--no-video-title-show", "--no-audio"])
+    @Published var playing = false
+    @Published var failed = false
+    private var timer: Timer?
+
+    func attach(_ view: UIView) { engine.drawable = view }
+
+    func play(url: URL) {
+        failed = false
+        playing = false
+        engine.stop()
+        guard let media = VLCMedia(url: url) else { failed = true; return }
+        media.addOptions(["network-caching": 1500])
+        engine.media = media
+        engine.play()
+        timer?.invalidate()
+        let started = Date()
+        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            if self.engine.state == .error {
+                self.fail()
+            } else if self.engine.isPlaying {
+                self.playing = true
+            } else if Date().timeIntervalSince(started) > 20 {
+                self.fail()
+            }
+        }
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+        playing = false
+        engine.stop()
+    }
+
+    private func fail() {
+        timer?.invalidate()
+        timer = nil
+        failed = true
+        engine.stop()
+    }
+}
+
+// Plain non-interactive UIView hosting the preview player's drawable.
+// User interaction is disabled so the Siri Remote focus stays on the rows.
+private struct TVPreviewSurface: UIViewRepresentable {
+    let player: TVPreviewPlayer
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = .black
+        view.isUserInteractionEnabled = false
+        player.attach(view)
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {}
 }
