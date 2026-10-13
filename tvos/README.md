@@ -72,14 +72,14 @@ provider playback; those checks happen on the paired device. Shared vault and
 catalog logic remains covered by the existing iOS test workflow.
 
 
-TV Shows uses direct provider access and supports season/episode browsing. Live TV and Guide both open the All Channels guide with category chips, star pins, channel logos, now/next listings and a muted preview. With playback controls hidden, left/right switches channels; with controls visible, left/right navigates the buttons. Last watched is scoped to the signed-in account and provider; movie entries open details with Continue/Restart, and episodes restore their own playback position. History stores IDs, titles and timestamps, never credentials or artwork/stream URLs.
+TV Shows uses direct provider access and supports season/episode browsing. Live TV and Guide both open the All Channels guide with category chips, star pins, channel logos, now/next listings and a preview with sound. With playback controls hidden, left/right switches channels; with controls visible, left/right navigates the buttons. Last watched is scoped to the signed-in account and provider; movie entries open details with Continue/Restart, and episodes restore their own playback position. History stores IDs, titles and timestamps, never credentials or artwork/stream URLs.
 
 The Ant Streams update keeps the original bundle identifiers, Keychain service and preference keys so installed apps retain settings. From the repository root, run `cd ios && bundle exec ruby update_project.rb` for iPhone or `cd tvos && bundle exec ruby update_project.rb` for Apple TV, then build and run the corresponding workspace.
 
 
 The interface update includes Dark, iOS Light and Midnight themes. Apple TV has a left navigation rail with Guide and Saved, plus movie/show hero banners. The guide uses provider short-EPG data with at most four concurrent requests and a bounded, account/provider-scoped memory cache; gateway/no-EPG providers retain playable Live rows. Saved favorites persist IDs and metadata only, respect hidden movie/live categories and channels, and open movie details with Continue/Restart. New source files are added to existing Xcode projects by `bundle exec ruby update_project.rb`; signing and local HTTP exceptions are preserved.
 
-## Refresh an existing installation (0.2.1, build 3)
+## Refresh an existing installation (0.2.2, build 4)
 
 The generated Xcode project is local and ignored by Git. Matching branch HEAD
 alone does not establish target membership or which app was installed. Previously
@@ -111,16 +111,21 @@ sets AppIcon and updates the Info.plist/version without changing bundle identity
    any customized identifier so Xcode updates the same app and preserves data.
 3. **Product > Clean Build Folder** (Shift-Command-K), then **Product > Run**
    (Command-R). Confirm Xcode launches the app on that TV.
-4. Settings must show **Version 0.2.1 (3)**. Live TV and Guide should show
+4. Settings must show **Version 0.2.2 (4)**. Live TV and Guide should show
    **All Channels**, a time bar, category chips and the preview pane.
-5. Pause focus on a channel for 250 ms: VLC starts a silent preview after buffering.
+5. Pause focus on a channel for 250 ms: VLC starts a preview with sound after buffering.
    Rapid focus moves, category changes, leaving the guide and opening playback
    cancel pending previews and stop the old stream. Click the channel for fullscreen
    playback with sound through the selected normal playback engine. Test Back,
    star pins and page/category controls too.
-6. Check the Home Screen icon. If Settings confirms build 3 but the icon still
+6. Check the Home Screen icon. If Settings confirms build 4 but the icon still
    shows cached artwork, restart Apple TV and check again. Keep the app installed
    so local profiles and preferences remain available.
 
 Provider playback, sound, remote focus transitions and Home Screen icon caching
 require verification on a paired Apple TV. Git updates do not update installed apps.
+
+The 0.2.2 layout widens the menu and distributes its buttons through the full left
+column. The guide heading and preview share one row, category chips have a bounded
+height, and channel rows fill the remaining height. Previews automatically play
+with sound; selecting a channel stops the preview before fullscreen playback starts.

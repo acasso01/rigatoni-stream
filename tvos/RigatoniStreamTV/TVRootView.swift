@@ -79,28 +79,28 @@ struct TVRootView: View {
     private var navRail: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("ANT STREAMS")
-                .font(.system(size: 20, weight: .bold))
+                .font(.system(size: 23, weight: .bold))
                 .foregroundStyle(TVTheme.muted)
                 .padding(.horizontal, 24)
-                .padding(.top, 32)
-                .padding(.bottom, 20)
+                .padding(.top, 24)
+                .padding(.bottom, 24)
 
             ForEach(TVSection.allCases) { section in
                 let selected = selection == section
                 let focused = focusedItem == section
                 Button { selection = section } label: {
-                    HStack(spacing: 14) {
+                    HStack(spacing: 18) {
                         Image(systemName: section.symbol)
-                            .font(.system(size: 26))
-                            .frame(width: 32)
+                            .font(.system(size: 30))
+                            .frame(width: 38)
                         Text(section.title)
-                            .font(.system(size: 25, weight: selected ? .bold : .medium))
+                            .font(.system(size: 28, weight: selected ? .bold : .medium))
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                         Spacer()
                     }
                     .padding(.horizontal, 18)
-                    .padding(.vertical, 16)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                     .background(
                         selected ? TVTheme.accent
                         : focused ? TVTheme.focusCard
@@ -115,9 +115,10 @@ struct TVRootView: View {
                 .padding(.vertical, 4)
             }
 
-            Spacer()
         }
-        .frame(width: 300)
+        .padding(.bottom, 20)
+        .frame(width: 340)
+        .frame(maxHeight: .infinity)
         .background(TVTheme.panel)
     }
 

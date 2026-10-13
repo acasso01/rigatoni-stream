@@ -79,28 +79,40 @@ struct TVGuideView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             VStack(alignment: .leading, spacing: 0) {
-                Text(selectedName)
-                    .font(.system(size: 48, weight: .bold))
-                    .foregroundStyle(TVTheme.text)
-                    .padding(.horizontal, 60)
-                    .padding(.top, 36)
+                HStack(alignment: .center, spacing: 32) {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text(selectedName)
+                            .font(.system(size: 46, weight: .bold))
+                            .foregroundStyle(TVTheme.text)
+                            .lineLimit(2)
+                        Text(previewItem?.name ?? "Live TV")
+                            .font(.system(size: 28, weight: .semibold))
+                            .lineLimit(2)
+                        Text(previewItem == nil
+                             ? "Focus a channel to watch. Select it for fullscreen."
+                             : (previewNowTitle.isEmpty ? "Live now" : previewNowTitle))
+                            .font(.system(size: 22))
+                            .foregroundStyle(TVTheme.muted)
+                            .lineLimit(3)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    previewPane()
+                }
+                .padding(.horizontal, 40)
+                .padding(.top, 24)
+                .padding(.bottom, 12)
+
+                categoryChips(store)
 
                 HStack {
                     Text("Now – \(slot.end)")
-                        .font(.system(size: 24))
-                        .foregroundStyle(TVTheme.muted)
                     Spacer()
                     Text(slot.next)
-                        .font(.system(size: 24))
-                        .foregroundStyle(TVTheme.muted)
                 }
-                .padding(.horizontal, 60)
+                .font(.system(size: 22))
+                .foregroundStyle(TVTheme.muted)
+                .padding(.horizontal, 40)
                 .padding(.top, 8)
-
-                previewPane()
-
-                categoryChips(store)
-                    .padding(.top, 12)
 
                 if store.loading && store.items.isEmpty {
                     ProgressView("Loading guide…")
@@ -125,9 +137,10 @@ struct TVGuideView: View {
                                           onHover: { focused in updatePreview(channel, focused: focused) }) { playChannel(channel) }
                             }
                         }
-                        .padding(.horizontal, 60)
-                        .padding(.vertical, 20)
+                        .padding(.horizontal, 40)
+                        .padding(.vertical, 12)
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     if ordered.count > pageSize {
                         HStack(spacing: 24) {
                             Button("Previous") { page -= 1 }
@@ -137,11 +150,12 @@ struct TVGuideView: View {
                             Button("Next") { page += 1 }
                                 .disabled((page + 1) * pageSize >= ordered.count).buttonStyle(.bordered)
                         }
-                        .padding(.horizontal, 60)
-                        .padding(.bottom, 24)
+                        .padding(.horizontal, 40)
+                        .padding(.bottom, 12)
                     }
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .foregroundStyle(TVTheme.text)
         }
         }
@@ -218,7 +232,7 @@ struct TVGuideView: View {
         PinnedChannels.write(pinned, key: model.preferenceKey)
     }
 
-    // One click on a row: stop the muted preview and go fullscreen with audio.
+    // Stop the preview before opening fullscreen so only one stream plays audio.
     private func playChannel(_ channel: CatalogItem) {
         previewPlayer.stop()
         previewItem = nil
@@ -236,9 +250,11 @@ struct TVGuideView: View {
                     guideChip(id: category.id, name: category.name)
                 }
             }
-            .padding(.horizontal, 60)
+            .padding(.horizontal, 40)
             .padding(.vertical, 8)
         }
+        // A horizontal ScrollView otherwise competes with the channel list for height.
+        .frame(height: 78)
         .focusSection()
         .onAppear {
             // Returning to the Guide with categories already loaded.
@@ -324,7 +340,7 @@ private struct TVGuideRowLabel: View {
         HStack(spacing: 28) {
             VStack(spacing: 6) {
                 ProviderPoster(url: channel.poster, kind: .live)
-                    .frame(width: 120, height: 68)
+                    .frame(width: 104, height: 58)
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                 if !channel.number.isEmpty {
                     Text(channel.number)
@@ -332,7 +348,7 @@ private struct TVGuideRowLabel: View {
                         .foregroundStyle(focused ? Color.white.opacity(0.85) : TVTheme.muted)
                 }
             }
-            .frame(width: 140)
+            .frame(width: 124)
 
             VStack(alignment: .leading, spacing: 8) {
                 Text(nowNext.now?.title ?? (loading ? "Loading…" : channel.name))
@@ -353,7 +369,7 @@ private struct TVGuideRowLabel: View {
         }
         .foregroundStyle(focused ? Color.white : TVTheme.text)
         .padding(.horizontal, 28)
-        .padding(.vertical, 18)
+        .padding(.vertical, 14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(focused ? TVTheme.focusFill : TVTheme.card)
         .clipShape(RoundedRectangle(cornerRadius: 14))
@@ -363,14 +379,14 @@ private struct TVGuideRowLabel: View {
 // MARK: - Hover preview pane
 
 extension TVGuideView {
-    // 16:9 muted preview pinned above the channel rows. Shows the focused
+    // 16:9 preview with audio beside the guide heading. Shows the focused
     // channel's live stream; one click on the row still goes fullscreen.
     @ViewBuilder
     fileprivate func previewPane() -> some View {
         ZStack(alignment: .bottomLeading) {
             RoundedRectangle(cornerRadius: 18)
                 .fill(TVTheme.card)
-                .frame(width: 600, height: 338)
+                .frame(width: 520, height: 292.5)
             if let item = previewItem {
                 if previewPlayer.failed {
                     VStack(spacing: 12) {
@@ -385,18 +401,18 @@ extension TVGuideView {
                             .foregroundStyle(TVTheme.muted)
                             .lineLimit(1)
                     }
-                    .frame(width: 600, height: 338)
+                    .frame(width: 520, height: 292.5)
                 } else {
                     TVPreviewSurface(player: previewPlayer)
-                        .frame(width: 600, height: 338)
+                        .frame(width: 520, height: 292.5)
                         .clipShape(RoundedRectangle(cornerRadius: 18))
                     if !previewPlayer.playing {
                         ProgressView()
                             .tint(.white)
-                            .frame(width: 600, height: 338)
+                            .frame(width: 520, height: 292.5)
                     }
                     LinearGradient(colors: [.clear, .black.opacity(0.72)], startPoint: .center, endPoint: .bottom)
-                        .frame(width: 600, height: 338)
+                        .frame(width: 520, height: 292.5)
                         .clipShape(RoundedRectangle(cornerRadius: 18))
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(spacing: 8) {
@@ -404,7 +420,7 @@ extension TVGuideView {
                                 .font(.system(size: 15, weight: .bold))
                                 .padding(.horizontal, 10).padding(.vertical, 5)
                                 .background(.white.opacity(0.22), in: Capsule())
-                            Text("MUTED")
+                            Label("SOUND ON", systemImage: "speaker.wave.2.fill")
                                 .font(.system(size: 15, weight: .bold))
                                 .padding(.horizontal, 10).padding(.vertical, 5)
                                 .background(.white.opacity(0.22), in: Capsule())
@@ -429,23 +445,20 @@ extension TVGuideView {
                         .font(.system(size: 22))
                         .foregroundStyle(TVTheme.muted)
                 }
-                .frame(width: 600, height: 338)
+                .frame(width: 520, height: 292.5)
             }
         }
-        .padding(.horizontal, 60)
-        .padding(.top, 14)
+        .frame(width: 520, height: 292.5)
     }
 }
 
-// MARK: - Hover preview player (muted VLC)
+// MARK: - Hover preview player (VLC)
 
-// Lightweight VLC player for the guide's hover preview. Audio is disabled
-// entirely (--no-audio) so browsing the guide never makes sound. One
-// instance only; in-flight loads are cancelled by the guide's debounced
-// preview task when focus moves.
+// One VLC preview with audio. Pending starts are cancelled by the guide's
+// debounced task; focus loss and fullscreen playback stop this player.
 @MainActor
 final class TVPreviewPlayer: ObservableObject {
-    let engine = VLCMediaPlayer(options: ["--quiet", "--no-video-title-show", "--no-audio"])
+    let engine = VLCMediaPlayer(options: ["--quiet", "--no-video-title-show"])
     @Published var playing = false
     @Published var failed = false
     private var timer: Timer?
