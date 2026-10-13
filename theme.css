@@ -375,3 +375,15 @@ p{line-height:1.6}
   html{scroll-behavior:auto!important}
   *,*:before,*:after{transition:none!important}
 }
+
+/* ---------- Saved providers manager ---------- */
+#providers{margin:18px 0 4px}
+#providers h3{margin:0 0 4px;font-size:15px;letter-spacing:-.2px}
+#providerList{display:grid;gap:8px;margin:10px 0}
+.provider-row{display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:var(--panel)}
+.provider-row.active{border-color:var(--accent)}
+.provider-info{flex:1;min-width:0}
+.provider-info strong{display:block;font-size:14px}
+.provider-info small{display:block;color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.provider-actions{display:flex;gap:8px;flex-shrink:0}
+.provider-actions .btn{min-height:36px;padding:8px 12px;font-size:13px}
