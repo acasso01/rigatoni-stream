@@ -37,12 +37,8 @@ struct TVSearchView: View {
                         .accessibilityLabel("Search movies, live TV and TV shows")
                     Text("Select the search field to type with your remote or iPhone.")
                         .font(.system(size: 20)).foregroundStyle(.secondary)
-                    Picker("Search in", selection: $filter) {
-                        Text("All").tag("all")
-                        Text("Movies").tag(LibraryKind.movies.rawValue)
-                        Text("Live TV").tag(LibraryKind.live.rawValue)
-                        Text("TV Shows").tag("series")
-                    }.pickerStyle(.segmented).frame(maxWidth: 580)
+                    StreamOptionPicker(options: [("all", "All"), (LibraryKind.movies.rawValue, "Movies"), (LibraryKind.live.rawValue, "Live TV"), ("series", "TV Shows")], selection: $filter)
+                        .frame(maxWidth: 580)
                 }
                 .onAppear { fieldFocused = true }
                 if !hasQuery {
