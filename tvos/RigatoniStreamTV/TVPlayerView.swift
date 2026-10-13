@@ -117,15 +117,24 @@ private extension Double {
 // Plain UIView as the VLC drawable. tvOS needs no PiP bridge.
 private struct TVVideoSurface: UIViewRepresentable {
     let player: TVNativePlayer
+    let url: URL
+    let cache: Int
+    let isLive: Bool
+    let startSeconds: Double
 
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
         view.backgroundColor = .black
         player.attach(view)
+        player.isLive = isLive
+        player.resumeSeconds = startSeconds
+        player.play(url: url, cache: cache)
         return view
     }
 
-    func updateUIView(_ uiView: UIView, context: Context) {}
+    func updateUIView(_ uiView: UIView, context: Context) {
+        player.attach(uiView)
+    }
 }
 
 // Full-screen tvOS player.
@@ -177,7 +186,8 @@ struct TVPlayerView: View {
         ZStack {
             Color.black.ignoresSafeArea()
             if let url = playbackURL {
-                TVVideoSurface(player: player)
+                TVVideoSurface(player: player, url: url, cache: cache,
+                               isLive: currentItem.kind == .live, startSeconds: startSeconds)
                     .ignoresSafeArea()
             } else {
                 Text("Invalid provider settings.").foregroundStyle(.white)
@@ -278,11 +288,8 @@ struct TVPlayerView: View {
             showControls()
         }
         .onAppear {
-            player.resumeSeconds = startSeconds
             player.progressRecorder = { seconds, duration in model.saveProgress(id: progressID ?? item.id, seconds: seconds, duration: duration) }
             player.title = currentItem.name
-            player.isLive = currentItem.kind == .live
-            if let url = playbackURL { player.play(url: url, cache: cache) }
             recordHistory()
             showControls()
         }
