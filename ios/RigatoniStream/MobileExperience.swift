@@ -259,18 +259,8 @@ struct MobileGuideView: View {
                     if !model.providerReady {
                         Button("Add your provider") { model.settingsVisible = true }
                     }
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack {
-                            ForEach(categories) { category in
-                                Button { selected = category.id } label: {
-                                    Text(category.name).font(.subheadline.bold()).lineLimit(1).fixedSize()
-                                        .padding(.horizontal, 16).padding(.vertical, 12)
-                                        .background(selected == category.id ? StreamTheme.accent : StreamTheme.panel, in: Capsule())
-                                        .foregroundStyle(selected == category.id ? .white : StreamTheme.text)
-                                }.buttonStyle(.plain)
-                            }
-                        }
-                    }
+                    GuideCategoryPicker(categories: categories, selected: $selected)
+                    EPGRefreshControl(channels: Array(items.dropFirst(page * 40).prefix(40)))
                     if loading { ProgressView("Loading guide…") }
                     if !error.isEmpty { Text(error); Button("Retry") { retry += 1 } }
                     if !loading && items.isEmpty && error.isEmpty && model.providerReady { Text("No visible channels in this category.").foregroundStyle(.secondary) }
@@ -312,6 +302,7 @@ struct MobileGuideView: View {
 }
 
 struct MobileGuideRow: View {
+    @ObservedObject private var epgCache = EPGCache.shared
     @EnvironmentObject private var model: AppModel
     let item: CatalogItem
     let play: () -> Void
@@ -343,7 +334,7 @@ struct MobileGuideRow: View {
                 }
             }
         }.padding(14).background(StreamTheme.panel, in: RoundedRectangle(cornerRadius: 16))
-            .task(id: "\(model.libraryRevision)-\(item.id)") {
+            .task(id: "\(model.libraryRevision)-\(item.id)-\(epgCache.revision)") {
                 programs = []; loading = true
                 guard !model.provider.requiresGateway, let scope = model.preferenceKey else { loading = false; return }
                 while !Task.isCancelled {
@@ -452,5 +443,34 @@ struct MobileSavedContent: View {
             }
             episode = record.kind == "episode"; playing = item
         } catch { if scope == model.preferenceKey { notice = error.localizedDescription } }
+    }
+}
+
+struct GuideCategoryPicker: View {
+    @AppStorage("rigatoni-appearance") private var appearance = AppAppearance.dark.rawValue
+    let categories: [CatalogCategory]
+    @Binding var selected: String
+    @State private var presented = false
+    @State private var query = ""
+    var body: some View {
+        Button { presented = true } label: {
+            HStack {
+                Text(categories.first { $0.id == selected }?.name ?? "Categories").lineLimit(1)
+                Spacer(); Image(systemName: "chevron.up.chevron.down")
+            }.padding(12).background(StreamTheme.panel, in: RoundedRectangle(cornerRadius: 10))
+        }.buttonStyle(.plain)
+        .sheet(isPresented: $presented) {
+            NavigationStack {
+                List(categories.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }) { category in
+                    Button { selected = category.id; presented = false } label: {
+                        HStack {
+                            Text(category.name); Spacer()
+                            if selected == category.id { Image(systemName: "checkmark") }
+                        }
+                    }.accessibilityAddTraits(selected == category.id ? .isSelected : [])
+                }.searchable(text: $query).navigationTitle("Categories")
+                    .toolbar { Button("Done") { presented = false } }
+            }.tint(StreamTheme.accent).preferredColorScheme((AppAppearance(rawValue: appearance) ?? .dark).scheme)
+        }
     }
 }
