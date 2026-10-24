@@ -356,6 +356,7 @@ struct LiveChannelRow: View {
     let provider: Provider
     let epgEnabled: Bool
     let scope: String
+    var refreshToken: Int = 0
     @AppStorage("rigatoni-appearance") private var appearance = "dark"
     @State private var guide: EPGNowNext?
     private var theme: AppAppearance { AppAppearance(rawValue: appearance) ?? .dark }
@@ -391,7 +392,7 @@ struct LiveChannelRow: View {
             .contextMenu { MobileSaveButton(record: MobileRecords.record(item)) }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("\(item.name), live" + (guide?.now.map { ", now playing \($0.title)" } ?? ""))
-            .task(id: scope + ":" + item.id) {
+            .task(id: scope + ":" + item.id + "-\(refreshToken)") {
                 guide = nil
                 guard epgEnabled else { return }
                 while !Task.isCancelled {
@@ -426,6 +427,8 @@ struct LibraryView: View {
     @State private var page = 0
     @State private var playing: CatalogItem?
     @State private var retry = 0
+    @State private var epgReload = 0
+    @State private var epgReloading = false
     private var orderedCategories: [CatalogCategory] {
         let shown = categories.filter { model.preferences.categoryVisible($0.id, kind: kind) }
         return kind == .live ? CategoryPins.ordered(shown, pins: pinnedIDs) : shown
@@ -463,32 +466,30 @@ struct LibraryView: View {
                                 }.padding(.horizontal, 2).padding(.vertical, 4)
                             }.frame(height: 62).scrollClipDisabled()
                         }
-                        if kind == .live && !categories.isEmpty && scope == .category {
+                        if kind == .live && !categories.isEmpty {
                             HStack {
-                                Picker("Category", selection: $selected) {
-                                    ForEach(orderedCategories) { category in
-                                        Text((pinnedIDs.contains(category.id) && kind == .live ? "★ " : "") + category.name).tag(category.id)
-                                    }
-                                }.pickerStyle(.menu)
-                                .padding(.horizontal, 8).padding(.vertical, 4)
-                                .background(.thinMaterial, in: Capsule())
-                                if kind == .live {
-                                    Button {
-                                        pinnedIDs = PinnedCategories.toggled(selected, in: pinnedIDs)
-                                        PinnedCategories.write(pinnedIDs, key: pinKey)
-                                    } label: { Image(systemName: pinnedIDs.contains(selected) ? "pin.fill" : "pin").frame(width: 44, height: 44) }
-                                    .accessibilityLabel(pinnedIDs.contains(selected) ? "Unpin category" : "Pin category")
-                                    .disabled(selected.isEmpty)
+                                Text("Categories").font(.headline)
+                                Spacer()
+                                Button { reloadEPG() } label: {
+                                    if epgReloading { ProgressView() } else { Image(systemName: "arrow.clockwise") }
                                 }
+                                .buttonStyle(.plain)
+                                .disabled(epgReloading)
+                                .accessibilityLabel("Reload program guide")
                             }
-                        }
-                        if kind == .live && !pinnedIDs.isEmpty {
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack {
-                                    ForEach(orderedCategories.filter { pinnedIDs.contains($0.id) }) { category in
-                                        Button { scope = .category; selected = category.id } label: {
-                                            Label(category.name, systemImage: "pin.fill")
-                                        }.buttonStyle(.bordered)
+                            LazyVStack(spacing: 8) {
+                                Button { scope = .all } label: {
+                                    liveCategoryRow(name: "All Channels", selected: scope == .all, pinned: false)
+                                }.buttonStyle(.plain)
+                                ForEach(orderedCategories) { category in
+                                    Button { scope = .category; selected = category.id } label: {
+                                        liveCategoryRow(name: category.name, selected: scope == .category && selected == category.id, pinned: pinnedIDs.contains(category.id))
+                                    }.buttonStyle(.plain)
+                                    .contextMenu {
+                                        Button(pinnedIDs.contains(category.id) ? "Unpin category" : "Pin category") {
+                                            pinnedIDs = PinnedCategories.toggled(category.id, in: pinnedIDs)
+                                            PinnedCategories.write(pinnedIDs, key: pinKey)
+                                        }
                                     }
                                 }
                             }
@@ -502,7 +503,7 @@ struct LibraryView: View {
                             LazyVStack(spacing: 10) {
                                 ForEach(visible, id: \.scopedID) { item in
                                     Button { playing = item } label: {
-                                        LiveChannelRow(item: item, provider: model.provider(for: item), epgEnabled: true, scope: model.epgScope(for: item))
+                                        LiveChannelRow(item: item, provider: model.provider(for: item), epgEnabled: true, scope: model.epgScope(for: item), refreshToken: epgReload)
                                     }.buttonStyle(.plain)
                                 }
                             }
@@ -538,6 +539,36 @@ struct LibraryView: View {
                 }
             }
             .fullScreenCover(item: $playing) { CatalogDestination(item: $0, channels: kind == .live ? items : []) }
+    }
+
+    private func liveCategoryRow(name: String, selected: Bool, pinned: Bool) -> some View {
+        HStack {
+            Text((pinned ? "★ " : "") + name)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+            Spacer()
+            if selected {
+                Image(systemName: "checkmark")
+                    .font(.subheadline.weight(.semibold))
+            }
+        }
+        .foregroundStyle(StreamTheme.text)
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .background(selected ? StreamTheme.accent.opacity(0.18) : StreamTheme.panel, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(selected ? StreamTheme.accent : .clear, lineWidth: 2))
+    }
+
+    // Manual EPG reload: clear the cache so stale programs can't stick,
+    // then restart every visible row's EPG task so it refetches fresh.
+    private func reloadEPG() {
+        guard !epgReloading else { return }
+        Task { @MainActor in
+            epgReloading = true
+            EPGCache.shared.reset()
+            epgReload += 1
+            try? await Task.sleep(for: .seconds(1))
+            epgReloading = false
+        }
     }
 
     private func loadCategories() async {
