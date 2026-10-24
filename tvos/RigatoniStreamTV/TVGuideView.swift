@@ -127,7 +127,7 @@ struct TVGuideView: View {
                     categoryList(store)
                     VStack(alignment: .leading, spacing: 0) {
                         HStack {
-                            Text("Now \u2013 \(slot.end)")
+                            Text("Now – \(slot.end)")
                             Spacer()
                             Text(slot.next)
                         }
@@ -137,7 +137,7 @@ struct TVGuideView: View {
                         .padding(.bottom, 4)
 
                         if store.loading && store.items.isEmpty {
-                            ProgressView("Loading guide\u2026")
+                            ProgressView("Loading guide…")
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                         } else if !store.error.isEmpty {
                             VStack(alignment: .leading, spacing: 16) {
@@ -297,7 +297,7 @@ struct TVGuideView: View {
     private func categoryRow(id: String, name: String) -> some View {
         Button { selectedCategory = id } label: {
             HStack {
-                Text((id != "all" && pinnedCatIDs.contains(id) ? "\u2605 " : "") + name)
+                Text((id != "all" && pinnedCatIDs.contains(id) ? "★ " : "") + name)
                     .font(.system(size: 26, weight: .semibold))
                     .lineLimit(1)
                 Spacer()
