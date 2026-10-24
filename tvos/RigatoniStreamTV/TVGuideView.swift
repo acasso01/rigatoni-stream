@@ -18,7 +18,9 @@ struct TVGuideView: View {
     @State private var retry = 0
     @State private var nowTick = Date()
     @State private var playing: CatalogItem?
-    @FocusState private var chipFocus: String?
+    @FocusState private var catFocus: String?
+    @State private var epgReload = 0
+    @State private var epgReloading = false
     @StateObject private var previewPlayer = TVPreviewPlayer()
     @State private var previewItem: CatalogItem?
     @State private var previewNowTitle = ""
@@ -102,63 +104,82 @@ struct TVGuideView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     previewPane()
+                    Button { reloadEPG() } label: {
+                        if epgReloading {
+                            ProgressView()
+                                .tint(.white)
+                                .frame(width: 64, height: 64)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 28, weight: .semibold))
+                                .frame(width: 64, height: 64)
+                        }
+                    }
+                    .buttonStyle(TVCompactButtonStyle())
+                    .accessibilityLabel("Reload program guide")
+                    .disabled(epgReloading)
                 }
                 .padding(.horizontal, 40)
                 .padding(.top, 24)
                 .padding(.bottom, 12)
 
-                categoryChips(store)
-
-                HStack {
-                    Text("Now – \(slot.end)")
-                    Spacer()
-                    Text(slot.next)
-                }
-                .font(.system(size: 22))
-                .foregroundStyle(TVTheme.muted)
-                .padding(.horizontal, 40)
-                .padding(.top, 8)
-
-                if store.loading && store.items.isEmpty {
-                    ProgressView("Loading guide…")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if !store.error.isEmpty {
-                    VStack(alignment: .leading, spacing: 16) {
-                        Text(store.error).foregroundStyle(.secondary)
-                        Button("Retry") { retry += 1 }.buttonStyle(.bordered)
-                    }.padding(48)
-                } else if ordered.isEmpty {
-                    Text("No visible channels in this category.")
+                HStack(alignment: .top, spacing: 32) {
+                    categoryList(store)
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack {
+                            Text("Now \u2013 \(slot.end)")
+                            Spacer()
+                            Text(slot.next)
+                        }
+                        .font(.system(size: 22))
                         .foregroundStyle(TVTheme.muted)
-                        .font(.system(size: 24))
-                        .padding(48)
-                } else {
-                    ScrollView {
-                        LazyVStack(spacing: 12) {
-                            ForEach(Array(ordered.dropFirst(page * pageSize).prefix(pageSize)), id: \.scopedID) { channel in
-                                TVGuideRow(channel: channel,
-                                          isPinned: pinned.contains(channel.scopedID),
-                                          togglePin: { togglePin(channel.scopedID) },
-                                          onHover: { focused in updatePreview(channel, focused: focused) }) { playChannel(channel) }
+                        .padding(.top, 8)
+                        .padding(.bottom, 4)
+
+                        if store.loading && store.items.isEmpty {
+                            ProgressView("Loading guide\u2026")
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else if !store.error.isEmpty {
+                            VStack(alignment: .leading, spacing: 16) {
+                                Text(store.error).foregroundStyle(.secondary)
+                                Button("Retry") { retry += 1 }.buttonStyle(.bordered)
+                            }.padding(48)
+                        } else if ordered.isEmpty {
+                            Text("No visible channels in this category.")
+                                .foregroundStyle(TVTheme.muted)
+                                .font(.system(size: 24))
+                                .padding(48)
+                        } else {
+                            ScrollView {
+                                LazyVStack(spacing: 12) {
+                                    ForEach(Array(ordered.dropFirst(page * pageSize).prefix(pageSize)), id: \.scopedID) { channel in
+                                        TVGuideRow(channel: channel,
+                                                  refreshToken: epgReload,
+                                                  isPinned: pinned.contains(channel.scopedID),
+                                                  togglePin: { togglePin(channel.scopedID) },
+                                                  onHover: { focused in updatePreview(channel, focused: focused) }) { playChannel(channel) }
+                                    }
+                                }
+                                .padding(.vertical, 12)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            if ordered.count > pageSize {
+                                HStack(spacing: 24) {
+                                    Button("Previous") { page -= 1 }
+                                        .disabled(page == 0).buttonStyle(.bordered)
+                                    Text("Page \(page + 1) of \((ordered.count + pageSize - 1) / pageSize)")
+                                        .font(.system(size: 22)).foregroundStyle(TVTheme.muted)
+                                    Button("Next") { page += 1 }
+                                        .disabled((page + 1) * pageSize >= ordered.count).buttonStyle(.bordered)
+                                }
+                                .padding(.bottom, 12)
                             }
                         }
-                        .padding(.horizontal, 40)
-                        .padding(.vertical, 12)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    if ordered.count > pageSize {
-                        HStack(spacing: 24) {
-                            Button("Previous") { page -= 1 }
-                                .disabled(page == 0).buttonStyle(.bordered)
-                            Text("Page \(page + 1) of \((ordered.count + pageSize - 1) / pageSize)")
-                                .font(.system(size: 22)).foregroundStyle(TVTheme.muted)
-                            Button("Next") { page += 1 }
-                                .disabled((page + 1) * pageSize >= ordered.count).buttonStyle(.bordered)
-                        }
-                        .padding(.horizontal, 40)
-                        .padding(.bottom, 12)
-                    }
+                    .frame(maxWidth: .infinity)
                 }
+                .padding(.horizontal, 40)
+                .frame(maxHeight: .infinity)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .foregroundStyle(TVTheme.text)
@@ -244,41 +265,48 @@ struct TVGuideView: View {
         playing = channel
     }
 
-    // MARK: - Category chips
+    // MARK: - Category list (vertical, scrolls down like the concept)
 
-    private func categoryChips(_ store: TVLibraryStore) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 16) {
-                guideChip(id: "all", name: "All")
-                ForEach(orderedCats(store.categories.filter { model.preferences.categoryVisible($0.id, kind: .live) })) { category in
-                    guideChip(id: category.id, name: category.name)
+    private func categoryList(_ store: TVLibraryStore) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Categories")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(TVTheme.muted)
+                .padding(.horizontal, 4)
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    categoryRow(id: "all", name: "All")
+                    ForEach(orderedCats(store.categories.filter { model.preferences.categoryVisible($0.id, kind: .live) })) { category in
+                        categoryRow(id: category.id, name: category.name)
+                    }
                 }
+                .padding(.vertical, 4)
             }
-            .padding(.horizontal, 40)
-            .padding(.vertical, 8)
         }
-        // A horizontal ScrollView otherwise competes with the channel list for height.
-        .frame(height: 78)
+        .frame(width: 400)
         .focusSection()
         .onAppear {
             // Returning to the Guide with categories already loaded.
-            chipFocus = "chip-\(selectedCategory)"
+            catFocus = "cat-\(selectedCategory)"
         }
         .onChange(of: selectedCategory) { _, new in
-            chipFocus = "chip-\(new)"
+            catFocus = "cat-\(new)"
         }
     }
 
-    private func guideChip(id: String, name: String) -> some View {
+    private func categoryRow(id: String, name: String) -> some View {
         Button { selectedCategory = id } label: {
-            Text((id != "all" && pinnedCatIDs.contains(id) ? "★ " : "") + name)
-                .font(.system(size: 23, weight: .semibold))
-                .lineLimit(1)
-                .padding(.horizontal, 24)
-                .padding(.vertical, 14)
+            HStack {
+                Text((id != "all" && pinnedCatIDs.contains(id) ? "\u2605 " : "") + name)
+                    .font(.system(size: 26, weight: .semibold))
+                    .lineLimit(1)
+                Spacer()
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 16)
         }
         .buttonStyle(TVCompactButtonStyle())
-        .focused($chipFocus, equals: "chip-\(id)")
+        .focused($catFocus, equals: "cat-\(id)")
         .background(selectedCategory == id ? AnyShapeStyle(TVTheme.accentFill) : AnyShapeStyle(TVTheme.card))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .foregroundStyle(selectedCategory == id ? TVTheme.onAccent : TVTheme.text)
@@ -291,6 +319,19 @@ struct TVGuideView: View {
             }
         }
     }
+
+    // Manual EPG reload: clear the cache so stale programs can't stick,
+    // then restart every visible row's EPG task so it refetches fresh.
+    private func reloadEPG() {
+        guard !epgReloading else { return }
+        Task { @MainActor in
+            epgReloading = true
+            EPGCache.shared.reset()
+            epgReload += 1
+            try? await Task.sleep(for: .seconds(1))
+            epgReloading = false
+        }
+    }
 }
 
 // MARK: - Guide row: star (pin) | logo + channel number | NOW + NEXT
@@ -298,6 +339,7 @@ struct TVGuideView: View {
 private struct TVGuideRow: View {
     @EnvironmentObject private var model: AppModel
     let channel: CatalogItem
+    let refreshToken: Int
     let isPinned: Bool
     let togglePin: () -> Void
     let onHover: (Bool) -> Void
@@ -327,7 +369,7 @@ private struct TVGuideRow: View {
         }
         .onChange(of: focusedControl) { _, control in onHover(control != nil) }
         .onDisappear { onHover(false) }
-        .task(id: "\(model.libraryRevision)-\(channel.scopedID)") {
+        .task(id: "\(model.libraryRevision)-\(channel.scopedID)-\(refreshToken)") {
             programs = []; loading = true
             while !Task.isCancelled {
                 let loaded = await EPGCache.shared.programs(streamID: channel.id,
