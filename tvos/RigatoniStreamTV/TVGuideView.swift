@@ -18,6 +18,7 @@ struct TVProgram: Identifiable {
 
 struct TVGuideView: View {
     @EnvironmentObject private var model: AppModel
+    @ObservedObject private var epgCache = EPGCache.shared
     @State private var store: TVLibraryStore?
     @State private var selectedCategory = ""
     @State private var epg: [String: [TVProgram]] = [:]
@@ -93,35 +94,40 @@ struct TVGuideView: View {
                     .padding(.horizontal, 48)
                     .padding(.top, 28)
 
-                categoryChips(store)
-                    .padding(.top, 16)
+                EPGRefreshControl(channels: Array(store.items.filter(model.preferences.visible).prefix(maxGuideChannels)))
+                    .padding(.horizontal, 48)
+                HStack(alignment: .top, spacing: 16) {
+                    categorySidebar(store).frame(width: 270)
+                    VStack(alignment: .leading, spacing: 0) {
 
-                if !store.error.isEmpty {
-                    Text(store.error).foregroundStyle(.secondary).padding(30)
-                    Button("Retry") { retry += 1 }.buttonStyle(.bordered)
-                } else if !epgLoaded {
-                    ProgressView("Loading program data…")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if hasAnyEPG {
-                    guideGrid(Array(store.items.filter(model.preferences.visible).prefix(maxGuideChannels)))
-                } else {
-                    fallbackRows(Array(store.items.filter(model.preferences.visible).prefix(maxGuideChannels)))
-                }
+                        if !store.error.isEmpty {
+                            Text(store.error).foregroundStyle(.secondary).padding(30)
+                            Button("Retry") { retry += 1 }.buttonStyle(.bordered)
+                        } else if !epgLoaded {
+                            ProgressView("Loading program data…")
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else if hasAnyEPG {
+                            guideGrid(Array(store.items.filter(model.preferences.visible).prefix(maxGuideChannels)))
+                        } else {
+                            fallbackRows(Array(store.items.filter(model.preferences.visible).prefix(maxGuideChannels)))
+                        }
 
-                if store.items.filter(model.preferences.visible).count > maxGuideChannels {
-                    Text("Showing the first \(maxGuideChannels) channels — use Live TV to browse them all.")
-                        .font(.system(size: 18))
-                        .foregroundStyle(TVTheme.muted)
-                        .padding(.horizontal, 48)
-                        .padding(.vertical, 16)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(TVTheme.background)
+                        if store.items.filter(model.preferences.visible).count > maxGuideChannels {
+                            Text("Showing the first \(maxGuideChannels) channels — use Live TV to browse them all.")
+                                .font(.system(size: 18))
+                                .foregroundStyle(TVTheme.muted)
+                                .padding(.horizontal, 48)
+                                .padding(.vertical, 16)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(TVTheme.background)
+                        }
+                    }
                 }
             }
             .foregroundStyle(TVTheme.text)
         }
         }
-        .task(id: "\(model.libraryRevision)-\(retry)-\(selectedCategory)") {
+        .task(id: "\(model.libraryRevision)-\(retry)-\(selectedCategory)-\(epgCache.revision)") {
             if loadedRevision != model.libraryRevision || loadedRetry != retry {
                 epg = [:]; epgLoaded = false
                 await store.loadCategories()
@@ -152,16 +158,17 @@ struct TVGuideView: View {
         }
     }
 
-    // MARK: - Category chips
+    // MARK: - Category sidebar
 
-    private func categoryChips(_ store: TVLibraryStore) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 16) {
+    private func categorySidebar(_ store: TVLibraryStore) -> some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            LazyVStack(alignment: .leading, spacing: 16) {
                 ForEach(store.categories.filter { model.preferences.categoryVisible($0.id, kind: .live) }) { category in
                     Button { selectedCategory = category.id } label: {
                         Text(category.name)
                             .font(.system(size: 23, weight: .semibold))
-                            .lineLimit(1)
+                            .lineLimit(2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 20)
                             .padding(.vertical, 14)
                     }
@@ -172,7 +179,7 @@ struct TVGuideView: View {
                     .foregroundStyle(StreamTheme.text)
                 }
             }
-            .padding(.horizontal, 48)
+            .padding(.horizontal, 12)
             .padding(.vertical, 8)
         }
         .focusSection()
