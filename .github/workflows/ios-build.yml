@@ -42,6 +42,26 @@ jobs:
         run: |
           set -o pipefail
           xcodebuild build -workspace RigatoniStream.xcworkspace -scheme RigatoniStream -destination 'generic/platform=iOS' -derivedDataPath .build-device CODE_SIGNING_ALLOWED=NO | tee device-build.log
+      - name: Package unsigned IPA
+        run: |
+          set -e
+          APP=".build-device/Build/Products/Release-iphoneos/RigatoniStream.app"
+          if [ ! -d "$APP" ]; then
+            APP=".build-device/Build/Products/Debug-iphoneos/RigatoniStream.app"
+          fi
+          test -d "$APP"
+          mkdir -p ipa/Payload
+          cp -R "$APP" ipa/Payload/
+          cd ipa
+          zip -qry ../AntStreams-unsigned.ipa Payload
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: AntStreams-iPhone-IPA
+          path: ios/AntStreams-unsigned.ipa
+          if-no-files-found: error
+
       - name: Run native unit tests
         run: |
           set -o pipefail
