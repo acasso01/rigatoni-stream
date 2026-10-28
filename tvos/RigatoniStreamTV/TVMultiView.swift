@@ -226,7 +226,7 @@ private struct TVMultiPane: View {
 
     // Volume 0 silences the pane; 100 is normal volume.
     private func applyVolume() {
-        player.engine.audio.volume = isActive ? 100 : 0
+        player.engine.audio?.volume = isActive ? 100 : 0
     }
 
     private func playCurrent() {
