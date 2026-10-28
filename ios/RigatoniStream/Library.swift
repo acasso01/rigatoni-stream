@@ -427,6 +427,7 @@ struct LibraryView: View {
     @State private var page = 0
     @State private var playing: CatalogItem?
     @State private var retry = 0
+    @State private var multiViewShown = false
     @State private var epgReload = 0
     @State private var epgReloading = false
     private var orderedCategories: [CatalogCategory] {
@@ -448,6 +449,14 @@ struct LibraryView: View {
                         Text("Add or restore your provider settings to browse.")
                         Button("Provider settings") { model.settingsVisible = true }.buttonStyle(.borderedProminent).foregroundStyle(StreamTheme.onAccent)
                     } else {
+                        if kind == .live {
+                            Button { multiViewShown = true } label: {
+                                Label("Multi View — watch 2 channels at once", systemImage: "square.split.2x2")
+                            }
+                            .buttonStyle(.bordered)
+                            .accessibilityLabel("Multi View: watch two channels at once")
+                            .fullScreenCover(isPresented: $multiViewShown) { MultiPlayerView() }
+                        }
                         if kind == .movies {
                             StreamOptionPicker(options: [(CatalogSearchScope.all, "All titles"), (.category, "Categories")], selection: $scope)
                         }

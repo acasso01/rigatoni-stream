@@ -30,6 +30,8 @@ final class NativePlayer: ObservableObject {
     private var url: URL?
     private var cache = 1500
     private var dragging = false
+    /// Multi-view panes: no PiP bridge, no remote commands, no Now Playing.
+    var plainPlayback = false
     func attach(_ view: UIView, url: URL, cache: Int) {
         let bridge = PictureInPictureBridge(view: view, player: engine)
         bridge.availabilityChanged = { [weak self] ready in
@@ -39,6 +41,14 @@ final class NativePlayer: ObservableObject {
         pipBridge = bridge
         engine.drawable = bridge
         installPlaybackControls()
+        self.url = url; self.cache = cache
+        start()
+    }
+    /// Plain attach for multi-view panes: video only, no PiP bridge, no
+    /// remote-command targets, no Now Playing updates.
+    func attachPlain(_ view: UIView, url: URL, cache: Int) {
+        plainPlayback = true
+        engine.drawable = view
         self.url = url; self.cache = cache
         start()
     }
@@ -79,8 +89,10 @@ final class NativePlayer: ObservableObject {
         elapsed = seconds >= 3600 ? String(format: "%d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60) : String(format: "%d:%02d", seconds / 60, seconds % 60)
         let size = engine.videoSize
         resolution = size.width > 0 ? "\(Int(size.width))×\(Int(size.height)) · Original quality" : ""
-        pipBridge?.invalidatePlaybackState()
-        updateNowPlaying()
+        if !plainPlayback {
+            pipBridge?.invalidatePlaybackState()
+            updateNowPlaying()
+        }
         switch engine.state {
         case .playing: state = "Playing"
         case .paused: state = "Paused"
@@ -153,10 +165,12 @@ final class NativePlayer: ObservableObject {
         pictureInPictureAvailable = false; pictureInPictureActive = false
         observers.forEach { NotificationCenter.default.removeObserver($0) }; observers = []
         remoteTargets.forEach { $0.0.removeTarget($0.1) }; remoteTargets = []
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        if !plainPlayback {
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            UIApplication.shared.isIdleTimerDisabled = false
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
         engine.stop(); engine.media = nil; engine.drawable = nil; url = nil
-        UIApplication.shared.isIdleTimerDisabled = false
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 }
 
