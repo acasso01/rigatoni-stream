@@ -11,7 +11,7 @@ import SwiftUI
 // naturally, and each content view sets its own initial focus when its
 // controls are ready. Menu anywhere in content returns focus to the rail.
 enum TVSection: String, CaseIterable, Identifiable {
-    case home, guide, live, movies, shows, saved, search, settings
+    case home, guide, live, multi, movies, shows, saved, search, settings
 
     var id: String { rawValue }
 
@@ -20,6 +20,7 @@ enum TVSection: String, CaseIterable, Identifiable {
         case .home: return "Home"
         case .guide: return "Guide"
         case .live: return "Live TV"
+        case .multi: return "Multi View"
         case .movies: return "Movies"
         case .shows: return "TV Shows"
         case .saved: return "Saved"
@@ -33,6 +34,7 @@ enum TVSection: String, CaseIterable, Identifiable {
         case .home: return "house"
         case .guide: return "square.grid.2x2"
         case .live: return "tv"
+        case .multi: return "square.split.2x2"
         case .movies: return "film"
         case .shows: return "play.tv"
         case .saved: return "bookmark"
@@ -129,6 +131,7 @@ struct TVRootView: View {
         case .home: TVHomeView()
         case .guide: TVGuideView()
         case .live: TVLiveView()
+        case .multi: TVMultiView()
         case .movies: TVMoviesView()
         case .shows: TVShowsView()
         case .saved: TVSavedView()
