@@ -24,7 +24,7 @@ The app reuses your existing Supabase account and encrypted `provider-vault`. Pr
 4. Open **RigatoniStream.xcworkspace**, not the `.xcodeproj`. Select the RigatoniStream application target → Signing & Capabilities. Enable automatic signing and choose your Personal Team. Add your Apple account in Xcode Settings → Accounts if necessary. If the bundle identifier is unavailable, change it to a unique identifier under your name.
 5. Connect and unlock your iPhone, trust your Mac, and select your iPhone as the run destination. Enable Developer Mode on the iPhone when prompted (Settings → Privacy & Security → Developer Mode), then restart and confirm.
 6. Press Run (⌘R). If iOS asks you to trust the developer, use Settings → General → VPN & Device Management.
-7. Sign in with your existing Ant Streams account. Your saved provider and gateway should populate automatically. Movies opens a featured movie and lazy category shelves with filled portrait posters. Live TV retains category browsing and pins. The Search tab searches movies and channels together, with All / Movies / Live TV filters.
+7. Sign in with your existing Ant Streams account. Your saved provider should populate automatically; the gateway preference can remain blank or unused. Movies opens a featured movie and lazy category shelves with filled portrait posters. Live TV retains category browsing and pins. The Search tab searches movies and channels together, with All / Movies / Live TV filters.
 
 With a free Personal Team, the provisioning expires after seven days. Run the project again from Xcode to renew it. A paid developer account is not required for this initial on-device test. CI builds an ad hoc signed simulator app and an unsigned physical iPhone build; neither is an installable, personally signed iPhone IPA.
 
@@ -55,7 +55,7 @@ Then select your iPhone and press Run (⌘R). Keep the same signing team and bun
 - The PiP button uses VLCKit's native sample-buffer Picture in Picture. It becomes available after VLC creates the video output. Leaving the foreground while playing also requests PiP. Background audio remains active when you switch apps or lock the phone; lock-screen play/pause is supported. Calls and disconnected headphones pause playback. Back closes the player and stops playback; force-quitting the app stops playback. Test PiP and background behavior on a physical iPhone.
 - Pin the selected Live TV category using the pin button. Pinned categories appear first and have quick-access chips. Pins persist locally per account/provider using a hashed namespace and category IDs only; no provider credentials are written to preferences.
 - AirPlay, series, My List, EPG and Apple TV are not implemented in this native build. The website retains its existing features.
-- Direct HTTP access is enabled only for the locally configured provider hostname, with `NSIncludesSubdomains` disabled and no global ATS exception. Provider HTTP login and media traffic are unencrypted in transit, as approved for this test. The encrypted vault and account access always use HTTPS. Other HTTP provider hosts use the saved HTTPS gateway, requiring Tailscale. If a catalog redirects to another HTTP host, use the gateway; the app does not silently widen its HTTP exception.
+- Direct HTTP access is enabled for user-supplied provider hosts through the app-wide `NSAllowsArbitraryLoads` ATS exception. Catalog and streaming requests may traverse unencrypted HTTP, exposing credentials and viewing activity to network observers. Prefer HTTPS providers wherever available. App account and Supabase endpoints still use HTTPS, and the native Pi gateway is optional.
 - No private credentials or signing certificates are included. Do not paste provider credentials into GitHub issues or build logs.
 - `Native iOS build` in GitHub Actions compiles the app and runs URL/container/gateway validation tests. Actual provider playback and login must also be checked on an iPhone.
 
@@ -72,10 +72,10 @@ VLCKit 4.0.0a25 is pinned using VideoLAN's official podspec (source commit 2e086
 - A video tap reveals controls only. Play/Pause remains an explicit button action; no tap reaches VLC's internal controls.
 
 
-TV Shows is available in the iPhone tab bar. Categories load separately; open a show to fetch seasons and episodes. Episodes use the native VLC player, retain original quality and support Continue/Restart with progress stored separately from movies. Series requires direct provider access (approved local HTTP configuration or HTTPS); the HTTPS gateway does not expose series yet. Existing installations can add the new source files with `bundle exec ruby update_project.rb` from `ios/`, then build and run the workspace.
+TV Shows is available in the iPhone tab bar. Categories load separately; open a show to fetch seasons and episodes. Episodes use the native VLC player, retain original quality and support Continue/Restart with progress stored separately from movies. Series requires direct provider access (HTTP or HTTPS); the HTTPS gateway does not expose series yet. Existing installations can add the new source files with `bundle exec ruby update_project.rb` from `ios/`, then build and run the workspace.
 
 
-The interface update includes Dark, iOS Light and Xfinity-inspired navy themes. Apple TV has a left navigation rail with Guide and Saved, plus movie/show hero banners. The guide uses provider short-EPG data with at most four concurrent requests and a bounded, account/provider-scoped memory cache; gateway/no-EPG providers retain playable Live rows. Saved favorites persist IDs and metadata only, respect hidden movie/live categories and channels, and open movie details with Continue/Restart. New source files are added to existing Xcode projects by `bundle exec ruby update_project.rb`; signing and local HTTP exceptions are preserved.
+The interface update includes Dark, iOS Light and Xfinity-inspired navy themes. Apple TV has a left navigation rail with Guide and Saved, plus movie/show hero banners. The guide uses provider short-EPG data with at most four concurrent requests and a bounded, account/provider-scoped memory cache; gateway/no-EPG providers retain playable Live rows. Saved favorites persist IDs and metadata only, respect hidden movie/live categories and channels, and open movie details with Continue/Restart. New source files are added to existing Xcode projects by `bundle exec ruby update_project.rb`; signing and new direct HTTP configuration are preserved.
 
 ### Matching the Apple TV experience
 
@@ -89,7 +89,7 @@ These lists are device-local, just like the Apple TV lists.
 
 Run `bundle exec ruby update_project.rb` in `ios` after pulling this update so
 existing Xcode projects include MobileExperience.swift without changing signing
-or private HTTP settings.
+or direct HTTP settings.
 
 ## HTTP IPTV compatibility and App Store review
 
