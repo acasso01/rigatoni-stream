@@ -235,7 +235,7 @@ final class CoreTests: XCTestCase {
         let settings = Bundle.main.object(forInfoDictionaryKey: "NSAppTransportSecurity") as? [String: Any]
         XCTAssertEqual(settings?["NSAllowsArbitraryLoads"] as? Bool, true, "The built Info.plist must permit user-configured HTTP IPTV hosts.")
         for host in ["provider.example.invalid", "another.example.invalid"] {
-            let provider = Provider(server: "http://\\(host)", username: "dummy", password: "dummy")
+            let provider = Provider(server: "http://\(host)", username: "dummy", password: "dummy")
             XCTAssertTrue(provider.usesHTTP)
             XCTAssertFalse(provider.requiresGateway)
         }
