@@ -218,23 +218,27 @@ final class CoreTests: XCTestCase {
             XCTAssertThrowsError(try AccountAPI.gatewayOrigin(gateway))
         }
     }
-    func testDirectHTTPPolicyOnlyAllowsConfiguredProviderHost() {
-        let settings: [String: Any] = ["NSExceptionDomains": ["provider.example.invalid": ["NSExceptionAllowsInsecureHTTPLoads": true, "NSIncludesSubdomains": false]]]
-        XCTAssertTrue(TransportPolicy.permits(URL(string: "http://provider.example.invalid:8080/movie/1.mkv")!, settings: settings))
-        XCTAssertFalse(TransportPolicy.permits(URL(string: "http://other.example.invalid")!, settings: settings))
-        XCTAssertFalse(TransportPolicy.permits(URL(string: "http://sub.provider.example.invalid")!, settings: settings))
-        XCTAssertFalse(TransportPolicy.permits(URL(string: "http://provider.example.invalid")!, settings: [:]))
-        XCTAssertTrue(TransportPolicy.permits(URL(string: "https://account.example.invalid")!, settings: settings))
+    func testDirectHTTPPolicyPermitsArbitraryUserConfiguredHosts() {
+        let settings: [String: Any] = ["NSAllowsArbitraryLoads": true]
+        for address in [
+            "http://provider.example.invalid:8080/movie/1.mkv",
+            "http://another.example.invalid/live/2.ts",
+            "http://192.0.2.5:8080/player_api.php"
+        ] {
+            XCTAssertTrue(TransportPolicy.permits(URL(string: address)!, settings: settings))
+        }
+        XCTAssertFalse(TransportPolicy.permits(URL(string: "http://other.example.invalid")!, settings: [:]))
+        XCTAssertTrue(TransportPolicy.permits(URL(string: "https://account.example.invalid")!, settings: [:]))
+        XCTAssertFalse(TransportPolicy.permits(URL(string: "file:///etc/passwd")!, settings: settings))
     }
-    func testConfiguredProviderBypassesGatewayInActualBuild() throws {
+    func testConfiguredProvidersBypassGatewayInActualBuild() throws {
         let settings = Bundle.main.object(forInfoDictionaryKey: "NSAppTransportSecurity") as? [String: Any]
-        let domains = settings?["NSExceptionDomains"] as? [String: Any]
-        guard let host = domains?.keys.first else { throw XCTSkip("This build uses the HTTPS gateway for HTTP providers.") }
-        let provider = Provider(server: "http://\(host)", username: "dummy", password: "dummy")
-        XCTAssertTrue(provider.usesHTTP)
-        XCTAssertFalse(provider.requiresGateway)
-        let other = Provider(server: "http://other.example.invalid", username: "dummy", password: "dummy")
-        XCTAssertTrue(other.requiresGateway)
+        XCTAssertEqual(settings?["NSAllowsArbitraryLoads"] as? Bool, true, "The built Info.plist must permit user-configured HTTP IPTV hosts.")
+        for host in ["provider.example.invalid", "another.example.invalid"] {
+            let provider = Provider(server: "http://\\(host)", username: "dummy", password: "dummy")
+            XCTAssertTrue(provider.usesHTTP)
+            XCTAssertFalse(provider.requiresGateway)
+        }
     }
 
     func testPictureModesPreserveAspectAndCoverScreen() {
