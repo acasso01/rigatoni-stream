@@ -30,6 +30,9 @@ targets:
       path: Generated/Info.plist
       properties:
         CFBundleDisplayName: Ant Streams
+        # IPTV provider hosts are entered by users; direct HTTP is supported.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
         NSHumanReadableCopyright: Ant Streams; VLCKit licensed under LGPL 2.1
     settings:
       base:
