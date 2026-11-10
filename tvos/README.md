@@ -17,12 +17,12 @@ cd tvos
 bash setup.sh
 ```
 
-At the HTTP prompt, enter your provider's DNS hostname only (no `http://`, port,
-username or password). This creates a provider-specific ATS exception in an
-ignored local plist. HTTPS account and gateway requests remain HTTPS. Enter `-`
-for gateway-only playback. HTTP providers otherwise require the HTTPS gateway;
-private Tailscale gateways require Tailscale connectivity on the Apple TV.
-Do not put credentials in source files, shell commands or preferences.
+Setup now enables direct HTTP and HTTPS connections to user-configured
+IPTV services. You do not need to provide a hostname during setup, or use the
+Raspberry Pi gateway for native playback. Provider credentials and stream
+paths transmitted over HTTP are unencrypted; use HTTPS whenever available.
+The account backend remains HTTPS. Do not put credentials in source files,
+shell commands or preferences.
 
 Setup opens `RigatoniStreamTV.xcworkspace`, including the player dependency.
 Use the workspace rather than the `.xcodeproj`.
@@ -78,4 +78,10 @@ TV Shows uses direct provider access and supports season/episode browsing. Live 
 The Ant Streams update keeps the original bundle identifiers, Keychain service and preference keys so installed apps retain settings. From the repository root, run `cd ios && bundle exec ruby update_project.rb` for iPhone or `cd tvos && bundle exec ruby update_project.rb` for Apple TV, then build and run the corresponding workspace.
 
 
-The interface update includes Dark, iOS Light and Xfinity-inspired navy themes. Apple TV has a left navigation rail with Guide and Saved, plus movie/show hero banners. The guide uses provider short-EPG data with at most four concurrent requests and a bounded, account/provider-scoped memory cache; gateway/no-EPG providers retain playable Live rows. Saved favorites persist IDs and metadata only, respect hidden movie/live categories and channels, and open movie details with Continue/Restart. New source files are added to existing Xcode projects by `bundle exec ruby update_project.rb`; signing and local HTTP exceptions are preserved.
+The interface update includes Dark, iOS Light and Xfinity-inspired navy themes. Apple TV has a left navigation rail with Guide and Saved, plus movie/show hero banners. The guide uses provider short-EPG data with at most four concurrent requests and a bounded, account/provider-scoped memory cache; gateway/no-EPG providers retain playable Live rows. Saved favorites persist IDs and metadata only, respect hidden movie/live categories and channels, and open movie details with Continue/Restart. New source files are added to existing Xcode projects by `bundle exec ruby update_project.rb`; signing is preserved while direct HTTP IPTV access is enabled.
+
+## Direct provider playback
+
+Apple TV shares the same provider and catalog code as iPhone. Both builds now permit user-entered HTTP IPTV hosts without a gateway. The tvOS `Info.plist` includes `NSAppTransportSecurity` → `NSAllowsArbitraryLoads = YES`. Apple requires an explanation for this broad ATS exception at review because provider hostnames are chosen by the user and many third-party providers only offer HTTP. This exception weakens app-wide ATS enforcement; prefer HTTPS provider URLs whenever possible.
+
+For an existing Apple TV project, pull the branch and run `cd tvos && bundle exec ruby update_project.rb` before building; increment the build number separately for TestFlight. Apple TV playback must be tested on physical hardware before release.
