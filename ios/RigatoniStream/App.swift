@@ -90,6 +90,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section("Live TV Guide") { EPGRefreshControl() }
                 Section("Theme") {
                     Picker("Theme", selection: $appearance) {
                         ForEach(AppAppearance.allCases) { Text($0.title).tag($0.rawValue) }

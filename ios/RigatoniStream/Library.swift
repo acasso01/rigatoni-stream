@@ -268,6 +268,7 @@ struct StreamHeading: View {
 /// Without EPG (gateway providers, or providers without listings) it falls
 /// back to the plain channel row with the LIVE badge.
 struct LiveChannelRow: View {
+    @ObservedObject private var epgCache = EPGCache.shared
     let item: CatalogItem
     let provider: Provider
     let epgEnabled: Bool
@@ -307,7 +308,7 @@ struct LiveChannelRow: View {
             .contextMenu { MobileSaveButton(record: MobileRecords.record(item)) }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("\(item.name), live" + (guide?.now.map { ", now playing \($0.title)" } ?? ""))
-            .task(id: scope + ":" + item.id) {
+            .task(id: scope + ":" + item.id + ":" + String(epgCache.revision)) {
                 guide = nil
                 guard epgEnabled else { return }
                 while !Task.isCancelled {
@@ -371,29 +372,11 @@ struct LibraryView: View {
                             }.pickerStyle(.segmented)
                         }
                         if kind == .movies && scope == .category {
-                            ScrollView(.horizontal, showsIndicators: true) {
-                                LazyHStack(spacing: 10) {
-                                    ForEach(orderedCategories) { category in
-                                        Button { selected = category.id } label: {
-                                            Text(category.name).font(.subheadline.weight(.semibold)).lineLimit(1).fixedSize()
-                                                .padding(.horizontal, 16).padding(.vertical, 12)
-                                                .foregroundStyle(StreamTheme.text)
-                                                .background(selected == category.id ? StreamTheme.accent.opacity(0.18) : StreamTheme.panel, in: Capsule())
-                                                .overlay(Capsule().stroke(selected == category.id ? StreamTheme.accent : .clear, lineWidth: 2))
-                                        }.buttonStyle(.plain).accessibilityAddTraits(selected == category.id ? .isSelected : [])
-                                    }
-                                }.padding(.horizontal, 2).padding(.vertical, 4)
-                            }.frame(height: 62).scrollClipDisabled()
+                            GuideCategoryPicker(categories: orderedCategories, selected: $selected)
                         }
                         if kind == .live && !categories.isEmpty && scope == .category {
                             HStack {
-                                Picker("Category", selection: $selected) {
-                                    ForEach(orderedCategories) { category in
-                                        Text((pinnedIDs.contains(category.id) && kind == .live ? "★ " : "") + category.name).tag(category.id)
-                                    }
-                                }.pickerStyle(.menu)
-                                .padding(.horizontal, 8).padding(.vertical, 4)
-                                .background(.thinMaterial, in: Capsule())
+                                GuideCategoryPicker(categories: orderedCategories, selected: $selected)
                                 if kind == .live {
                                     Button {
                                         pinnedIDs = CategoryPins.toggled(selected, in: pinnedIDs)

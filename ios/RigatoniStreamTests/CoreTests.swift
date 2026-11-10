@@ -3,6 +3,52 @@ import UIKit
 @testable import RigatoniStream
 
 final class CoreTests: XCTestCase {
+    @MainActor func testForcedEPGFetchBypassesCacheAndFailureCanRetry() async {
+        var calls = 0
+        let program = EPGProgram(id: "1", title: "Fresh", start: Date(), end: Date().addingTimeInterval(60), details: "")
+        let cache = EPGCache { _, _ in
+            calls += 1
+            if calls == 3 { throw AppFailure("Offline") }
+            return [program]
+        }
+        let provider = Provider(server: "https://provider.example.invalid", username: "dummy", password: "dummy")
+        _ = await cache.programs(streamID: "1", provider: provider, scope: "account")
+        _ = await cache.programs(streamID: "1", provider: provider, scope: "account")
+        XCTAssertEqual(calls, 1)
+        _ = await cache.programs(streamID: "1", provider: provider, scope: "account", forceRefresh: true)
+        XCTAssertEqual(calls, 2)
+        let retained = await cache.programs(streamID: "1", provider: provider, scope: "account", forceRefresh: true)
+        XCTAssertEqual(retained, [program])
+        _ = await cache.programs(streamID: "1", provider: provider, scope: "account", forceRefresh: true)
+        XCTAssertEqual(calls, 4)
+    }
+    @MainActor func testForcedEPGFetchDiscardsOlderInFlightResponse() async {
+        var calls = 0
+        let cache = EPGCache { _, _ in
+            calls += 1
+            let number = calls
+            if number == 1 { try? await Task.sleep(for: .milliseconds(80)) }
+            return [EPGProgram(id: String(number), title: "Program", start: Date(), end: Date().addingTimeInterval(60), details: "")]
+        }
+        let provider = Provider(server: "https://provider.example.invalid", username: "dummy", password: "dummy")
+        let older = Task { await cache.programs(streamID: "1", provider: provider, scope: "account") }
+        try? await Task.sleep(for: .milliseconds(10))
+        let fresh = await cache.programs(streamID: "1", provider: provider, scope: "account", forceRefresh: true)
+        _ = await older.value
+        let cached = await cache.programs(streamID: "1", provider: provider, scope: "account")
+        XCTAssertEqual(fresh.first?.id, "2")
+        XCTAssertEqual(cached, fresh)
+    }
+    @MainActor func testFailedEPGFetchIsNotCachedAsEmptySuccess() async {
+        var calls = 0
+        let cache = EPGCache { _, _ in calls += 1; throw AppFailure("Offline") }
+        let provider = Provider(server: "https://provider.example.invalid", username: "dummy", password: "dummy")
+        _ = await cache.programs(streamID: "1", provider: provider, scope: "account")
+        _ = await cache.programs(streamID: "1", provider: provider, scope: "account")
+        XCTAssertEqual(cache.cachedCount, 0)
+        XCTAssertEqual(calls, 2)
+    }
+
     @MainActor func testMobileRecordsExcludePlaybackAndPosterURLs() throws {
         var item = CatalogItem(id: "42", name: "Example movie", kind: .movies, fileExtension: "mkv",
                                poster: URL(string: "https://example.invalid/private-art"), categoryID: "7")

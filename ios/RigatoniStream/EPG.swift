@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 struct EPGProgram: Identifiable, Equatable {
     let id: String
@@ -60,9 +61,9 @@ enum EPGParser {
 
 // Memory-only cache. Keys contain account/provider scope and IDs, never credentials.
 // Four requests at once; bounded entries and queued work prevent a guide from flooding a provider.
-@MainActor final class EPGCache {
+@MainActor final class EPGCache: ObservableObject {
     static let shared = EPGCache()
-    typealias Loader = (String, Provider) async -> [EPGProgram]
+    typealias Loader = (String, Provider) async throws -> [EPGProgram]
     private struct Entry { let programs: [EPGProgram]; let fetched: Date }
     private struct Flight { let token: UUID; let task: Task<[EPGProgram], Never> }
     private var entries: [String: Entry] = [:]
@@ -73,6 +74,12 @@ enum EPGParser {
     private let limit: Int
     private let concurrency: Int
     private let loader: Loader
+    @Published private(set) var revision = 0
+    @Published private(set) var refreshing = false
+    @Published private(set) var lastRefresh: Date?
+    @Published private(set) var refreshError = ""
+    private var failures: Set<String> = []
+    private var known: Set<String> = []
     var cachedCount: Int { entries.count }
 
     init(limit: Int = 128, concurrency: Int = 4, loader: Loader? = nil) {
@@ -80,7 +87,7 @@ enum EPGParser {
         self.loader = loader ?? Self.fetch
     }
     func reset() {
-        generation += 1; entries.removeAll()
+        generation += 1; entries.removeAll(); known.removeAll(); failures.removeAll(); lastRefresh = nil; refreshError = ""; revision += 1
         for flight in flights.values { flight.task.cancel() }
         flights.removeAll()
     }
@@ -92,10 +99,12 @@ enum EPGParser {
         if waiters.isEmpty { active -= 1 }
         else { waiters.removeFirst().resume() }
     }
-    func programs(streamID: String, provider: Provider, scope: String) async -> [EPGProgram] {
+    func programs(streamID: String, provider: Provider, scope: String, forceRefresh: Bool = false) async -> [EPGProgram] {
         guard !scope.isEmpty, !provider.requiresGateway, streamID.allSatisfy(\.isNumber), !streamID.isEmpty else { return [] }
+        if known.count < limit { known.insert(streamID) }
         let key = scope + ":" + streamID
-        if let entry = entries[key], Date().timeIntervalSince(entry.fetched) < 300 { return entry.programs }
+        if !forceRefresh, let entry = entries[key], Date().timeIntervalSince(entry.fetched) < 300 { return entry.programs }
+        if forceRefresh { flights[key]?.task.cancel(); flights[key] = nil }
         if let flight = flights[key] { return await flight.task.value }
         guard flights.count < 64 else { return [] }
         let epoch = generation; let token = UUID()
@@ -103,12 +112,20 @@ enum EPGParser {
             await acquire()
             defer { release() }
             guard !Task.isCancelled else { return [] }
-            return await loader(streamID, provider)
+            do {
+                let value = try await loader(streamID, provider)
+                if generation == epoch, flights[key]?.token == token { failures.remove(streamID) }
+                return value
+            } catch {
+                if generation == epoch, flights[key]?.token == token { failures.insert(streamID) }
+                return []
+            }
         }
         flights[key] = Flight(token: token, task: job)
         let value = await job.value
-        guard generation == epoch, !job.isCancelled else { return [] }
+        guard generation == epoch, !job.isCancelled, flights[key]?.token == token else { return [] }
         if flights[key]?.token == token { flights[key] = nil }
+        guard !failures.contains(streamID) else { return entries[key]?.programs ?? [] }
         entries[key] = Entry(programs: Array(value.prefix(32)), fetched: Date())
         if entries.count > limit, let oldest = entries.min(by: { $0.value.fetched < $1.value.fetched })?.key { entries[oldest] = nil }
         return value
@@ -116,16 +133,74 @@ enum EPGParser {
     func nowNext(streamID: String, provider: Provider, scope: String) async -> EPGNowNext {
         EPGParser.nowNext(await programs(streamID: streamID, provider: provider, scope: scope))
     }
-    private static func fetch(streamID: String, provider: Provider) async -> [EPGProgram] {
+    func refresh(model: AppModel, channels: [CatalogItem]) async {
+        guard !refreshing, model.providerReady, !model.provider.requiresGateway,
+              let scope = model.preferenceKey else { return }
+        refreshing = true; refreshError = ""
+        defer { refreshing = false }
+        let provider = model.provider
+        let namespace = scope + "-\(model.libraryRevision)"
+        let epoch = generation
         do {
-            var components = URLComponents(url: try provider.apiURL(action: "get_short_epg"), resolvingAgainstBaseURL: false)!
-            components.queryItems = (components.queryItems ?? []) + [URLQueryItem(name: "stream_id", value: streamID), URLQueryItem(name: "limit", value: "8")]
-            guard let url = components.url else { return [] }
-            let data = try await BoundedTransfer(limit: 512 * 1024, timeout: 15).fetch(url)
-            return await Task.detached(priority: .utility) {
-                guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [] }
-                return EPGParser.programs(root)
-            }.value
-        } catch { return [] }
+            var ids = Set(channels.map(\.id)).union(known)
+            if ids.isEmpty {
+                let categories = try await model.catalog.categories(kind: .live, model: model)
+                if let category = categories.first(where: { model.preferences.categoryVisible($0.id, kind: .live) }) {
+                    let items = try await model.catalog.items(kind: .live, category: category.id, model: model)
+                    ids = Set(items.filter(model.preferences.visible).prefix(40).map(\.id))
+                }
+            }
+            guard generation == epoch, !Task.isCancelled else { return }
+            guard !ids.isEmpty else { refreshError = "No channels available to refresh."; return }
+            // Cancel older requests before starting a fresh provider fetch.
+            generation += 1
+            let refreshGeneration = generation
+            for flight in flights.values { flight.task.cancel() }
+            flights.removeAll(); failures.removeAll()
+            // Sequential batches keep both the provider and the request queue bounded.
+            let targets = ids.sorted()
+            for start in stride(from: 0, to: targets.count, by: concurrency) {
+                await withTaskGroup(of: Void.self) { group in
+                    for id in targets.dropFirst(start).prefix(concurrency) {
+                        group.addTask { _ = await self.programs(streamID: id, provider: provider, scope: namespace, forceRefresh: true) }
+                    }
+                }
+                guard generation == refreshGeneration, !Task.isCancelled else { return }
+            }
+            if failures.isEmpty { lastRefresh = Date() }
+            else { refreshError = "Could not refresh \(failures.count) channel(s). Check your provider and try again." }
+            revision += 1
+        } catch {
+            if generation == epoch { refreshError = "Guide refresh failed. Check your provider and try again." }
+        }
+    }
+
+    private static func fetch(streamID: String, provider: Provider) async throws -> [EPGProgram] {
+        var components = URLComponents(url: try provider.apiURL(action: "get_short_epg"), resolvingAgainstBaseURL: false)!
+        components.queryItems = (components.queryItems ?? []) + [URLQueryItem(name: "stream_id", value: streamID), URLQueryItem(name: "limit", value: "8")]
+        guard let url = components.url else { throw AppFailure("Invalid guide URL.") }
+        let data = try await BoundedTransfer(limit: 512 * 1024, timeout: 15).fetch(url, headers: ["Cache-Control": "no-cache", "Pragma": "no-cache"])
+        return try await Task.detached(priority: .utility) {
+            guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any], root["epg_listings"] is [[String: Any]] else { throw AppFailure("Invalid guide response.") }
+            return EPGParser.programs(root)
+        }.value
+    }
+}
+
+struct EPGRefreshControl: View {
+    @EnvironmentObject private var model: AppModel
+    @ObservedObject private var cache = EPGCache.shared
+    var channels: [CatalogItem] = []
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button { Task { await cache.refresh(model: model, channels: channels) } } label: {
+                Label(cache.refreshing ? "Refreshing guide…" : "Refresh EPG", systemImage: "arrow.clockwise")
+            }.disabled(cache.refreshing || !model.providerReady || model.provider.requiresGateway)
+            if model.provider.requiresGateway { Text("Guide refresh requires a direct provider.").font(.caption) }
+            if let date = cache.lastRefresh {
+                Text("Last successful refresh: \(date.formatted(date: .abbreviated, time: .shortened))").font(.caption)
+            } else { Text("Guide has not been manually refreshed.").font(.caption) }
+            if !cache.refreshError.isEmpty { Text(cache.refreshError).font(.caption).foregroundStyle(.red) }
+        }
     }
 }

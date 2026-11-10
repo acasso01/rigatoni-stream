@@ -79,3 +79,9 @@ The Ant Streams update keeps the original bundle identifiers, Keychain service a
 
 
 The interface update includes Dark, iOS Light and Xfinity-inspired navy themes. Apple TV has a left navigation rail with Guide and Saved, plus movie/show hero banners. The guide uses provider short-EPG data with at most four concurrent requests and a bounded, account/provider-scoped memory cache; gateway/no-EPG providers retain playable Live rows. Saved favorites persist IDs and metadata only, respect hidden movie/live categories and channels, and open movie details with Continue/Restart. New source files are added to existing Xcode projects by `bundle exec ruby update_project.rb`; signing and local HTTP exceptions are preserved.
+
+## Guide refresh and vertical categories
+
+Guide now has a focusable vertical category sidebar next to the existing timeline, matching Live TV's vertical category navigation. Guide and Settings → Live TV Guide offer **Refresh EPG**, with shared progress, last fully successful manual refresh time, and error feedback. It forces fresh short-guide requests for displayed/recently requested channels without changing favorites, visibility preferences, playback, or timeline calculations. Refresh status is memory-only for the session. Direct providers are supported; the current gateway API does not expose guide data.
+
+Check on Apple TV: navigate between the sidebar, refresh button and timeline with the Siri Remote; switch categories; play a channel; refresh with the provider online/offline; confirm hidden categories/channels and favorites are unchanged.

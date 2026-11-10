@@ -90,3 +90,11 @@ These lists are device-local, just like the Apple TV lists.
 Run `bundle exec ruby update_project.rb` in `ios` after pulling this update so
 existing Xcode projects include MobileExperience.swift without changing signing
 or private HTTP settings.
+
+## Manual guide refresh and categories
+
+Guide and Settings → Live TV Guide both offer **Refresh EPG** for direct providers. This bypasses the five-minute memory cache and older in-flight requests, asks the provider for fresh short-guide listings, and updates guide rows and now/next labels. Requests remain bounded to four at a time. Refresh covers displayed channels and up to 128 channels already requested in this session; Settings seeds the first visible category (up to 40 channels) if no guide has been loaded yet. The last fully successful manual refresh time and safe error messages appear in both locations for the current session. Failed requests retain existing cached listings and remain retryable. Gateway providers show an unavailable explanation because the gateway does not expose guide listings.
+
+Category browsing in Guide and the Live TV/Movie category browser uses a compact button opening a searchable vertical sheet. Existing category pins and hidden-content filters still apply. The sheet follows the selected theme. Guide refresh does not change provider settings, favorites, hidden channels/categories, playback, or the selected category.
+
+On-device checks: refresh while watching a channel; refresh with the provider offline and retry after reconnecting; confirm favorites/hidden content remain unchanged; search/select a category under all three themes. No provider credentials are included in automated tests.
