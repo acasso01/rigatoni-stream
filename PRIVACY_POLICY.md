@@ -4,6 +4,10 @@
 
 Ant Streams is a media player for iPhone, iPad, and Apple TV. It does not provide, host, or include TV channels, movies, or other streaming content. You add your own provider details and are responsible for having the right to access the content you play.
 
+## Guest use on iPhone and iPad
+
+The iOS app can be used without an Ant Streams account. In guest use, provider details stay in memory for the current app session and are sent only to the provider you choose when browsing or playing content. They are not saved to the account vault. Favorites, viewing progress, and preferences may be stored locally under a hashed provider namespace. Optional account sign-in enables saving and restoring provider settings and use of the account gateway. The web and Apple TV versions may require sign-in.
+
 ## Information the app handles
 
 Ant Streams handles the information needed to provide its features:
