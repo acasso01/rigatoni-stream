@@ -15,7 +15,7 @@ final class BoundedTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendab
     private var finished = false
     init(limit: Int, timeout: TimeInterval = 30) { self.limit = limit; self.timeout = timeout }
     func fetch(_ url: URL, headers: [String: String] = [:], method: String = "GET") async throws -> Data {
-        guard TransportPolicy.permits(url) else { throw AppFailure("This HTTP host is not enabled in your app build. Configure your provider hostname on your Mac or use the HTTPS gateway.") }
+        guard TransportPolicy.permits(url) else { throw AppFailure("This provider URL is blocked by this app build's network settings. Rebuild with direct HTTP IPTV support enabled.") }
         return try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { next in
                 lock.lock()
@@ -45,7 +45,7 @@ final class BoundedTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendab
     }
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
         guard let url = request.url, TransportPolicy.permits(url) else {
-            completionHandler(nil); finish(.failure(AppFailure("The provider redirected to an HTTP host that is not enabled. Use the HTTPS gateway for this provider."))); return
+            completionHandler(nil); finish(.failure(AppFailure("The provider redirected to a URL blocked by this app build's network settings. Check the provider URL and rebuild if needed."))); return
         }
         completionHandler(request)
     }
