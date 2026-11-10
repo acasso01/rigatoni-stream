@@ -5,7 +5,10 @@ import Security
 enum TransportPolicy {
     static func permits(_ url: URL, settings: [String: Any]? = Bundle.main.object(forInfoDictionaryKey: "NSAppTransportSecurity") as? [String: Any]) -> Bool {
         if url.scheme?.lowercased() == "https" { return true }
-        guard url.scheme?.lowercased() == "http", let host = url.host?.lowercased(),
+        guard url.scheme?.lowercased() == "http" else { return false }
+        // User-entered provider hosts cannot be enumerated at build time.
+        if settings?["NSAllowsArbitraryLoads"] as? Bool == true { return true }
+        guard let host = url.host?.lowercased(),
               let exceptions = settings?["NSExceptionDomains"] as? [String: Any],
               let rule = exceptions[host] as? [String: Any] else { return false }
         return rule["NSExceptionAllowsInsecureHTTPLoads"] as? Bool == true && rule["NSIncludesSubdomains"] as? Bool != true

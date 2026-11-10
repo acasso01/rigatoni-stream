@@ -1,4 +1,4 @@
-# Update existing generated projects without resetting signing or private HTTP settings.
+# Update existing generated projects without resetting signing or version numbers.
 require 'xcodeproj'
 require 'pathname'
 Dir.chdir(__dir__)
@@ -23,13 +23,10 @@ target.build_configurations.each do |config|
   info = Xcodeproj::Plist.read_from_path(path)
   info['CFBundleDisplayName'] = 'Ant Streams'
   info['CFBundleName'] = 'Ant Streams'
-  info['CFBundleShortVersionString'] = '0.2.0'
-  info['CFBundleVersion'] = '2'
   config.build_settings['INFOPLIST_KEY_CFBundleDisplayName'] = 'Ant Streams'
-  config.build_settings['MARKETING_VERSION'] = '0.2.0'
-  config.build_settings['CURRENT_PROJECT_VERSION'] = '2'
+  info['NSAppTransportSecurity'] = { 'NSAllowsArbitraryLoads' => true }
   info['UIBackgroundModes'] = ((info['UIBackgroundModes'] || []) + ['audio']).uniq
   Xcodeproj::Plist.write_to_path(info, path)
 end
 project.save
-puts 'Added native PiP sources and audio background mode; kept signing and local HTTP settings.'
+puts 'Added native PiP, background audio and direct HTTP provider support; kept signing and version numbers.'
