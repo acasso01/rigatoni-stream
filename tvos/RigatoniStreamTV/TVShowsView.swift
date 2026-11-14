@@ -23,10 +23,16 @@ private struct TVSeriesBrowser: View {
     @EnvironmentObject private var model: AppModel
     @State private var selectedCategory = ""
     @State private var selectedSeries: SeriesItem?
+    @State private var showingSeriesDetail = false
     @State private var visibleCount = 60
 
     var body: some View {
-        content
+        NavigationStack {
+            content
+                .navigationDestination(isPresented: $showingSeriesDetail) {
+                    if let series = selectedSeries { TVSeriesDetailView(series: series, store: store) }
+                }
+        }
             .task(id: model.libraryRevision) {
                 selectedCategory = ""
                 await store.loadCategories()
@@ -38,9 +44,11 @@ private struct TVSeriesBrowser: View {
                 visibleCount = 60
                 await store.loadSeries(categoryID: selectedCategory)
             }
-            .fullScreenCover(item: $selectedSeries) { series in
-                TVSeriesDetailView(series: series, store: store)
-            }
+    }
+
+    private func openSeries(_ series: SeriesItem) {
+        selectedSeries = series
+        showingSeriesDetail = true
     }
 
     @ViewBuilder private var content: some View {
@@ -96,20 +104,20 @@ private struct TVSeriesBrowser: View {
                                     selectedCategory = store.categories.first?.id ?? ""
                                 } else { await store.loadSeries(categoryID: selectedCategory) }
                             } }
-                                .buttonStyle(.card)
+                                .buttonStyle(TVCardButtonStyle())
                         }
                     } else if store.series.isEmpty {
                         Text("No shows in this category.").foregroundStyle(TVTheme.muted)
                     } else {
                         if let hero = store.series.first {
-                            TVHeroBanner(title: hero.name, subtitle: "TV show", badge: "FEATURED SHOW", poster: hero.poster, posterKind: .movies) { selectedSeries = hero }
+                            TVHeroBanner(title: hero.name, subtitle: "TV show", badge: "FEATURED SHOW", poster: hero.poster, posterKind: .movies) { openSeries(hero) }
                         }
                         LazyVGrid(
                             columns: [GridItem(.adaptive(minimum: 220), spacing: 28)],
                             spacing: 32
                         ) {
-                            ForEach(Array(store.series.prefix(visibleCount))) { item in
-                                Button { selectedSeries = item } label: {
+                            ForEach(Array(store.series.prefix(visibleCount)), id: \.scopedID) { item in
+                                Button { openSeries(item) } label: {
                                     VStack(alignment: .leading, spacing: 10) {
                                         TVSeriesPoster(series: item)
                                         TVFocusTitle(title: item.name)
@@ -118,9 +126,9 @@ private struct TVSeriesBrowser: View {
                                             .frame(width: 200, alignment: .leading)
                                     }
                                 }
-                                .buttonStyle(.card)
+                                .buttonStyle(TVCardButtonStyle())
                                 .contextMenu {
-                                    Button(TVFavorites.contains(id: item.id, kind: "series", model: model) ? "Remove from Saved" : "Save to Favorites") { TVFavorites.toggleSeries(item, model: model) }
+                                    Button(TVFavorites.contains(id: item.id, kind: "series", providerID: item.providerID, model: model) ? "Remove from Saved" : "Save to Favorites") { TVFavorites.toggleSeries(item, model: model) }
                                 }
                             }
                         }
@@ -190,7 +198,7 @@ struct TVSeriesDetailView: View {
                         Button { dismiss() } label: {
                             Label("Back", systemImage: "chevron.left")
                         }
-                        .buttonStyle(.card)
+                        .buttonStyle(TVCardButtonStyle())
                         Spacer()
                     }
                     Text(series.name)
@@ -241,7 +249,7 @@ struct TVSeriesDetailView: View {
                                         .background(Color.white.opacity(0.05))
                                         .clipShape(RoundedRectangle(cornerRadius: 12))
                                     }
-                                    .buttonStyle(.card)
+                                    .buttonStyle(TVCardButtonStyle())
                                 }
                             }
                             .padding(.vertical, 8)
@@ -257,20 +265,21 @@ struct TVSeriesDetailView: View {
         .task {
             loading = true
             defer { loading = false }
-            let detail = await store.loadDetail(seriesID: series.id)
+            let detail = await store.loadDetail(series: series)
             seasons = detail.seasons
             episodes = detail.episodes
             selectedSeason = seasons.first?.number ?? 0
         }
         .fullScreenCover(item: $playing) { item in
-            TVPlayerView(item: item, provider: model.provider, startSeconds: model.preferences.progress["series-" + item.id]?.seconds ?? 0, lastWatchedKind: "series", progressID: "series-" + item.id)
+            DirectPlayerView(item: item, provider: model.provider(for: item), startSeconds: model.preferences.progress["series-" + item.id]?.seconds ?? 0, progressID: "series-" + item.id)
         }
     }
 
     private func play(_ episode: SeriesEpisode) {
         do {
+            let owner = store.provider(for: series)
             let url = try SeriesStore.seriesStreamURL(
-                provider: model.provider,
+                provider: owner,
                 episodeID: episode.id,
                 ext: episode.ext
             )
@@ -279,7 +288,8 @@ struct TVSeriesDetailView: View {
                 name: "\(series.name) · S\(selectedSeason) E\(episode.number) — \(episode.title)",
                 kind: .movies,
                 fileExtension: episode.ext,
-                poster: series.poster
+                poster: series.poster,
+                providerID: series.providerID
             )
             item.playbackURL = url
             playing = item

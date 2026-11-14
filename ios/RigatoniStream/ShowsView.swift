@@ -14,7 +14,7 @@ struct ShowsView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { model.settingsVisible = true } label: { Image(systemName: "person.crop.circle") }
-                        .accessibilityLabel("Account settings")
+                        .accessibilityLabel("Provider settings")
                 }
             }
         }
@@ -42,9 +42,24 @@ private struct ShowsBrowser: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Search TV shows", text: $query)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .submitLabel(.search)
+                    if !query.isEmpty {
+                        Button { query = "" } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        }.accessibilityLabel("Clear search")
+                    }
+                }
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                .padding(.horizontal)
                 if let reason = store.unavailableReason {
                     Text(reason).foregroundStyle(.secondary).padding()
-                    Button("Account & provider") { model.settingsVisible = true }.padding(.horizontal)
+                    Button("Provider settings") { model.settingsVisible = true }.padding(.horizontal)
                 } else {
                     ScrollView(.horizontal, showsIndicators: true) {
                         LazyHStack(spacing: 10) {
@@ -52,12 +67,12 @@ private struct ShowsBrowser: View {
                                 Button { category = entry.id } label: {
                                     Text(entry.name).font(.subheadline.weight(.semibold)).lineLimit(1)
                                         .padding(.horizontal, 18).frame(height: 54)
-                                        .background(category == entry.id ? StreamTheme.accent : StreamTheme.panel, in: Capsule())
-                                        .foregroundStyle(category == entry.id ? Color.white : StreamTheme.text)
+                                        .background(category == entry.id ? AnyShapeStyle(StreamTheme.accentFill) : AnyShapeStyle(StreamTheme.panel), in: Capsule())
+                                        .foregroundStyle(category == entry.id ? StreamTheme.onAccent : StreamTheme.text)
                                 }.buttonStyle(.plain).fixedSize(horizontal: true, vertical: false)
                             }
                         }.padding(.horizontal).padding(.vertical, 8)
-                    }
+                    }.frame(height: 74).scrollClipDisabled()
                     if store.loading { ProgressView("Loading shows…").frame(maxWidth: .infinity).padding(30) }
                     else if !store.error.isEmpty {
                         VStack(alignment: .leading, spacing: 12) {
@@ -74,17 +89,17 @@ private struct ShowsBrowser: View {
                             }.buttonStyle(.plain).padding(.horizontal)
                         }
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 14)], spacing: 20) {
-                            ForEach(Array(matches.prefix(visibleCount))) { series in
+                            ForEach(Array(matches.prefix(visibleCount)), id: \.scopedID) { series in
                                 NavigationLink { ShowDetailView(series: series, store: store) } label: {
                                     VStack(alignment: .leading, spacing: 0) {
                                         ProviderPoster(url: series.poster, kind: .movies).aspectRatio(2 / 3, contentMode: .fit)
                                         Text(series.name).font(.subheadline.weight(.semibold)).lineLimit(2)
                                             .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).padding(10)
                                     }
-                                    .foregroundStyle(StreamTheme.text).background(StreamTheme.panel)
+                                    .foregroundStyle(StreamTheme.text).background(StreamTheme.card)
                                     .clipShape(RoundedRectangle(cornerRadius: 16))
                                 }.buttonStyle(.plain).contextMenu {
-                                    MobileSaveButton(record: SavedRecord(kind: "series", itemID: series.id, name: series.name, ext: "", categoryID: category, addedAt: Date()))
+                                    MobileSaveButton(record: SavedRecord(kind: "series", itemID: series.id, name: series.name, ext: "", categoryID: category, addedAt: Date(), providerID: series.providerID))
                                 }
                             }
                         }.padding(.horizontal)
@@ -95,7 +110,6 @@ private struct ShowsBrowser: View {
         }
         .background { StreamBackdrop() }
         .foregroundStyle(StreamTheme.text(for: AppAppearance(rawValue: appearance) ?? .dark))
-        .searchable(text: $query, prompt: "Search this TV show category")
         .onChange(of: query) { _, _ in visibleCount = 60 }
         .task(id: "\(model.libraryRevision)-\(retry)-\(category)") {
             if loadedRevision != model.libraryRevision || loadedRetry != retry {
@@ -138,7 +152,7 @@ struct ShowDetailView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 16))
                     Text(series.name).font(.title2.bold()).frame(maxWidth: .infinity, alignment: .leading)
                 }
-                MobileSaveButton(record: SavedRecord(kind: "series", itemID: series.id, name: series.name, ext: "", categoryID: "", addedAt: Date()))
+                MobileSaveButton(record: SavedRecord(kind: "series", itemID: series.id, name: series.name, ext: "", categoryID: "", addedAt: Date(), providerID: series.providerID))
                     .buttonStyle(.bordered)
                 if loading { ProgressView("Loading episodes…") }
                 else if !store.detailError.isEmpty {
@@ -151,8 +165,8 @@ struct ShowDetailView: View {
                             ForEach(seasons) { item in
                                 Button { season = item.number } label: {
                                     Text(item.name).padding(.horizontal, 18).frame(height: 48)
-                                        .background(season == item.number ? StreamTheme.accent : StreamTheme.panel, in: Capsule())
-                                        .foregroundStyle(season == item.number ? Color.white : StreamTheme.text)
+                                        .background(season == item.number ? AnyShapeStyle(StreamTheme.accentFill) : AnyShapeStyle(StreamTheme.panel), in: Capsule())
+                                        .foregroundStyle(season == item.number ? StreamTheme.onAccent : StreamTheme.text)
                                 }.buttonStyle(.plain).fixedSize(horizontal: true, vertical: false)
                             }
                         }.padding(.vertical, 6)
@@ -165,7 +179,7 @@ struct ShowDetailView: View {
                                 HStack {
                                     Button(progress.map { "Continue from \($0.label)" } ?? "Play episode") {
                                         play(episode, seconds: progress?.seconds ?? 0)
-                                    }.buttonStyle(.borderedProminent)
+                                    }.buttonStyle(.borderedProminent).foregroundStyle(StreamTheme.onAccent)
                                     if progress != nil {
                                         Button("Restart") {
                                             model.preferences.progress[episode.progressID] = nil
@@ -175,7 +189,7 @@ struct ShowDetailView: View {
                                     }
                                 }
                             }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
-                                .background(StreamTheme.panel, in: RoundedRectangle(cornerRadius: 16))
+                                .background(StreamTheme.card, in: RoundedRectangle(cornerRadius: 16))
                         }
                     }
                 }
@@ -185,14 +199,14 @@ struct ShowDetailView: View {
         .background { StreamBackdrop() }
         .foregroundStyle(StreamTheme.text(for: AppAppearance(rawValue: appearance) ?? .dark))
         .navigationTitle("Episodes").navigationBarTitleDisplayMode(.inline)
-        .task(id: "\(model.libraryRevision)-\(retry)") {
+        .task(id: "\(model.libraryRevision)-\(retry)-\(series.scopedID)") {
             loading = true; defer { loading = false }
-            let result = await store.loadDetail(seriesID: series.id)
+            let result = await store.loadDetail(series: series)
             guard !Task.isCancelled else { return }
             seasons = result.seasons; episodes = result.episodes; season = seasons.first?.number ?? 0
         }
         .fullScreenCover(item: $playing) { item in
-            PlayerView(item: item, provider: model.provider, startSeconds: startSeconds, progressID: "series-" + item.id)
+            DirectPlayerView(item: item, provider: model.provider(for: item), startSeconds: startSeconds, progressID: "series-" + item.id)
         }
     }
 
@@ -200,8 +214,9 @@ struct ShowDetailView: View {
         playbackError = ""
         do {
             guard store.unavailableReason == nil else { throw AppFailure(store.unavailableReason ?? "Provider unavailable.") }
-            var item = CatalogItem(id: episode.id, name: "\(series.name) · S\(season) E\(episode.number) — \(episode.title)", kind: .movies, fileExtension: episode.ext, poster: series.poster)
-            item.playbackURL = try SeriesStore.seriesStreamURL(provider: model.provider, episodeID: episode.id, ext: episode.ext)
+            let owner = store.provider(for: series)
+            var item = CatalogItem(id: episode.id, name: "\(series.name) · S\(season) E\(episode.number) — \(episode.title)", kind: .movies, fileExtension: episode.ext, poster: series.poster, providerID: series.providerID)
+            item.playbackURL = try SeriesStore.seriesStreamURL(provider: owner, episodeID: episode.id, ext: episode.ext)
             startSeconds = seconds; playing = item
         } catch { playbackError = error.localizedDescription }
     }
