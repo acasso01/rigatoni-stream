@@ -63,7 +63,10 @@ jobs:
           bash ../ios/fixtures/start.sh
           xcrun simctl boot "$DEVICE_ID" || true
           xcrun simctl bootstatus "$DEVICE_ID" -b
-          xcrun simctl keychain "$DEVICE_ID" add-root-cert ../ios/fixtures/media/test-cert.pem
+          xcrun simctl keychain "$DEVICE_ID" add-root-cert ../ios/fixtures/media/ca.pem
+          xcrun simctl shutdown "$DEVICE_ID"
+          xcrun simctl boot "$DEVICE_ID"
+          xcrun simctl bootstatus "$DEVICE_ID" -b
           export SIMCTL_CHILD_ANT_REQUIRE_FIXTURES=1
           export TEST_RUNNER_ANT_REQUIRE_FIXTURES=1
           xcodebuild test-without-building -workspace RigatoniStreamTV.xcworkspace -scheme RigatoniStreamTV -destination "platform=tvOS Simulator,id=$DEVICE_ID" -derivedDataPath .build CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- | tee tests.log

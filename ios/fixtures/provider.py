@@ -1,6 +1,7 @@
 """Local-only mock IPTV provider. No real content or credentials. Request logging disabled."""
 import argparse
 import json
+import socket
 import ssl
 import threading
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
@@ -65,28 +66,31 @@ class Handler(SimpleHTTPRequestHandler):
             self.path = '/media/live.m3u8' if parsed.path.startswith('/live/') else '/media/movie.mp4'
         return super().do_GET()
 
-def serve(host, port, cert=None, key=None):
-    server = ThreadingHTTPServer((host, port), Handler)
+class DualStackServer(ThreadingHTTPServer):
+    address_family = socket.AF_INET6
+
+    def server_bind(self):
+        self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        super().server_bind()
+
+def serve(port, cert=None, key=None):
+    try:
+        server = DualStackServer(('::', port), Handler)
+    except OSError as exc:
+        print(f'IPv6 listen failed on {port}: {exc}', flush=True)
+        server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
     if cert and key:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(cert, key)
         server.socket = context.wrap_socket(server.socket, server_side=True)
+    print(f'listening {server.server_address} tls={bool(cert)}', flush=True)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    return server
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--cert', required=True)
     parser.add_argument('--key', required=True)
     args = parser.parse_args()
-    # The simulator resolves localhost to ::1 as well as 127.0.0.1.
-    servers = []
-    for host in ('127.0.0.1', '::1'):
-        try:
-            servers.append(serve(host, 8765))
-            servers.append(serve(host, 8766, args.cert, args.key))
-        except OSError:
-            continue
-    if not servers:
-        raise SystemExit('Could not listen on localhost.')
+    serve(8765)
+    serve(8766, args.cert, args.key)
     threading.Event().wait()
