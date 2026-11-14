@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Account-scoped, memory-only catalogs shared by browsing and global search.
+// Memory-only catalogs shared by browsing and global search. Scoped to the account or the on-device provider.
 @MainActor
 final class SessionCatalog: ObservableObject {
     @Published private(set) var searchable: [LibraryKind: [CatalogItem]] = [:]

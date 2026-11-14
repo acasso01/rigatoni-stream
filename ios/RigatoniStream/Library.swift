@@ -17,7 +17,7 @@ final class BoundedTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendab
     var resolvedURL: URL? { lock.lock(); defer { lock.unlock() }; return finalURL }
     init(limit: Int, timeout: TimeInterval = 30) { self.limit = limit; self.timeout = timeout }
     func fetch(_ url: URL, headers: [String: String] = [:], method: String = "GET") async throws -> Data {
-        guard TransportPolicy.permits(url) else { throw AppFailure("This URL is unsupported or this app build is missing its HTTP transport setting.") }
+        guard TransportPolicy.permits(url) else { throw AppFailure("This provider URL is blocked by this app build's network settings. Rebuild with direct HTTP IPTV support enabled.") }
         return try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { next in
                 lock.lock()
@@ -47,7 +47,7 @@ final class BoundedTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendab
     }
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
         guard let url = request.url, TransportPolicy.permits(url) else {
-            completionHandler(nil); finish(.failure(AppFailure("The provider redirected to an unsupported URL."))); return
+            completionHandler(nil); finish(.failure(AppFailure("The provider redirected to a URL blocked by this app build's network settings. Check the provider URL and rebuild if needed."))); return
         }
         var next = request
         if response.url?.host != request.url?.host || response.url?.scheme != request.url?.scheme || response.url?.port != request.url?.port {
@@ -352,6 +352,7 @@ struct StreamHeading: View {
 /// Without EPG (gateway providers, or providers without listings) it falls
 /// back to the plain channel row with the LIVE badge.
 struct LiveChannelRow: View {
+    @ObservedObject private var epgCache = EPGCache.shared
     let item: CatalogItem
     let provider: Provider
     let epgEnabled: Bool
@@ -392,7 +393,7 @@ struct LiveChannelRow: View {
             .contextMenu { MobileSaveButton(record: MobileRecords.record(item)) }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("\(item.name), live" + (guide?.now.map { ", now playing \($0.title)" } ?? ""))
-            .task(id: scope + ":" + item.id + "-\(refreshToken)") {
+            .task(id: scope + ":" + item.id + "-\(refreshToken):\(epgCache.revision)") {
                 guide = nil
                 guard epgEnabled else { return }
                 while !Task.isCancelled {
@@ -461,24 +462,19 @@ struct LibraryView: View {
                             StreamOptionPicker(options: [(CatalogSearchScope.all, "All titles"), (.category, "Categories")], selection: $scope)
                         }
                         if kind == .movies && scope == .category {
-                            ScrollView(.horizontal, showsIndicators: true) {
-                                LazyHStack(spacing: 10) {
-                                    ForEach(orderedCategories) { category in
-                                        Button { selected = category.id } label: {
-                                            Text(category.name).font(.subheadline.weight(.semibold)).lineLimit(1).fixedSize()
-                                                .padding(.horizontal, 16).padding(.vertical, 12)
-                                                .foregroundStyle(StreamTheme.text)
-                                                .background(selected == category.id ? StreamTheme.accent.opacity(0.18) : StreamTheme.panel, in: Capsule())
-                                                .overlay(Capsule().stroke(selected == category.id ? StreamTheme.accent : .clear, lineWidth: 2))
-                                        }.buttonStyle(.plain).accessibilityAddTraits(selected == category.id ? .isSelected : [])
-                                    }
-                                }.padding(.horizontal, 2).padding(.vertical, 4)
-                            }.frame(height: 62).scrollClipDisabled()
+                            GuideCategoryPicker(categories: orderedCategories, selected: $selected)
                         }
                         if kind == .live && !categories.isEmpty {
                             HStack {
                                 Text("Categories").font(.headline)
                                 Spacer()
+                                Button {
+                                    pinnedIDs = PinnedCategories.toggled(selected, in: pinnedIDs)
+                                    PinnedCategories.write(pinnedIDs, key: pinKey)
+                                } label: { Image(systemName: pinnedIDs.contains(selected) ? "pin.fill" : "pin").frame(width: 44, height: 44) }
+                                .accessibilityLabel(pinnedIDs.contains(selected) ? "Unpin category" : "Pin category")
+                                .disabled(selected.isEmpty)
+                                .buttonStyle(.plain)
                                 Button { reloadEPG() } label: {
                                     if epgReloading { ProgressView() } else { Image(systemName: "arrow.clockwise") }
                                 }
