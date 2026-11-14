@@ -5,8 +5,13 @@ import SwiftUI
 // The content tree is rebuilt when the theme changes (`.id(theme)`), which
 // keeps the static TVTheme color accessors in sync without touching every
 // view.
+//
+// Focus model (tvOS focus engine, no programmatic handoffs): the rail keeps
+// a @FocusState for styling, arrow keys move between rail and content
+// naturally, and each content view sets its own initial focus when its
+// controls are ready. Menu anywhere in content returns focus to the rail.
 enum TVSection: String, CaseIterable, Identifiable {
-    case home, guide, live, movies, shows, saved, search, settings
+    case home, guide, live, multi, movies, shows, saved, search, settings
 
     var id: String { rawValue }
 
@@ -15,6 +20,7 @@ enum TVSection: String, CaseIterable, Identifiable {
         case .home: return "Home"
         case .guide: return "Guide"
         case .live: return "Live TV"
+        case .multi: return "Multi View"
         case .movies: return "Movies"
         case .shows: return "TV Shows"
         case .saved: return "Saved"
@@ -28,6 +34,7 @@ enum TVSection: String, CaseIterable, Identifiable {
         case .home: return "house"
         case .guide: return "square.grid.2x2"
         case .live: return "tv"
+        case .multi: return "square.split.2x2"
         case .movies: return "film"
         case .shows: return "play.tv"
         case .saved: return "bookmark"
@@ -104,7 +111,7 @@ struct TVRootView: View {
                     }
                     // Rebuild the whole tree on theme change so every
                     // TVTheme.xxx static resolves to the new theme.
-                    .id(appearance)
+                    .id(appearance + (model.vault.selectedID?.uuidString ?? ""))
                 } else {
                     TVProviderSetupView()
                 }
@@ -119,11 +126,11 @@ struct TVRootView: View {
     private var navRail: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("ANT STREAMS")
-                .font(.system(size: 20, weight: .bold))
+                .font(.system(size: 23, weight: .bold))
                 .foregroundStyle(TVTheme.muted)
                 .padding(.horizontal, 24)
-                .padding(.top, 32)
-                .padding(.bottom, 20)
+                .padding(.top, 24)
+                .padding(.bottom, 24)
 
             ForEach(TVSection.allCases) { section in
                 let selected = selection == section
@@ -131,22 +138,21 @@ struct TVRootView: View {
                 Button { enterContent(section) } label: {
                     HStack(spacing: 14) {
                         Image(systemName: section.symbol)
-                            .font(.system(size: 26))
-                            .frame(width: 32)
+                            .font(.system(size: 30))
+                            .frame(width: 38)
                         Text(section.title)
-                            .font(.system(size: 25, weight: selected ? .bold : .medium))
+                            .font(.system(size: 28, weight: selected ? .bold : .medium))
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                         Spacer()
                     }
                     .padding(.horizontal, 18)
-                    .padding(.vertical, 16)
-                    .background(
-                        selected ? TVTheme.accent
-                        : focused ? TVTheme.focusCard
-                        : Color.clear
-                    )
-                    .foregroundStyle(selected ? .white : TVTheme.text)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                    .background {
+                        if selected { TVTheme.accentFill }
+                        else { focused ? TVTheme.focusCard : Color.clear }
+                    }
+                    .foregroundStyle(selected ? TVTheme.onAccent : TVTheme.text)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
                 }
                 .buttonStyle(TVCompactButtonStyle())
@@ -155,9 +161,10 @@ struct TVRootView: View {
                 .padding(.vertical, 4)
             }
 
-            Spacer()
         }
-        .frame(width: 300)
+        .padding(.bottom, 20)
+        .frame(width: 340)
+        .frame(maxHeight: .infinity)
         .background(TVTheme.panel)
     }
 
@@ -221,6 +228,7 @@ struct TVRootView: View {
         case .home: TVHomeView()
         case .guide: TVGuideView()
         case .live: TVLiveView()
+        case .multi: TVMultiView()
         case .movies: TVMoviesView()
         case .shows: TVShowsView()
         case .saved: TVSavedView()
