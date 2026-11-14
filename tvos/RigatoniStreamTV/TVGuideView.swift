@@ -1,68 +1,65 @@
 import SwiftUI
+import UIKit
+import VLCKit
 
-// X1-style program guide: channels as rows, 30-minute time slots as
-// columns. Program data comes from the Xtream `get_short_epg` endpoint
-// (direct providers only). Graceful fallbacks, in order:
-//  1. Channel with no EPG -> full-width LIVE block for the slot.
-//  2. Provider returns no EPG at all (or a gateway is in use) ->
-//     plain channel rows with LIVE badges. The grid is never empty.
-// Inspired by the X1 layout language only — no Xfinity/Comcast logos,
+// Live TV guide matching the iPhone "All channels" layout: title +
+// time-slot bar, category chips with "All" first, and rows of
+// star (pin) | channel logo + channel number | NOW program + NEXT program.
+// Pins persist per provider in the shared PinnedChannels store, so pinned
+// channels sync with the iPhone app. Tapping a row plays the channel.
+// Layout language inspired by cable-box guides only — no third-party logos,
 // trademarks or copied assets.
-struct TVProgram: Identifiable {
-    var id: String { channelID + "-" + String(Int(start.timeIntervalSince1970)) }
-    let channelID: String
-    let title: String
-    let start: Date
-    let end: Date
-}
-
 struct TVGuideView: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var epgCache = EPGCache.shared
     @State private var store: TVLibraryStore?
-    @State private var selectedCategory = ""
-    @State private var epg: [String: [TVProgram]] = [:]
-    @State private var epgLoaded = false
-    @State private var loadedRevision: Int?
-    @State private var loadedCategory = ""
+    @State private var selectedCategory = "all"
+    @State private var pinned: Set<String> = []
+    @State private var page = 0
     @State private var retry = 0
-    @State private var loadedRetry = -1
+    @State private var nowTick = Date()
     @State private var playing: CatalogItem?
-    @FocusState private var focusedCell: String?
-
-    private let slotMinutes = 30
-    private let slotCount = 4
-    private let maxGuideChannels = 40
-    private let channelColumnWidth: CGFloat = 360
-    private let slotWidth: CGFloat = 320
-
-    private static let epgDateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        // Xtream providers report EPG times in UTC.
-        f.timeZone = TimeZone(secondsFromGMT: 0)
-        return f
-    }()
-
-    private static let slotFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "h:mm a"
-        return f
-    }()
-
-    private var slotStarts: [Date] {
-        let cal = Calendar.current
-        let now = Date()
-        let comps = cal.dateComponents([.year, .month, .day, .hour, .minute], from: now)
-        let minute = (comps.minute ?? 0) / slotMinutes * slotMinutes
-        let base = cal.date(from: DateComponents(year: comps.year, month: comps.month,
-                                                day: comps.day, hour: comps.hour,
-                                                minute: minute)) ?? now
-        return (0..<slotCount).map { base.addingTimeInterval(Double($0 * slotMinutes * 60)) }
+    @FocusState private var catFocus: String?
+    @State private var epgReload = 0
+    @State private var epgReloading = false
+    @StateObject private var previewPlayer = TVPreviewPlayer()
+    @State private var previewItem: CatalogItem?
+    @State private var previewNowTitle = ""
+    @State private var guideVisible = false
+    @State private var pinnedCatIDs: [String] = []
+    /// "All" stays first; pinned categories follow in pin order, then the rest.
+    private func orderedCats(_ categories: [CatalogCategory]) -> [CatalogCategory] {
+        PinnedCategories.ordered(categories, pins: pinnedCatIDs)
     }
 
-    private var hasAnyEPG: Bool { epg.values.contains { !$0.isEmpty } }
+    private let pageSize = 40
+
+    private var selectedName: String {
+        if selectedCategory == "all" { return "All Channels" }
+        return store?.categories.first { $0.id == selectedCategory }?.name ?? "Guide"
+    }
+
+    // Pinned channels always float to the top, in every category view.
+    private var ordered: [CatalogItem] {
+        guard let store else { return [] }
+        let visible = store.items.filter(model.preferences.visible)
+        return visible.filter { pinned.contains($0.scopedID) } + visible.filter { !pinned.contains($0.scopedID) }
+    }
+
+    // Current half-hour window, e.g. "Now – 11:00p" with "11:30p" next.
+    private var slot: (end: String, next: String) {
+        let cal = Calendar.current
+        let comps = cal.dateComponents([.year, .month, .day, .hour, .minute], from: nowTick)
+        var startComps = comps
+        startComps.minute = (comps.minute ?? 0) < 30 ? 0 : 30
+        startComps.second = 0
+        let start = cal.date(from: startComps) ?? nowTick
+        let end = cal.date(byAdding: .minute, value: 30, to: start) ?? nowTick
+        let next = cal.date(byAdding: .minute, value: 30, to: end) ?? nowTick
+        let formatter = DateFormatter()
+        formatter.dateFormat = "h:mma"; formatter.amSymbol = "a"; formatter.pmSymbol = "p"
+        return (formatter.string(from: end), formatter.string(from: next))
+    }
 
     var body: some View {
         Group {
@@ -71,7 +68,13 @@ struct TVGuideView: View {
         }
         .background(TVTheme.background)
         .onAppear {
+            guideVisible = true
             if store == nil { store = TVLibraryStore(kind: .live, model: model) }
+        }
+        .onDisappear {
+            guideVisible = false
+            previewPlayer.stop()
+            previewItem = nil
         }
     }
 
@@ -82,273 +85,491 @@ struct TVGuideView: View {
             Text("Save your provider in Settings to browse the guide.")
                 .foregroundStyle(TVTheme.muted)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .tvLanding(for: .guide)
-        } else if store.loading && store.categories.isEmpty {
-            ProgressView("Loading guide…")
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .tvLanding(for: .guide)
         } else {
             VStack(alignment: .leading, spacing: 0) {
-                Text("Guide")
-                    .font(.system(size: 36, weight: .bold))
-                    .padding(.horizontal, 48)
-                    .padding(.top, 28)
-
-                EPGRefreshControl(channels: Array(store.items.filter(model.preferences.visible).prefix(maxGuideChannels)))
-                    .padding(.horizontal, 48)
-                HStack(alignment: .top, spacing: 16) {
-                    categorySidebar(store).frame(width: 270)
-                    VStack(alignment: .leading, spacing: 0) {
-
-                        if !store.error.isEmpty {
-                            Text(store.error).foregroundStyle(.secondary).padding(30)
-                            Button("Retry") { retry += 1 }.buttonStyle(.bordered)
-                        } else if !epgLoaded {
-                            ProgressView("Loading program data…")
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        } else if hasAnyEPG {
-                            guideGrid(Array(store.items.filter(model.preferences.visible).prefix(maxGuideChannels)))
+                HStack(alignment: .center, spacing: 32) {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text(selectedName)
+                            .font(.system(size: 46, weight: .bold))
+                            .foregroundStyle(TVTheme.text)
+                            .lineLimit(2)
+                        Text(previewItem?.name ?? "Live TV")
+                            .font(.system(size: 28, weight: .semibold))
+                            .lineLimit(2)
+                        Text(previewItem == nil
+                             ? "Focus a channel to watch. Select it for fullscreen."
+                             : (previewNowTitle.isEmpty ? "Live now" : previewNowTitle))
+                            .font(.system(size: 22))
+                            .foregroundStyle(TVTheme.muted)
+                            .lineLimit(3)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    previewPane()
+                    Button { reloadEPG() } label: {
+                        if epgReloading {
+                            ProgressView()
+                                .tint(.white)
+                                .frame(width: 64, height: 64)
                         } else {
-                            fallbackRows(Array(store.items.filter(model.preferences.visible).prefix(maxGuideChannels)))
-                        }
-
-                        if store.items.filter(model.preferences.visible).count > maxGuideChannels {
-                            Text("Showing the first \(maxGuideChannels) channels — use Live TV to browse them all.")
-                                .font(.system(size: 18))
-                                .foregroundStyle(TVTheme.muted)
-                                .padding(.horizontal, 48)
-                                .padding(.vertical, 16)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(TVTheme.background)
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 28, weight: .semibold))
+                                .frame(width: 64, height: 64)
                         }
                     }
+                    .buttonStyle(TVCompactButtonStyle())
+                    .accessibilityLabel("Reload program guide")
+                    .disabled(epgReloading)
                 }
+                .padding(.horizontal, 40)
+                .padding(.top, 24)
+                .padding(.bottom, 12)
+
+                HStack(alignment: .top, spacing: 32) {
+                    categoryList(store)
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack {
+                            Text("Now – \(slot.end)")
+                            Spacer()
+                            Text(slot.next)
+                        }
+                        .font(.system(size: 22))
+                        .foregroundStyle(TVTheme.muted)
+                        .padding(.top, 8)
+                        .padding(.bottom, 4)
+
+                        if store.loading && store.items.isEmpty {
+                            ProgressView("Loading guide…")
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else if !store.error.isEmpty {
+                            VStack(alignment: .leading, spacing: 16) {
+                                Text(store.error).foregroundStyle(.secondary)
+                                Button("Retry") { retry += 1 }.buttonStyle(.bordered)
+                            }.padding(48)
+                        } else if ordered.isEmpty {
+                            Text("No visible channels in this category.")
+                                .foregroundStyle(TVTheme.muted)
+                                .font(.system(size: 24))
+                                .padding(48)
+                        } else {
+                            ScrollView {
+                                LazyVStack(spacing: 12) {
+                                    ForEach(Array(ordered.dropFirst(page * pageSize).prefix(pageSize)), id: \.scopedID) { channel in
+                                        TVGuideRow(channel: channel,
+                                                  refreshToken: epgReload,
+                                                  isPinned: pinned.contains(channel.scopedID),
+                                                  togglePin: { togglePin(channel.scopedID) },
+                                                  onHover: { focused in updatePreview(channel, focused: focused) }) { playChannel(channel) }
+                                    }
+                                }
+                                .padding(.vertical, 12)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            if ordered.count > pageSize {
+                                HStack(spacing: 24) {
+                                    Button("Previous") { page -= 1 }
+                                        .disabled(page == 0).buttonStyle(.bordered)
+                                    Text("Page \(page + 1) of \((ordered.count + pageSize - 1) / pageSize)")
+                                        .font(.system(size: 22)).foregroundStyle(TVTheme.muted)
+                                    Button("Next") { page += 1 }
+                                        .disabled((page + 1) * pageSize >= ordered.count).buttonStyle(.bordered)
+                                }
+                                .padding(.bottom, 12)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .padding(.horizontal, 40)
+                .frame(maxHeight: .infinity)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .foregroundStyle(TVTheme.text)
         }
         }
-        .task(id: "\(model.libraryRevision)-\(retry)-\(selectedCategory)-\(epgCache.revision)") {
-            if loadedRevision != model.libraryRevision || loadedRetry != retry {
-                epg = [:]; epgLoaded = false
-                await store.loadCategories()
-                guard !Task.isCancelled else { return }
-                loadedRevision = model.libraryRevision; loadedRetry = retry; loadedCategory = ""
-            }
-            guard store.error.isEmpty else { return }
-            let categories = store.categories.filter { model.preferences.categoryVisible($0.id, kind: .live) }
-            if !categories.contains(where: { $0.id == selectedCategory }) {
-                selectedCategory = categories.first?.id ?? ""
-                epgLoaded = selectedCategory.isEmpty
-                return
-            }
-            guard !selectedCategory.isEmpty else { return }
-            if loadedCategory != selectedCategory {
-                epg = [:]; epgLoaded = false
-                await store.loadItems(categoryID: selectedCategory)
-                guard !Task.isCancelled, store.error.isEmpty else { return }
-                loadedCategory = selectedCategory
-            }
+        .task(id: "\(model.libraryRevision)-\(retry)") {
+            pinned = PinnedChannels.read(key: model.preferenceKey)
+            pinnedCatIDs = PinnedCategories.read(key: model.pinKey)
+            await store.loadCategories()
+            guard !Task.isCancelled else { return }
+            let ids = Set(store.categories.filter { model.preferences.categoryVisible($0.id, kind: .live) }.map(\.id))
+            if selectedCategory != "all", !ids.contains(selectedCategory) { selectedCategory = "all" }
+        }
+        .task(id: "\(selectedCategory)-\(model.libraryRevision)-\(retry)") {
+            page = 0
+            guard model.providerReady else { return }
+            if selectedCategory == "all" { await store.loadAllItems() }
+            else { await store.loadItems(categoryID: selectedCategory) }
+        }
+        .task {
+            // Keep the time-slot bar current.
             while !Task.isCancelled {
-                await loadEPG(for: store.items.filter(model.preferences.visible))
+                nowTick = Date()
                 do { try await Task.sleep(for: .seconds(60)) } catch { return }
             }
+        }
+        .task(id: "\(previewItem?.id ?? "-")-\(model.libraryRevision)-\(guideVisible)-\(playing?.id ?? "-")") {
+            previewPlayer.stop()
+            previewPlayer.failed = false
+            previewNowTitle = ""
+            guard let item = previewItem, model.providerReady, guideVisible, playing == nil else {
+                previewPlayer.stop()
+                return
+            }
+            // Debounce so fast scrolling doesn't thrash streams.
+            do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
+            guard !Task.isCancelled else { return }
+            do {
+                let url = try model.provider(for: item).streamURL(item: item)
+                try Task.checkCancellation()
+                guard guideVisible, playing == nil, previewItem?.id == item.id else { return }
+                previewPlayer.play(url: url)
+                // Best-effort "now playing" label; must not block video.
+                let progs = await EPGCache.shared.programs(streamID: item.id, provider: model.provider(for: item), scope: model.epgScope(for: item))
+                if !Task.isCancelled {
+                    previewNowTitle = EPGParser.nowNext(progs).now?.title ?? ""
+                }
+            } catch {
+                if !Task.isCancelled { previewPlayer.failed = true }
+            }
+        }
+        .onChange(of: selectedCategory) { _, _ in
+            previewPlayer.stop()
+            previewItem = nil
         }
         .fullScreenCover(item: $playing) { item in
             CatalogDestination(item: item, channels: store.items.filter(model.preferences.visible))
         }
     }
 
-    // MARK: - Category sidebar
+    private func updatePreview(_ channel: CatalogItem, focused: Bool) {
+        guard guideVisible, playing == nil else { return }
+        if focused {
+            guard previewItem?.id != channel.id else { return }
+            previewPlayer.stop()
+            previewItem = channel
+        } else if previewItem?.id == channel.id {
+            previewPlayer.stop()
+            previewItem = nil
+        }
+    }
 
-    private func categorySidebar(_ store: TVLibraryStore) -> some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            LazyVStack(alignment: .leading, spacing: 16) {
-                let categories = store.categories.filter { model.preferences.categoryVisible($0.id, kind: .live) }
-                ForEach(Array(categories.enumerated()), id: \.element.id) { index, category in
-                    let landing = category.id == selectedCategory || (selectedCategory.isEmpty && index == 0)
-                    let button = Button { selectedCategory = category.id } label: {
-                        Text(category.name)
-                            .font(.system(size: 23, weight: .semibold))
-                            .lineLimit(2)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 20)
-                            .padding(.vertical, 14)
-                    }
-                    .buttonStyle(TVCompactButtonStyle())
-                    .background(selectedCategory == category.id ? TVTheme.accent : TVTheme.card)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .foregroundStyle(StreamTheme.text)
-                    if landing {
-                        TVEntryControl(section: .guide) { button }
-                    } else {
-                        button
+    private func togglePin(_ id: String) {
+        if pinned.contains(id) { pinned.remove(id) } else { pinned.insert(id) }
+        PinnedChannels.write(pinned, key: model.preferenceKey)
+    }
+
+    // Stop the preview before opening fullscreen so only one stream plays audio.
+    private func playChannel(_ channel: CatalogItem) {
+        previewPlayer.stop()
+        previewItem = nil
+        previewNowTitle = ""
+        playing = channel
+    }
+
+    // MARK: - Category list (vertical, scrolls down like the concept)
+
+    private func categoryList(_ store: TVLibraryStore) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Categories")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(TVTheme.muted)
+                .padding(.horizontal, 4)
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    categoryRow(id: "all", name: "All")
+                    ForEach(orderedCats(store.categories.filter { model.preferences.categoryVisible($0.id, kind: .live) })) { category in
+                        categoryRow(id: category.id, name: category.name)
                     }
                 }
+                .padding(.vertical, 4)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
         }
+        .frame(width: 400)
         .focusSection()
+        .onAppear {
+            // Returning to the Guide with categories already loaded.
+            catFocus = "cat-\(selectedCategory)"
+        }
+        .onChange(of: selectedCategory) { _, new in
+            catFocus = "cat-\(new)"
+        }
     }
 
-    // MARK: - EPG loading
-
-    private func loadEPG(for channels: [CatalogItem]) async {
-        guard !model.provider.requiresGateway, let scope = model.preferenceKey else {
-            epg = [:]; epgLoaded = true; return
+    private func categoryRow(id: String, name: String) -> some View {
+        Button { selectedCategory = id } label: {
+            HStack {
+                Text((id != "all" && pinnedCatIDs.contains(id) ? "★ " : "") + name)
+                    .font(.system(size: 26, weight: .semibold))
+                    .lineLimit(1)
+                Spacer()
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 16)
         }
-        let targets = Array(channels.prefix(maxGuideChannels))
-        let provider = model.provider; let namespace = scope + "-\(model.libraryRevision)"
-        var result: [String: [TVProgram]] = [:]
-        await withTaskGroup(of: (String, [TVProgram]).self) { group in
-            for channel in targets {
-                group.addTask {
-                    let programs = await EPGCache.shared.programs(streamID: channel.id, provider: provider, scope: namespace)
-                    return (channel.id, programs.map { TVProgram(channelID: channel.id, title: $0.title, start: $0.start, end: $0.end) })
+        .buttonStyle(TVCompactButtonStyle())
+        .focused($catFocus, equals: "cat-\(id)")
+        .background(selectedCategory == id ? AnyShapeStyle(TVTheme.accentFill) : AnyShapeStyle(TVTheme.card))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .foregroundStyle(selectedCategory == id ? TVTheme.onAccent : TVTheme.text)
+        .contextMenu {
+            if id != "all" {
+                Button(pinnedCatIDs.contains(id) ? "Unpin category" : "Pin category to front") {
+                    pinnedCatIDs = PinnedCategories.toggled(id, in: pinnedCatIDs)
+                    PinnedCategories.write(pinnedCatIDs, key: model.pinKey)
                 }
             }
-            for await (id, programs) in group { result[id] = programs }
         }
-        guard !Task.isCancelled else { return }
-        epg = result; epgLoaded = true
     }
 
-    // MARK: - Time-slot grid
-
-    private func guideGrid(_ channels: [CatalogItem]) -> some View {
-        ScrollView([.vertical, .horizontal]) {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 0) {
-                    Text("Channel").frame(width: channelColumnWidth + 8, alignment: .leading)
-                    ForEach(slotStarts, id: \.self) { slot in
-                        Text(Self.slotFormatter.string(from: slot))
-                            .font(.system(size: 23, weight: .semibold))
-                            .foregroundStyle(TVTheme.muted)
-                            .frame(width: slotWidth, alignment: .leading)
-                    }
-                }
-                .padding(.vertical, 12)
-
-                ForEach(channels) { channel in
-                    guideRow(channel)
-                        .focusSection()
-                }
-            }
-            .padding(.horizontal, 48)
-            .padding(.top, 12)
-            .padding(.bottom, 16)
+    // Manual EPG reload: clear the cache so stale programs can't stick,
+    // then restart every visible row's EPG task so it refetches fresh.
+    private func reloadEPG() {
+        guard !epgReloading else { return }
+        Task { @MainActor in
+            epgReloading = true
+            EPGCache.shared.reset()
+            epgReload += 1
+            try? await Task.sleep(for: .seconds(1))
+            epgReloading = false
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipped()
     }
+}
 
-    private func guideRow(_ channel: CatalogItem) -> some View {
-        HStack(spacing: 0) {
-            Button { playing = channel } label: {
-                HStack(spacing: 16) {
-                    ProviderPoster(url: channel.poster, kind: .live).frame(width: 56, height: 40)
-                    Text(channel.name).foregroundStyle(TVTheme.text)
-                        .font(.system(size: 23, weight: .semibold))
-                        .foregroundStyle(StreamTheme.text)
-                        .lineLimit(2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .padding(.horizontal, 16)
-                .frame(width: channelColumnWidth, height: 88)
-                .background(TVTheme.card)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+// MARK: - Guide row: star (pin) | logo + channel number | NOW + NEXT
+
+private struct TVGuideRow: View {
+    @EnvironmentObject private var model: AppModel
+    let channel: CatalogItem
+    let refreshToken: Int
+    let isPinned: Bool
+    let togglePin: () -> Void
+    let onHover: (Bool) -> Void
+    @FocusState private var focusedControl: String?
+    let play: () -> Void
+    @State private var programs: [EPGProgram] = []
+    @State private var loading = true
+    private var nowNext: EPGNowNext { EPGParser.nowNext(programs) }
+
+    var body: some View {
+        HStack(spacing: 20) {
+            Button(action: togglePin) {
+                Image(systemName: isPinned ? "star.fill" : "star")
+                    .font(.system(size: 30))
+                    .foregroundStyle(isPinned ? TVTheme.accent : TVTheme.muted)
+                    .frame(width: 72, height: 72)
             }
             .buttonStyle(TVCompactButtonStyle())
-            .focused($focusedCell, equals: "ch-\(channel.id)")
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(focusedCell == "ch-\(channel.id)" ? TVTheme.accent : Color.clear, lineWidth: 4))
-            .padding(.trailing, 8)
+            .accessibilityLabel(isPinned ? "Unpin channel" : "Pin channel")
+            .focused($focusedControl, equals: "pin")
 
-            ForEach(slotStarts, id: \.self) { slot in
-                programCell(channel: channel, slot: slot)
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    @ViewBuilder
-    private func programCell(channel: CatalogItem, slot: Date) -> some View {
-        let programs = epg[channel.id] ?? []
-        let slotEnd = slot.addingTimeInterval(Double(slotMinutes * 60))
-        if let program = programs.first(where: { $0.start < slotEnd && $0.end > slot }) {
-            let width = slotWidth
-            let isLive = program.start <= Date() && program.end > Date()
-            let cellID = program.id + "-slot-\(Int(slot.timeIntervalSince1970))"
-            let focused = focusedCell == cellID
-            Button { playing = channel } label: {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(program.title)
-                        .font(.system(size: 23, weight: .semibold))
-                        .foregroundStyle(StreamTheme.text)
-                        .lineLimit(2)
-                    if isLive {
-                        Text("LIVE NOW")
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundStyle(TVTheme.accent)
-                    }
-                }
-                .padding(.horizontal, 16)
-                .frame(width: width, height: 88, alignment: .leading)
-                .background(isLive ? TVTheme.accent.opacity(0.25) : TVTheme.panel)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10)
-                        .stroke(focused ? TVTheme.accent : Color.clear, lineWidth: 4)
-                )
+            Button(action: play) {
+                TVGuideRowLabel(channel: channel, nowNext: nowNext, loading: loading)
             }
             .buttonStyle(TVCompactButtonStyle())
-            .focused($focusedCell, equals: cellID)
-        } else {
-            // No EPG for this slot: full-width LIVE block.
-            Button { playing = channel } label: {
-                Text("LIVE")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(TVTheme.accent)
-                    .padding(.horizontal, 16)
-                    .frame(width: slotWidth, height: 88, alignment: .leading)
-                    .background(TVTheme.card)
+            .focused($focusedControl, equals: "play")
+        }
+        .onChange(of: focusedControl) { _, control in onHover(control != nil) }
+        .onDisappear { onHover(false) }
+        .task(id: "\(model.libraryRevision)-\(channel.scopedID)-\(refreshToken)") {
+            programs = []; loading = true
+            while !Task.isCancelled {
+                let loaded = await EPGCache.shared.programs(streamID: channel.id,
+                                                            provider: model.provider(for: channel),
+                                                            scope: model.epgScope(for: channel))
+                guard !Task.isCancelled else { return }
+                programs = Array(loaded.filter { $0.end > Date() }.prefix(6)); loading = false
+                do { try await Task.sleep(for: .seconds(60)) } catch { return }
+            }
+        }
+    }
+}
+
+private struct TVGuideRowLabel: View {
+    @Environment(\.isFocused) private var focused
+    let channel: CatalogItem
+    let nowNext: EPGNowNext
+    let loading: Bool
+
+    var body: some View {
+        HStack(spacing: 28) {
+            VStack(spacing: 6) {
+                ProviderPoster(url: channel.poster, kind: .live)
+                    .frame(width: 104, height: 58)
                     .clipShape(RoundedRectangle(cornerRadius: 10))
-            }
-            .buttonStyle(TVCompactButtonStyle())
-            .focused($focusedCell, equals: "live-\(channel.id)-\(Int(slot.timeIntervalSince1970))")
-        }
-    }
-
-    // MARK: - Fallback: channel rows with LIVE badges
-
-    private func fallbackRows(_ channels: [CatalogItem]) -> some View {
-        ScrollView {
-            LazyVStack(spacing: 12) {
-                ForEach(channels) { channel in
-                    Button { playing = channel } label: {
-                        HStack(spacing: 20) {
-                            ProviderPoster(url: channel.poster, kind: .live).frame(width: 56, height: 40)
-                            TVFocusTitle(title: channel.name)
-                                .font(.title3)
-                                .lineLimit(1)
-                            Spacer()
-                            Text("LIVE")
-                                .font(.system(size: 18, weight: .bold))
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(TVTheme.accent)
-                                .foregroundStyle(.white)
-                                .clipShape(Capsule())
-                        }
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 12)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                    }
-                    .buttonStyle(TVCatalogRowStyle(selected: false))
-                    .focused($focusedCell, equals: "fb-\(channel.id)")
+                if !channel.number.isEmpty {
+                    Text(channel.number)
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(focused ? Color.white.opacity(0.85) : TVTheme.muted)
                 }
             }
-            .padding(.horizontal, 48)
-            .padding(.vertical, 24)
+            .frame(width: 124)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(nowNext.now?.title ?? (loading ? "Loading…" : channel.name))
+                    .font(.system(size: 30, weight: .semibold))
+                    .lineLimit(1)
+                if let next = nowNext.next {
+                    Text("Next: \(next.title)")
+                        .font(.system(size: 23))
+                        .foregroundStyle(focused ? Color.white.opacity(0.75) : TVTheme.muted)
+                        .lineLimit(1)
+                } else if !loading {
+                    Text("Live")
+                        .font(.system(size: 23))
+                        .foregroundStyle(focused ? Color.white.opacity(0.75) : TVTheme.muted)
+                }
+            }
+            Spacer()
+        }
+        .foregroundStyle(focused ? Color.white : TVTheme.text)
+        .padding(.horizontal, 28)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(focused ? TVTheme.focusFill : TVTheme.card)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+// MARK: - Hover preview pane
+
+extension TVGuideView {
+    // 16:9 muted preview beside the guide heading. Shows the focused
+    // channel's live stream; one click on the row still goes fullscreen with sound.
+    @ViewBuilder
+    fileprivate func previewPane() -> some View {
+        ZStack(alignment: .bottomLeading) {
+            RoundedRectangle(cornerRadius: 18)
+                .fill(TVTheme.card)
+                .frame(width: 520, height: 292.5)
+            if let item = previewItem {
+                if previewPlayer.failed {
+                    VStack(spacing: 12) {
+                        Image(systemName: "tv.slash")
+                            .font(.system(size: 44))
+                            .foregroundStyle(TVTheme.muted)
+                        Text("Preview unavailable")
+                            .font(.system(size: 22, weight: .medium))
+                            .foregroundStyle(TVTheme.muted)
+                        Text(item.name)
+                            .font(.system(size: 20))
+                            .foregroundStyle(TVTheme.muted)
+                            .lineLimit(1)
+                    }
+                    .frame(width: 520, height: 292.5)
+                } else {
+                    TVPreviewSurface(player: previewPlayer)
+                        .frame(width: 520, height: 292.5)
+                        .clipShape(RoundedRectangle(cornerRadius: 18))
+                    if !previewPlayer.playing {
+                        ProgressView()
+                            .tint(.white)
+                            .frame(width: 520, height: 292.5)
+                    }
+                    LinearGradient(colors: [.clear, .black.opacity(0.72)], startPoint: .center, endPoint: .bottom)
+                        .frame(width: 520, height: 292.5)
+                        .clipShape(RoundedRectangle(cornerRadius: 18))
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            Text("PREVIEW")
+                                .font(.system(size: 15, weight: .bold))
+                                .padding(.horizontal, 10).padding(.vertical, 5)
+                                .background(.white.opacity(0.22), in: Capsule())
+                            Label("MUTED", systemImage: "speaker.slash.fill")
+                                .font(.system(size: 15, weight: .bold))
+                                .padding(.horizontal, 10).padding(.vertical, 5)
+                                .background(.white.opacity(0.22), in: Capsule())
+                        }
+                        Text(item.name)
+                            .font(.system(size: 27, weight: .semibold))
+                            .lineLimit(1)
+                        Text(previewNowTitle.isEmpty ? "Live" : previewNowTitle)
+                            .font(.system(size: 20))
+                            .foregroundStyle(.white.opacity(0.82))
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(.white)
+                    .padding(22)
+                }
+            } else {
+                VStack(spacing: 12) {
+                    Image(systemName: "tv")
+                        .font(.system(size: 44))
+                        .foregroundStyle(TVTheme.muted)
+                    Text("Focus a channel to preview it live")
+                        .font(.system(size: 22))
+                        .foregroundStyle(TVTheme.muted)
+                }
+                .frame(width: 520, height: 292.5)
+            }
+        }
+        .frame(width: 520, height: 292.5)
+    }
+}
+
+// MARK: - Hover preview player (VLC)
+
+// One muted VLC preview. Pending starts are cancelled by the guide's
+// debounced task; focus loss and fullscreen playback stop this player.
+@MainActor
+final class TVPreviewPlayer: ObservableObject {
+    let engine = VLCMediaPlayer(options: ["--quiet", "--no-video-title-show", "--no-audio"])
+    @Published var playing = false
+    @Published var failed = false
+    private var timer: Timer?
+
+    func attach(_ view: UIView) { engine.drawable = view }
+
+    func play(url: URL) {
+        failed = false
+        playing = false
+        engine.stop()
+        guard let media = VLCMedia(url: url) else { failed = true; return }
+        media.addOptions(["network-caching": 1500])
+        engine.media = media
+        engine.play()
+        timer?.invalidate()
+        let started = Date()
+        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.timer != nil else { return }
+                if self.engine.state == .error {
+                    self.fail()
+                } else if self.engine.isPlaying {
+                    self.playing = true
+                } else if Date().timeIntervalSince(started) > 20 {
+                    self.fail()
+                }
+            }
         }
     }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+        playing = false
+        engine.stop()
+    }
+
+    private func fail() {
+        timer?.invalidate()
+        timer = nil
+        failed = true
+        engine.stop()
+    }
+}
+
+// Plain non-interactive UIView hosting the preview player's drawable.
+// User interaction is disabled so the Siri Remote focus stays on the rows.
+private struct TVPreviewSurface: UIViewRepresentable {
+    let player: TVPreviewPlayer
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = .black
+        view.isUserInteractionEnabled = false
+        player.attach(view)
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {}
 }

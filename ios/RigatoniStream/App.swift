@@ -5,16 +5,16 @@ struct RigatoniStreamApp: App {
     @StateObject private var model = AppModel()
     @AppStorage("rigatoni-appearance") private var appearance = "dark"
     init() {
-        if UserDefaults.standard.string(forKey: "rigatoni-appearance") == "netflix" {
-            UserDefaults.standard.set("dark", forKey: "rigatoni-appearance")
-        }
+        AppAppearance.migrateStoredSelection()
     }
     var body: some Scene {
         WindowGroup {
             Group {
                 if model.starting { ProgressView("Opening Ant Streams…") }
-                else if model.needsProviderSetup { ProviderSetupView() }
-                else { MobileRootView() }
+                else if model.providerReady {
+                    MobileRootView().id(model.vault.selectedID)
+                } else if model.needsProviderSetup { ProviderSetupView() }
+                else { ProviderWelcomeView() }
             }
             .environmentObject(model).environmentObject(model.catalog).tint((AppAppearance(rawValue: appearance) ?? .dark).accent)
             .foregroundStyle(StreamTheme.text(for: AppAppearance(rawValue: appearance) ?? .dark))
@@ -155,17 +155,26 @@ private struct AddLocalProviderSheet: View {
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
+    @State private var providers = false
     @State private var deleting = false
     @State private var visiblePassword = false
     @State private var addingProvider = false
     @State private var showAccount = false
     @State private var pendingRemoval: String?
     @AppStorage("rigatoni-appearance") private var appearance = AppAppearance.dark.rawValue
+    @AppStorage("ant-library-mode") private var libraryModeRaw = LibraryMode.separate.rawValue
     @AppStorage("rigatoni-live-buffer-ms") private var liveBuffer = 1500
     @AppStorage("rigatoni-movie-buffer-ms") private var movieBuffer = 4000
+    @AppStorage("ant-playback-engine") private var engine = "auto"
     var body: some View {
         NavigationStack {
             Form {
+                Section("Providers") {
+                    Text(model.provider.name).font(.headline)
+                    Button("Add, edit or switch providers") { providers = true }
+                    Button("Refresh provider") { model.refreshProvider() }
+                    if model.provider.usesHTTP { Label("This provider uses unencrypted HTTP.", systemImage: "lock.open").font(.footnote) }
+                }
                 Section("Live TV Guide") { EPGRefreshControl() }
                 Section("Theme") {
                     Picker("Theme", selection: $appearance) {
@@ -173,8 +182,27 @@ struct SettingsView: View {
                     }.pickerStyle(.segmented)
                     Text("Dark, iOS Light, or Xfinity — the X1-style navy look. Saved on this device only.").font(.footnote).foregroundStyle(.secondary)
                 }
-                Section("Personalize") {
-                    NavigationLink("Themes & hidden categories / channels") { LibraryCustomizationView() }
+                Section("Library") {
+                    StreamOptionPicker(options: LibraryMode.allCases.map { ($0, $0.title) }, selection: Binding(
+                        get: { LibraryMode(rawValue: libraryModeRaw) ?? .separate },
+                        set: { model.setLibraryMode($0) }
+                    ))
+                    .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 4, trailing: 16))
+                    Text(model.libraryMode.blurb).font(.footnote).foregroundStyle(.secondary)
+                }
+                Section("Appearance") {
+                    ForEach(AppAppearance.allCases) { theme in
+                        Button { appearance = theme.rawValue } label: {
+                            HStack {
+                                Text(theme.title)
+                                Spacer()
+                                if appearance == theme.rawValue {
+                                    Image(systemName: "checkmark").foregroundStyle(StreamTheme.accent)
+                                }
+                            }
+                        }.foregroundStyle(StreamTheme.text)
+                    }
+                    NavigationLink("Hidden categories / channels") { LibraryCustomizationView() }
                 }
                 Section("Provider") {
                     Text(model.provider.requiresGateway
@@ -231,20 +259,21 @@ struct SettingsView: View {
                         }
                     }
                 }
-                Section("Playback buffer") {
-                    Picker("Live TV", selection: $liveBuffer) {
-                        Text("Low delay · 1.5 seconds").tag(1500)
-                        Text("Balanced · 3 seconds").tag(3000)
-                        Text("More stable · 6 seconds").tag(6000)
+                Section("Playback") {
+                    Picker("Player", selection: $engine) {
+                        Text("Automatic (Apple + VLC fallback)").tag("auto")
+                        Text("VLC compatibility").tag("vlc")
+                        Text("Apple player").tag("apple")
                     }
-                    Picker("Movies", selection: $movieBuffer) {
-                        Text("4 seconds").tag(4000)
-                        Text("8 seconds").tag(8000)
-                        Text("12 seconds").tag(12000)
+                    Picker("Live TV buffer (VLC)", selection: $liveBuffer) {
+                        Text("Low delay · 1.5 seconds").tag(1500); Text("Balanced · 3 seconds").tag(3000); Text("More stable · 6 seconds").tag(6000)
                     }
-                    Text("These buffers add delay. Streams retain their original resolution; HD and 4K playback depend on the source, device and connection.").font(.footnote).foregroundStyle(.secondary)
+                    Picker("Movie buffer (VLC)", selection: $movieBuffer) {
+                        Text("4 seconds").tag(4000); Text("8 seconds").tag(8000); Text("12 seconds").tag(12000)
+                    }
+                    Text("Original stream quality. HD/4K depends on the source, codec and device. Apple playback uses its own adaptive buffer.").font(.footnote)
                 }
-                if !model.notice.isEmpty { Section { Text(model.notice).foregroundStyle(.secondary) } }
+                if !model.notice.isEmpty { Section { Text(model.notice).font(.callout).foregroundStyle(.secondary) } }
                 Section(model.signedIn ? "Account" : "Sign in to sync") {
                     if model.signedIn {
                         if let email = model.account.session?.user.email { Text("Signed in as \(email)") }
@@ -256,13 +285,14 @@ struct SettingsView: View {
                     }
                     Button(model.signedIn ? "Delete saved provider & gateway" : "Remove this provider", role: .destructive) { deleting = true }.disabled(model.busy)
                 }
-                Section("About this test build") {
-                    Text("Ant Streams 0.2 · Native player powered by VLCKit / VideoLAN (LGPL 2.1).")
-                    Link("VideoLAN and VLCKit source", destination: URL(string: "https://code.videolan.org/videolan/VLCKit")!)
+                Section("About") {
+                    Text("Ant Streams · Standalone IPTV player. No channels or subscriptions supplied.")
+                    Link("VideoLAN and VLCKit source (LGPL 2.1)", destination: URL(string: "https://code.videolan.org/videolan/VLCKit")!)
                 }
             }
-            .navigationTitle("Provider")
+            .navigationTitle("Settings")
             .toolbar { Button("Done") { dismiss() }.disabled(model.busy) }
+            .sheet(isPresented: $providers) { ProviderManagerView() }
             .sheet(isPresented: $showAccount) { LoginView() }
             .sheet(isPresented: $addingProvider) { AddLocalProviderSheet() }
             .confirmationDialog(model.signedIn ? "Delete your saved provider and gateway from your account?" : "Remove this provider from this device?", isPresented: $deleting, titleVisibility: .visible) {

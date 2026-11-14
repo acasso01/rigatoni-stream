@@ -166,12 +166,16 @@ struct TVProviderSetupView: View {
 struct TVSettingsView: View {
     @EnvironmentObject private var model: AppModel
     @AppStorage("rigatoni-appearance") private var appearance = "dark"
+    @AppStorage("ant-library-mode") private var libraryModeRaw = LibraryMode.separate.rawValue
     @State private var deleting = false
     @State private var visiblePassword = false
     @State private var pendingRemoval: String?
     @AppStorage("rigatoni-live-buffer-ms") private var liveBuffer = 1500
     @AppStorage("rigatoni-movie-buffer-ms") private var movieBuffer = 4000
-
+    @AppStorage("ant-playback-engine") private var engine = "auto"
+    @State private var providers = false
+    @State private var customization = false
+    @FocusState private var entryFocused: Bool
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -230,6 +234,9 @@ struct TVSettingsView: View {
                             }
                             .buttonStyle(.card).disabled(model.busy)
                         }
+                        Button("Add, edit or switch providers") { providers = true }.buttonStyle(TVCompactButtonStyle())
+                        Button("Refresh provider") { model.refreshProvider() }.buttonStyle(TVCompactButtonStyle())
+                        if model.provider.usesHTTP { Label("This provider uses unencrypted HTTP.", systemImage: "lock.open").font(.system(size: 20)) }
                         if !model.signedIn && model.localProviders.count < LocalProviderVault.limit {
                             NavigationLink("Add another provider") { TVAddProviderView() }
                                 .buttonStyle(.card)
@@ -255,6 +262,13 @@ struct TVSettingsView: View {
                             }
                         }
                     }
+                    settingsGroup(title: "Library") {
+                        StreamOptionPicker(options: LibraryMode.allCases.map { ($0, $0.title) }, selection: Binding(
+                            get: { LibraryMode(rawValue: libraryModeRaw) ?? .separate },
+                            set: { model.setLibraryMode($0) }
+                        ))
+                        Text(model.libraryMode.blurb).font(.system(size: 20)).foregroundStyle(.secondary)
+                    }
                     if model.signedIn && !model.localProviders.isEmpty {
                         settingsGroup(title: "On this device") {
                             Text("These providers stay on this device and are used after you sign out.")
@@ -272,6 +286,12 @@ struct TVSettingsView: View {
                                 }
                             }
                         }
+                    }
+
+                    settingsGroup(title: "Player") {
+                        StreamOptionPicker(options: [("auto", "Automatic"), ("vlc", "VLC compatibility"), ("apple", "Apple player")], selection: $engine)
+                        Text("Automatic uses Apple playback for HLS/MP4 and VLC for other containers or decoding failures. Original quality is preserved.")
+                            .font(.system(size: 20)).foregroundStyle(.secondary)
                     }
 
                     settingsGroup(title: "Playback buffer") {
@@ -313,6 +333,8 @@ struct TVSettingsView: View {
                         }
                     }
 
+                    Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?") (\(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"))")
+                        .font(.system(size: 20)).foregroundStyle(.secondary)
                     Text("Ant Streams 0.2 for tvOS · Native playback by VLCKit / VideoLAN (LGPL 2.1).")
                         .font(.footnote).foregroundStyle(TVTheme.muted)
                 }
@@ -339,6 +361,7 @@ struct TVSettingsView: View {
                     pendingRemoval = nil
                 }
             }
+            .sheet(isPresented: $providers) { ProviderManagerView() }
         }
     }
 
