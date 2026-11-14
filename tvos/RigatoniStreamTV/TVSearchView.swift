@@ -30,11 +30,14 @@ struct TVSearchView: View {
             LazyVStack(alignment: .leading, spacing: 32) {
                 StreamHeading(title: "Search", subtitle: "Movies, live channels and TV shows. Every category. One place.")
                 VStack(alignment: .leading, spacing: 24) {
-                    TextField("Search movies, Live TV and TV shows", text: $query)
-                        .font(.system(size: 26))
-                        .frame(maxWidth: .infinity, minHeight: 64)
-                        .focused($fieldFocused)
-                        .accessibilityLabel("Search movies, live TV and TV shows")
+                    TVEntryControl(section: .search) {
+                        TextField("Search movies, Live TV and TV shows", text: $query)
+                            .font(.system(size: 26))
+                            .frame(maxWidth: .infinity, minHeight: 64)
+                            .focused($fieldFocused)
+                            .tvContentEntry()
+                            .accessibilityLabel("Search movies, live TV and TV shows")
+                    }
                     Text("Select the search field to type with your remote or iPhone.")
                         .font(.system(size: 20)).foregroundStyle(.secondary)
                     StreamOptionPicker(options: [("all", "All"), (LibraryKind.movies.rawValue, "Movies"), (LibraryKind.live.rawValue, "Live TV"), ("series", "TV Shows")], selection: $filter)
