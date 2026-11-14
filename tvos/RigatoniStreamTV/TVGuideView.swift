@@ -386,6 +386,7 @@ private struct TVGuideRow: View {
 }
 
 private struct TVGuideRowLabel: View {
+    @EnvironmentObject private var model: AppModel
     @Environment(\.isFocused) private var focused
     let channel: CatalogItem
     let nowNext: EPGNowNext

@@ -107,8 +107,8 @@ struct MultiPlayerView: View {
             error = result.notice
             if paneA == nil { paneA = channels.first }
             if paneB == nil { paneB = channels.dropFirst().first }
-        } catch {
-            if !Task.isCancelled { error = error.localizedDescription }
+        } catch let caught {
+            if !Task.isCancelled { error = caught.localizedDescription }
         }
     }
 
