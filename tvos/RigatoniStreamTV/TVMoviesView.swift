@@ -17,14 +17,26 @@ struct TVMoviesView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 24) {
                     StreamHeading(title: "Movies", subtitle: "Make tonight a movie night.")
-                    if !categories.isEmpty { categoryStrip }
+                    if !categories.isEmpty { categoryStrip(landing: featured == nil) }
                     if let featured {
-                        TVHeroBanner(title: featured.name, subtitle: "Movie details, overview and Continue/Restart", badge: "FEATURED MOVIE", poster: featured.poster, posterKind: .movies) { playing = featured }
+                        TVEntryControl(section: .movies) {
+                            TVHeroBanner(title: featured.name, subtitle: "Movie details, overview and Continue/Restart", badge: "FEATURED MOVIE", poster: featured.poster, posterKind: .movies) { playing = featured }
+                        }
                     }
-                    else if loading { ProgressView("Loading movies…").padding(40) }
-                    if !model.providerReady { Text("Save your provider in Settings to browse movies.").foregroundStyle(.secondary) }
+                    else if loading { ProgressView("Loading movies…").padding(40).tvLanding(for: .movies, when: categories.isEmpty) }
+                    if !model.providerReady {
+                        Text("Save your provider in Settings to browse movies.").foregroundStyle(.secondary)
+                            .tvLanding(for: .movies, when: featured == nil && !loading && categories.isEmpty)
+                    }
                     if !error.isEmpty {
-                        HStack { Text(error); Button("Retry") { retry += 1 } }.foregroundStyle(.secondary)
+                        HStack {
+                            Text(error)
+                            if model.providerReady && featured == nil && categories.isEmpty && !loading {
+                                TVEntryControl(section: .movies) { Button("Retry") { retry += 1 } }
+                            } else {
+                                Button("Retry") { retry += 1 }
+                            }
+                        }.foregroundStyle(.secondary)
                     }
                     ForEach(Array(categories.prefix(count))) { category in
                         TVMovieShelf(category: category) { playing = $0 }
@@ -53,10 +65,11 @@ struct TVMoviesView: View {
         }
     }
 
-    private var categoryStrip: some View {
+    private func categoryStrip(landing: Bool) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 20) {
-                NavigationLink("All titles") { TVCatalogBrowser(kind: .movies, allowPins: false, initialCategoryID: "all") }.buttonStyle(.bordered)
+                let allTitles = NavigationLink("All titles") { TVCatalogBrowser(kind: .movies, allowPins: false, initialCategoryID: "all") }.buttonStyle(.bordered)
+                if landing { TVEntryControl(section: .movies) { allTitles } } else { allTitles }
                 ForEach(categories) { category in
                     NavigationLink { TVCatalogBrowser(kind: .movies, allowPins: false, initialCategoryID: category.id) } label: {
                         Text(category.name).font(.headline).padding(.horizontal, 22).padding(.vertical, 12)

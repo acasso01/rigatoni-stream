@@ -29,8 +29,6 @@ struct TVGuideView: View {
     @State private var loadedRetry = -1
     @State private var playing: CatalogItem?
     @FocusState private var focusedCell: String?
-    @Environment(\.tvContentFocusScope) private var contentFocus
-    @Environment(\.resetFocus) private var resetFocus
 
     private let slotMinutes = 30
     private let slotCount = 4
@@ -84,9 +82,11 @@ struct TVGuideView: View {
             Text("Save your provider in Settings to browse the guide.")
                 .foregroundStyle(TVTheme.muted)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .tvLanding(for: .guide)
         } else if store.loading && store.categories.isEmpty {
             ProgressView("Loading guide…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .tvLanding(for: .guide)
         } else {
             VStack(alignment: .leading, spacing: 0) {
                 Text("Guide")
@@ -163,8 +163,10 @@ struct TVGuideView: View {
     private func categorySidebar(_ store: TVLibraryStore) -> some View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(alignment: .leading, spacing: 16) {
-                ForEach(store.categories.filter { model.preferences.categoryVisible($0.id, kind: .live) }) { category in
-                    Button { selectedCategory = category.id } label: {
+                let categories = store.categories.filter { model.preferences.categoryVisible($0.id, kind: .live) }
+                ForEach(Array(categories.enumerated()), id: \.element.id) { index, category in
+                    let landing = category.id == selectedCategory || (selectedCategory.isEmpty && index == 0)
+                    let button = Button { selectedCategory = category.id } label: {
                         Text(category.name)
                             .font(.system(size: 23, weight: .semibold))
                             .lineLimit(2)
@@ -173,21 +175,20 @@ struct TVGuideView: View {
                             .padding(.vertical, 14)
                     }
                     .buttonStyle(TVCompactButtonStyle())
-                    .tvContentEntry(category.id == selectedCategory)
                     .background(selectedCategory == category.id ? TVTheme.accent : TVTheme.card)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .foregroundStyle(StreamTheme.text)
+                    if landing {
+                        TVEntryControl(section: .guide) { button }
+                    } else {
+                        button
+                    }
                 }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
         }
         .focusSection()
-        .onChange(of: selectedCategory) { old, new in
-            if old.isEmpty, !new.isEmpty, let contentFocus {
-                resetFocus(in: contentFocus)
-            }
-        }
     }
 
     // MARK: - EPG loading

@@ -24,17 +24,23 @@ struct TVSavedView: View {
                     Text("Save your provider in Settings to see your favorites.")
                         .font(.title3)
                         .foregroundStyle(TVTheme.muted)
+                        .tvLanding(for: .saved)
                 } else if favorites.isEmpty {
                     Text("Nothing saved yet — hold a channel, movie or show to add it here.")
                         .font(.title3)
                         .foregroundStyle(TVTheme.muted)
+                        .tvLanding(for: .saved)
                 } else {
                     LazyVGrid(
                         columns: [GridItem(.adaptive(minimum: 240), spacing: 28)],
                         spacing: 32
                     ) {
-                        ForEach(favorites) { record in
-                            savedCard(record)
+                        ForEach(Array(favorites.enumerated()), id: \.element.id) { index, record in
+                            if index == 0 {
+                                TVEntryControl(section: .saved) { savedCard(record) }
+                            } else {
+                                savedCard(record)
+                            }
                         }
                     }
                 }

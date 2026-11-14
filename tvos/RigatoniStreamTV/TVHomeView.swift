@@ -42,6 +42,7 @@ private struct TVHomeBody: View {
                     StreamHeading(title: "Welcome home", subtitle: "Continue watching and jump into your pinned channels.")
                 }
                 .padding(.top, 40)
+                .tvLanding(for: .home)
 
                 if model.providerReady { TVHistoryRail() }
 
