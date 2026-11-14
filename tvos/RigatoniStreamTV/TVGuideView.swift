@@ -11,6 +11,7 @@ import VLCKit
 // trademarks or copied assets.
 struct TVGuideView: View {
     @EnvironmentObject private var model: AppModel
+    @ObservedObject private var epgCache = EPGCache.shared
     @State private var store: TVLibraryStore?
     @State private var selectedCategory = "all"
     @State private var pinned: Set<String> = []

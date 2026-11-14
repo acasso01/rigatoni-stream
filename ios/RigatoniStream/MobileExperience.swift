@@ -303,6 +303,7 @@ struct MobileGuideView: View {
                             }
                         }
                     }
+                    EPGRefreshControl(channels: Array(items.dropFirst(page * 40).prefix(40)))
                     if loading { ProgressView("Loading guide…") }
                     if !error.isEmpty { Text(error); Button("Retry") { retry += 1 } }
                     if !loading && ordered.isEmpty && error.isEmpty && model.providerReady { Text("No visible channels in this category.").foregroundStyle(.secondary) }
@@ -376,6 +377,7 @@ struct MobileGuideView: View {
 }
 
 struct MobileGuideRow: View {
+    @ObservedObject private var epgCache = EPGCache.shared
     @EnvironmentObject private var model: AppModel
     let item: CatalogItem
     let pinned: Bool
@@ -416,7 +418,7 @@ struct MobileGuideRow: View {
         .padding(10)
         .background(StreamTheme.card, in: RoundedRectangle(cornerRadius: 16))
         .contextMenu { MobileSaveButton(record: MobileRecords.record(item)) }
-        .task(id: "\(model.libraryRevision)-\(item.scopedID)") {
+        .task(id: "\(model.libraryRevision)-\(item.scopedID)-\(epgCache.revision)") {
             programs = []; loading = true
             while !Task.isCancelled {
                 let loaded = await EPGCache.shared.programs(streamID: item.id, provider: model.provider(for: item), scope: model.epgScope(for: item))
@@ -522,5 +524,34 @@ struct MobileSavedContent: View {
             guard scope == model.preferenceKey else { return }
             episode = record.kind == "episode"; playing = item
         } catch { if scope == model.preferenceKey { notice = error.localizedDescription } }
+    }
+}
+
+struct GuideCategoryPicker: View {
+    @AppStorage("rigatoni-appearance") private var appearance = AppAppearance.dark.rawValue
+    let categories: [CatalogCategory]
+    @Binding var selected: String
+    @State private var presented = false
+    @State private var query = ""
+    var body: some View {
+        Button { presented = true } label: {
+            HStack {
+                Text(categories.first { $0.id == selected }?.name ?? "Categories").lineLimit(1)
+                Spacer(); Image(systemName: "chevron.up.chevron.down")
+            }.padding(12).background(StreamTheme.panel, in: RoundedRectangle(cornerRadius: 10))
+        }.buttonStyle(.plain)
+        .sheet(isPresented: $presented) {
+            NavigationStack {
+                List(categories.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }) { category in
+                    Button { selected = category.id; presented = false } label: {
+                        HStack {
+                            Text(category.name); Spacer()
+                            if selected == category.id { Image(systemName: "checkmark") }
+                        }
+                    }.accessibilityAddTraits(selected == category.id ? .isSelected : [])
+                }.searchable(text: $query).navigationTitle("Categories")
+                    .toolbar { Button("Done") { presented = false } }
+            }.tint(StreamTheme.accent).preferredColorScheme((AppAppearance(rawValue: appearance) ?? .dark).scheme)
+        }
     }
 }

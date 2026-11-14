@@ -3,6 +3,52 @@ import UIKit
 @testable import RigatoniStream
 
 final class CoreTests: XCTestCase {
+    @MainActor func testForcedEPGFetchBypassesCacheAndFailureCanRetry() async {
+        var calls = 0
+        let program = EPGProgram(id: "1", title: "Fresh", start: Date(), end: Date().addingTimeInterval(60), details: "")
+        let cache = EPGCache { _, _ in
+            calls += 1
+            if calls == 3 { throw AppFailure("Offline") }
+            return [program]
+        }
+        let provider = Provider(server: "https://provider.example.invalid", username: "dummy", password: "dummy")
+        _ = await cache.programs(streamID: "1", provider: provider, scope: "account")
+        _ = await cache.programs(streamID: "1", provider: provider, scope: "account")
+        XCTAssertEqual(calls, 1)
+        _ = await cache.programs(streamID: "1", provider: provider, scope: "account", forceRefresh: true)
+        XCTAssertEqual(calls, 2)
+        let retained = await cache.programs(streamID: "1", provider: provider, scope: "account", forceRefresh: true)
+        XCTAssertEqual(retained, [program])
+        _ = await cache.programs(streamID: "1", provider: provider, scope: "account", forceRefresh: true)
+        XCTAssertEqual(calls, 4)
+    }
+    @MainActor func testForcedEPGFetchDiscardsOlderInFlightResponse() async {
+        var calls = 0
+        let cache = EPGCache { _, _ in
+            calls += 1
+            let number = calls
+            if number == 1 { try? await Task.sleep(for: .milliseconds(80)) }
+            return [EPGProgram(id: String(number), title: "Program", start: Date(), end: Date().addingTimeInterval(60), details: "")]
+        }
+        let provider = Provider(server: "https://provider.example.invalid", username: "dummy", password: "dummy")
+        let older = Task { await cache.programs(streamID: "1", provider: provider, scope: "account") }
+        try? await Task.sleep(for: .milliseconds(10))
+        let fresh = await cache.programs(streamID: "1", provider: provider, scope: "account", forceRefresh: true)
+        _ = await older.value
+        let cached = await cache.programs(streamID: "1", provider: provider, scope: "account")
+        XCTAssertEqual(fresh.first?.id, "2")
+        XCTAssertEqual(cached, fresh)
+    }
+    @MainActor func testFailedEPGFetchIsNotCachedAsEmptySuccess() async {
+        var calls = 0
+        let cache = EPGCache { _, _ in calls += 1; throw AppFailure("Offline") }
+        let provider = Provider(server: "https://provider.example.invalid", username: "dummy", password: "dummy")
+        _ = await cache.programs(streamID: "1", provider: provider, scope: "account")
+        _ = await cache.programs(streamID: "1", provider: provider, scope: "account")
+        XCTAssertEqual(cache.cachedCount, 0)
+        XCTAssertEqual(calls, 2)
+    }
+
     @MainActor func testMobileRecordsExcludePlaybackAndPosterURLs() throws {
         var item = CatalogItem(id: "42", name: "Example movie", kind: .movies, fileExtension: "mkv",
                                poster: URL(string: "https://example.invalid/private-art"), categoryID: "7")
@@ -140,6 +186,40 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(MovieInformation.parse(["movie_data": ["releasedate": "2020"]]).release, "2020")
     }
 
+    func testLocalProviderRecordNormalizesNameServerAndGateway() throws {
+        XCTAssertThrowsError(try LocalProvider.make(
+            id: "device-provider", name: "Home",
+            provider: Provider(server: "https://provider.example.invalid", username: "dummy-user", password: ""),
+            gateway: ""
+        ))
+        let named = try LocalProvider.make(
+            id: "device-provider", name: "  Home  ",
+            provider: Provider(server: "https://provider.example.invalid/", username: "dummy-user", password: "dummy-provider-password"),
+            gateway: "https://homepi.test.ts.net:8443/"
+        )
+        XCTAssertEqual(named.name, "Home")
+        XCTAssertEqual(named.server, "https://provider.example.invalid")
+        XCTAssertEqual(named.gateway, "https://homepi.test.ts.net:8443")
+        XCTAssertEqual(named.displayName, "Home")
+        XCTAssertFalse(named.displayName.contains("dummy-provider-password"))
+        let unnamed = try LocalProvider.make(
+            id: "device-provider", name: "   ",
+            provider: Provider(server: "https://provider.example.invalid", username: "dummy-user", password: "dummy-provider-password"),
+            gateway: ""
+        )
+        XCTAssertEqual(unnamed.name, "")
+        XCTAssertEqual(unnamed.displayName, "provider.example.invalid")
+        XCTAssertThrowsError(try LocalProvider.make(
+            id: "device-provider", name: "",
+            provider: Provider(server: "https://provider.example.invalid", username: "dummy-user", password: "dummy-provider-password"),
+            gateway: "http://unsafe.example.invalid"
+        ))
+        let scope = CategoryPins.key(accountID: "device-provider", host: "provider.example.invalid") + "-library-v1"
+        XCTAssertFalse(scope.contains("dummy-provider-password"))
+        XCTAssertFalse(scope.contains("dummy-user"))
+        XCTAssertFalse(scope.contains("provider.example.invalid"))
+    }
+
     func testCategoryPinsKeepOrderAndRemovePins() {
         let categories = [CatalogCategory(id: "1", name: "News"), CatalogCategory(id: "2", name: "Sports"), CatalogCategory(id: "3", name: "Movies")]
         let pins = CategoryPins.toggled("2", in: [])
@@ -211,6 +291,14 @@ final class CoreTests: XCTestCase {
         XCTAssertNil(CatalogItem.parse(["stream_id": "../private"], kind: .live))
         XCTAssertEqual(CatalogItem.parse(["stream_id": "1", "container_extension": "../../bad"], kind: .movies)?.fileExtension, "mp4")
     }
+    @MainActor func testGatewayPreferenceMatchesWebsiteValidation() async throws {
+        XCTAssertEqual(try AccountAPI.gatewayOrigin("https://homepi.test.ts.net:8443/"), "https://homepi.test.ts.net:8443")
+        XCTAssertEqual(try AccountAPI.gatewayOrigin(""), "")
+        for gateway in ["http://homepi.test.ts.net", "https://example.invalid", "https://homepi.test.ts.net/private", "https://user:pass@homepi.test.ts.net"] {
+            XCTAssertThrowsError(try AccountAPI.gatewayOrigin(gateway))
+        }
+    }
+
     func testStandaloneHTTPPolicyInInstalledBuild() throws {
         for scheme in ["http", "https"] {
             for port in [80, 8080, 8000, 25461] {
@@ -224,6 +312,28 @@ final class CoreTests: XCTestCase {
         XCTAssertFalse(TransportPolicy.permits(URL(string: "file:///tmp/test")!))
         XCTAssertFalse(TransportPolicy.permits(URL(string: "http://user:pass@example.invalid")!))
         XCTAssertFalse(TransportPolicy.permits(URL(string: "http://example.invalid")!, settings: [:]))
+    }
+    func testDirectHTTPPolicyPermitsArbitraryUserConfiguredHosts() {
+        let settings: [String: Any] = ["NSAllowsArbitraryLoads": true]
+        for address in [
+            "http://provider.example.invalid:8080/movie/1.mkv",
+            "http://another.example.invalid/live/2.ts",
+            "http://192.0.2.5:8080/player_api.php"
+        ] {
+            XCTAssertTrue(TransportPolicy.permits(URL(string: address)!, settings: settings))
+        }
+        XCTAssertFalse(TransportPolicy.permits(URL(string: "http://other.example.invalid")!, settings: [:]))
+        XCTAssertTrue(TransportPolicy.permits(URL(string: "https://account.example.invalid")!, settings: [:]))
+        XCTAssertFalse(TransportPolicy.permits(URL(string: "file:///etc/passwd")!, settings: settings))
+    }
+    func testConfiguredProvidersBypassGatewayInActualBuild() throws {
+        let settings = Bundle.main.object(forInfoDictionaryKey: "NSAppTransportSecurity") as? [String: Any]
+        XCTAssertEqual(settings?["NSAllowsArbitraryLoads"] as? Bool, true, "The built Info.plist must permit user-configured HTTP IPTV hosts.")
+        for host in ["provider.example.invalid", "another.example.invalid"] {
+            let provider = Provider(server: "http://\(host)", username: "dummy", password: "dummy")
+            XCTAssertTrue(provider.usesHTTP)
+            XCTAssertFalse(provider.requiresGateway)
+        }
     }
 
     func testPictureModesPreserveAspectAndCoverScreen() {
