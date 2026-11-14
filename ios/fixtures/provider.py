@@ -65,15 +65,28 @@ class Handler(SimpleHTTPRequestHandler):
             self.path = '/media/live.m3u8' if parsed.path.startswith('/live/') else '/media/movie.mp4'
         return super().do_GET()
 
+def serve(host, port, cert=None, key=None):
+    server = ThreadingHTTPServer((host, port), Handler)
+    if cert and key:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert, key)
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--cert', required=True)
     parser.add_argument('--key', required=True)
     args = parser.parse_args()
-    http = ThreadingHTTPServer(('127.0.0.1', 8765), Handler)
-    https = ThreadingHTTPServer(('127.0.0.1', 8766), Handler)
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.load_cert_chain(args.cert, args.key)
-    https.socket = context.wrap_socket(https.socket, server_side=True)
-    threading.Thread(target=http.serve_forever, daemon=True).start()
-    https.serve_forever()
+    # The simulator resolves localhost to ::1 as well as 127.0.0.1.
+    servers = []
+    for host in ('127.0.0.1', '::1'):
+        try:
+            servers.append(serve(host, 8765))
+            servers.append(serve(host, 8766, args.cert, args.key))
+        except OSError:
+            continue
+    if not servers:
+        raise SystemExit('Could not listen on localhost.')
+    threading.Event().wait()

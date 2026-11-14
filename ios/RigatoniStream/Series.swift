@@ -189,7 +189,7 @@ final class SeriesStore: ObservableObject {
         return all
     }
 
-    static func parseSeries(_ rows: [[String: Any]], providerID: UUID? = nil) -> [SeriesItem] {
+    nonisolated static func parseSeries(_ rows: [[String: Any]], providerID: UUID? = nil) -> [SeriesItem] {
         rows.compactMap { row in
             let id = row["series_id"].map { String(describing: $0) } ?? ""
             guard !id.isEmpty, id.allSatisfy(\.isNumber) else { return nil }
@@ -206,7 +206,7 @@ final class SeriesStore: ObservableObject {
         }
     }
 
-    private static func validURL(_ string: String?) -> URL? {
+    nonisolated private static func validURL(_ string: String?) -> URL? {
         let url = string.flatMap(URL.init(string:))
         return ["https", "http"].contains(url?.scheme ?? "") ? url : nil
     }
