@@ -51,11 +51,19 @@ struct TVCatalogBrowser: View {
                     Text(selectedName.isEmpty ? kind.title : selectedName).font(.title2.bold())
                     if !model.providerReady {
                         Text("Save your provider in Settings to browse.").foregroundStyle(.secondary)
+                            .tvLanding(for: .live, when: kind == .live && orderedCategories.isEmpty)
                     } else if store.loading {
                         ProgressView("Loading \(kind.title.lowercased())…").padding(30)
+                            .tvLanding(for: .live, when: kind == .live && orderedCategories.isEmpty)
                     } else if !store.error.isEmpty {
                         Text(store.error).foregroundStyle(.secondary)
-                        Button("Retry") { store.revision += 1 }.buttonStyle(.bordered)
+                        if kind == .live && orderedCategories.isEmpty {
+                            TVEntryControl(section: .live) {
+                                Button("Retry") { store.revision += 1 }.buttonStyle(.bordered)
+                            }
+                        } else {
+                            Button("Retry") { store.revision += 1 }.buttonStyle(.bordered)
+                        }
                     } else { itemGrid(store) }
                 }.padding(.vertical, 12).padding(.horizontal, 12)
             }
@@ -102,8 +110,8 @@ struct TVCatalogBrowser: View {
                     if kind == .movies {
                         Button("All titles") { selectedCategory = "all" }.buttonStyle(.bordered)
                     }
-                    ForEach(orderedCategories) { category in
-                        Button { selectedCategory = category.id } label: {
+                    ForEach(Array(orderedCategories.enumerated()), id: \.element.id) { index, category in
+                        let row = Button { selectedCategory = category.id } label: {
                             HStack(spacing: 12) {
                                 Image(systemName: pinnedIDs.contains(category.id) ? "pin.fill" : kind.symbol)
                                     .foregroundStyle(.secondary)
@@ -119,6 +127,11 @@ struct TVCatalogBrowser: View {
                                     if let key = store.pinKey { UserDefaults.standard.set(pinnedIDs, forKey: key) }
                                 }
                             }
+                        }
+                        if kind == .live && index == 0 {
+                            TVEntryControl(section: .live) { row }
+                        } else {
+                            row
                         }
                     }
                 }.padding(.horizontal, 14).padding(.vertical, 10)

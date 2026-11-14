@@ -43,8 +43,18 @@ struct TVRootView: View {
     @State private var selection: TVSection = .home
     @FocusState private var focusedItem: TVSection?
     @Namespace private var contentFocus
-    @Environment(\.resetFocus) private var resetFocus
-    @State private var focusTask: Task<Void, Never>?
+    /// Not `@StateObject`: a request must not rebuild the rail.
+    @State private var focusRouter = TVFocusRouter()
+    /// True after a right-move until focus comes back to the rail.
+    @State private var contentOwnsFocus = false
+    /// Ignores the focus engine's one-frame fallback while entry is in flight.
+    @State private var entryGrace = false
+    @State private var entryToken = UUID()
+    @State private var entryTask: Task<Void, Never>?
+    /// After a tab swap, ignore a focus reset onto the Home rail button.
+    @State private var restoringRail = false
+    @State private var restoreToken = UUID()
+    @State private var restoreTask: Task<Void, Never>?
 
     var body: some View {
         ZStack {
@@ -57,14 +67,40 @@ struct TVRootView: View {
                         navRail
                             .focusSection()
                             .onMoveCommand { direction in
-                                if direction == .right { enter(focusedItem ?? selection) }
+                                if direction == .right { enterContent() }
                             }
                         content
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .focusSection()
                             .focusScope(contentFocus)
                             .environment(\.tvContentFocusScope, contentFocus)
-                            .onExitCommand { focusedItem = selection }
+                            .onExitCommand {
+                                // Menu while entry is still resolving is the
+                                // failed right-move, not a request to leave.
+                                if !entryGrace { returnToRail() }
+                            }
+                    }
+                    .onChange(of: focusedItem) { _, item in
+                        // Nil means focus left the rail for a content control.
+                        // That must not select Home.
+                        guard let item else { return }
+                        if entryGrace { return }
+                        if contentOwnsFocus {
+                            // Left (or a failed move) re-entered the rail.
+                            // Park on the open tab instead of whichever
+                            // button is geometrically nearest — often Home.
+                            contentOwnsFocus = false
+                            focusRouter.cancel()
+                            if item != selection { focusedItem = selection }
+                            return
+                        }
+                        if restoringRail, item == .home, selection != .home {
+                            focusedItem = selection
+                            return
+                        }
+                        guard item != selection else { return }
+                        selection = item
+                        beginRestoreWindow()
                     }
                     // Rebuild the whole tree on theme change so every
                     // TVTheme.xxx static resolves to the new theme.
@@ -75,6 +111,7 @@ struct TVRootView: View {
             }
             .foregroundStyle(TVTheme.text)
         }
+        .environmentObject(focusRouter)
     }
 
     // MARK: - Nav rail
@@ -91,7 +128,7 @@ struct TVRootView: View {
             ForEach(TVSection.allCases) { section in
                 let selected = selection == section
                 let focused = focusedItem == section
-                Button { enter(section) } label: {
+                Button { enterContent(section) } label: {
                     HStack(spacing: 14) {
                         Image(systemName: section.symbol)
                             .font(.system(size: 26))
@@ -124,15 +161,55 @@ struct TVRootView: View {
         .background(TVTheme.panel)
     }
 
-    private func enter(_ section: TVSection) {
-        selection = section
-        focusTask?.cancel()
-        focusTask = Task { @MainActor in
-            // Wait for the selected screen's focusable controls to mount.
-            try? await Task.sleep(for: .milliseconds(150))
-            guard !Task.isCancelled else { return }
-            focusedItem = nil
-            resetFocus(in: contentFocus)
+    /// Right (or a click) moves into the highlighted tab. The tab is already
+    /// selected by rail focus, so this does not swap the content view out
+    /// from under the focus engine, and it never falls back to Home when the
+    /// rail binding clears mid-move.
+    private func enterContent(_ preferred: TVSection? = nil) {
+        let highlighted = focusedItem ?? selection
+        // A content swap can dump focus onto the Home rail button for a
+        // frame. The committed tab is `selection` during that window.
+        let section = preferred ?? (restoringRail && highlighted == .home && selection != .home ? selection : highlighted)
+        if selection != section { selection = section }
+        contentOwnsFocus = true
+        entryGrace = true
+        restoringRail = false
+        let token = UUID()
+        entryToken = token
+        focusRouter.request(section)
+        entryTask?.cancel()
+        entryTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled, entryToken == token else { return }
+            entryGrace = false
+            guard contentOwnsFocus, let item = focusedItem else { return }
+            // Focus is still on the rail, so the content control did not take it.
+            // A nil binding means the entry succeeded — leave that focus alone.
+            contentOwnsFocus = false
+            focusRouter.cancel()
+            if item != section { focusedItem = section }
+        }
+    }
+
+    /// Menu, or focus returning from the content pane. Does not change tabs.
+    private func returnToRail() {
+        entryToken = UUID()
+        entryGrace = false
+        restoringRail = false
+        contentOwnsFocus = false
+        focusRouter.cancel()
+        focusedItem = selection
+    }
+
+    private func beginRestoreWindow() {
+        restoringRail = true
+        restoreTask?.cancel()
+        let token = UUID()
+        restoreToken = token
+        restoreTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled, restoreToken == token else { return }
+            restoringRail = false
         }
     }
 

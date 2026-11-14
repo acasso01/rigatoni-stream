@@ -72,4 +72,71 @@ extension View {
     func tvContentEntry(_ preferred: Bool = true) -> some View {
         modifier(TVContentEntry(preferred: preferred))
     }
+
+    /// Re-apply the content focus scope inside containers (NavigationStack,
+    /// for example) that don't inherit the outer scope's default-focus target.
+    func tvAdoptContentFocusScope() -> some View {
+        modifier(TVAdoptContentFocusScope())
+    }
+
+    /// Focusable placeholder so a tab with no other controls can still take
+    /// a right-move from the rail. `when` is false leaves the view unchanged
+    /// so a screen never installs two entry targets.
+    @ViewBuilder func tvLanding(for section: TVSection, when enabled: Bool = true) -> some View {
+        if enabled { TVEntryControl(section: section) { self.focusable() } }
+        else { self }
+    }
+}
+
+private struct TVAdoptContentFocusScope: ViewModifier {
+    @Environment(\.tvContentFocusScope) private var scope
+    @ViewBuilder func body(content: Content) -> some View {
+        if let scope { content.focusScope(scope) }
+        else { content }
+    }
+}
+
+/// Asks the selected tab to focus its entry control. Held with `@State` (not
+/// `@StateObject`) so publishing a request does not rebuild the rail.
+@MainActor
+final class TVFocusRouter: ObservableObject {
+    @Published private(set) var requested: TVSection?
+    private var generation = 0
+
+    func request(_ section: TVSection) {
+        generation += 1
+        let generation = generation
+        requested = nil
+        Task { @MainActor in
+            guard generation == self.generation else { return }
+            self.requested = section
+        }
+    }
+
+    func cancel() {
+        generation += 1
+        requested = nil
+    }
+}
+
+/// Focuses `content` when the rail moves right into `section`.
+/// The closure runs in `body` so bindings and the focus scope stay attached.
+struct TVEntryControl<Content: View>: View {
+    let section: TVSection
+    private let content: () -> Content
+    @EnvironmentObject private var router: TVFocusRouter
+    @FocusState private var focused: Bool
+
+    init(section: TVSection, @ViewBuilder content: @escaping () -> Content) {
+        self.section = section
+        self.content = content
+    }
+
+    var body: some View {
+        content()
+            .focused($focused)
+            .onChange(of: router.requested) { _, requested in
+                if requested == section { focused = true }
+            }
+    }
 }

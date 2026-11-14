@@ -49,10 +49,12 @@ private struct TVSeriesBrowser: View {
             Text(reason)
                 .foregroundStyle(TVTheme.muted)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .tvLanding(for: .shows)
 
         } else if store.loading && store.categories.isEmpty {
             ProgressView("Loading TV shows…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .tvLanding(for: .shows)
 
         } else {
             ScrollView {
@@ -60,11 +62,12 @@ private struct TVSeriesBrowser: View {
                     Text("TV Shows")
                         .font(.largeTitle.bold())
                         .padding(.top, 40)
+                        .tvLanding(for: .shows, when: store.categories.isEmpty)
 
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 16) {
-                            ForEach(store.categories) { category in
-                                Button { selectedCategory = category.id } label: {
+                            ForEach(Array(store.categories.enumerated()), id: \.element.id) { index, category in
+                                let button = Button { selectedCategory = category.id } label: {
                                     Text(category.name)
                                         .font(.headline)
                                         .padding(.horizontal, 24)
@@ -72,6 +75,11 @@ private struct TVSeriesBrowser: View {
                                 }
                                 .buttonStyle(.bordered)
                                 .tint(selectedCategory == category.id ? TVTheme.red : TVTheme.muted)
+                                if index == 0 {
+                                    TVEntryControl(section: .shows) { button }
+                                } else {
+                                    button
+                                }
                             }
                         }
                         .padding(.vertical, 8)

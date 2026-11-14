@@ -119,7 +119,6 @@ struct TVSettingsView: View {
                     settingsGroup(title: "Live TV Guide") { EPGRefreshControl() }
                     settingsGroup(title: "Personalize") {
                         NavigationLink("Themes & hidden categories / channels") { LibraryCustomizationView() }
-                            .tvContentEntry()
                 Picker("Theme", selection: $appearance) {
                     ForEach(AppAppearance.allCases) { Text($0.title).tag($0.rawValue) }
                 }.pickerStyle(.segmented)
@@ -129,7 +128,10 @@ struct TVSettingsView: View {
                              ? "Playback route: HTTPS gateway"
                              : "Playback route: direct provider")
                             .font(.footnote).foregroundStyle(TVTheme.muted)
-                        TextField("Server URL", text: $model.provider.server)
+                        TVEntryControl(section: .settings) {
+                            TextField("Server URL", text: $model.provider.server)
+                                .tvContentEntry()
+                        }
                         TextField("Username", text: $model.provider.username)
                         HStack {
                             Group {
@@ -193,6 +195,8 @@ struct TVSettingsView: View {
                 .padding(.horizontal, 60)
                 .padding(.bottom, 60)
             }
+            .tvAdoptContentFocusScope()
+            .focusSection()
             .background { StreamBackdrop() }
             .confirmationDialog(
                 "Delete your saved provider and gateway from your account?",
@@ -210,7 +214,6 @@ struct TVSettingsView: View {
         }
         .padding(28)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .focusSection()
         .background(TVTheme.panel)
         .clipShape(RoundedRectangle(cornerRadius: TVTheme.corner))
     }
