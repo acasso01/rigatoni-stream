@@ -40,8 +40,8 @@ struct TVHeroBanner: View {
                             .font(.caption.bold())
                             .padding(.horizontal, 14)
                             .padding(.vertical, 8)
-                            .background(TVTheme.accent)
-                            .foregroundStyle(.white)
+                            .background(TVTheme.accentFill)
+                            .foregroundStyle(TVTheme.onAccent)
                             .clipShape(Capsule())
                     }
                     Text(title)
@@ -66,6 +66,6 @@ struct TVHeroBanner: View {
             }
             .frame(height: 440)
         }
-        .buttonStyle(.card)
+        .buttonStyle(TVCardButtonStyle())
     }
 }

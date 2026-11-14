@@ -1,5 +1,5 @@
 name: RigatoniStreamTV
-# Generated Xcode project lives in tvos/Generated/. Run `bash setup.sh` on a Mac.
+# Generated project lives in tvos/; its Info.plist lives in Generated/.
 options:
   bundleIdPrefix: com.acasso01
   deploymentTarget:
@@ -18,8 +18,12 @@ targets:
       # tvOS-only UI lives in tvos/RigatoniStreamTV/.
       - RigatoniStreamTV
       # Shared, additive-only reuse: these files live in ios/ and are NOT copied.
+      # Shared local provider storage, networking, parsing and playback.
       # They compile into the tvOS target unchanged (catalog and poster code
       # shared with the iPhone build, plus the on-device provider Keychain).
+      - path: ../ios/RigatoniStream/DirectProviders.swift
+      - path: ../ios/RigatoniStream/ProviderManagement.swift
+      - path: ../ios/RigatoniStream/DirectPlayback.swift
       - path: ../ios/RigatoniStream/Core.swift
       - path: ../ios/RigatoniStream/Library.swift
       - path: ../ios/RigatoniStream/Discovery.swift
@@ -30,6 +34,8 @@ targets:
     info:
       path: Generated/Info.plist
       properties:
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
         CFBundleDisplayName: Ant Streams
         # IPTV provider hosts are entered by users; direct HTTP is supported.
         NSAppTransportSecurity:
@@ -44,10 +50,23 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Ant Streams
         INFOPLIST_KEY_NSHumanReadableCopyright: 'Ant Streams; VLCKit licensed under LGPL 2.1'
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        MARKETING_VERSION: '0.2.0'
-        CURRENT_PROJECT_VERSION: '2'
+        MARKETING_VERSION: '0.2.3'
+        CURRENT_PROJECT_VERSION: '5'
+  RigatoniStreamTVTests:
+    type: bundle.unit-test
+    platform: tvOS
+    sources:
+      - ../ios/RigatoniStreamTests/VaultTests.swift
+      - ../ios/RigatoniStreamTests/DirectConnectionTests.swift
+    dependencies:
+      - target: RigatoniStreamTV
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
 schemes:
   RigatoniStreamTV:
     build:
       targets:
         RigatoniStreamTV: all
+    test:
+      targets: [RigatoniStreamTVTests]
