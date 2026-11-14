@@ -1,3 +1,5 @@
+> **Native iOS/tvOS update:** use the [standalone provider setup and installation guide](../NATIVE_STANDALONE.md). Native apps now use direct providers and local Keychain profiles; older account/gateway instructions below apply only to legacy builds.
+
 # Ant Streams native iPhone test app
 
 SwiftUI interface and VLCKit playback, with Live TV and Movies. This is a native app, not a Safari wrapper. It connects directly to user-configured HTTPS and HTTP Xtream Codes providers, without requiring a Pi gateway. HTTP requests are unencrypted and may expose provider credentials or viewing activity to network observers. Prefer HTTPS provider URLs when available. VLC receives the original media (including MKV), without the Safari-compatible rolling conversion. Source resolution is retained, including HD/4K where the source, hardware, and connection support it.
@@ -75,7 +77,7 @@ VLCKit 4.0.0a25 is pinned using VideoLAN's official podspec (source commit 2e086
 TV Shows is available in the iPhone tab bar. Categories load separately; open a show to fetch seasons and episodes. Episodes use the native VLC player, retain original quality and support Continue/Restart with progress stored separately from movies. Series requires direct provider access (HTTP or HTTPS); the HTTPS gateway does not expose series yet. Existing installations can add the new source files with `bundle exec ruby update_project.rb` from `ios/`, then build and run the workspace.
 
 
-The interface update includes Dark, iOS Light and Xfinity-inspired navy themes. Apple TV has a left navigation rail with Guide and Saved, plus movie/show hero banners. The guide uses provider short-EPG data with at most four concurrent requests and a bounded, account/provider-scoped memory cache; gateway/no-EPG providers retain playable Live rows. Saved favorites persist IDs and metadata only, respect hidden movie/live categories and channels, and open movie details with Continue/Restart. New source files are added to existing Xcode projects by `bundle exec ruby update_project.rb`; signing and new direct HTTP configuration are preserved.
+The interface update includes Dark, iOS Light, Ghost and Nebula themes. Apple TV has a left navigation rail with Guide and Saved, plus movie/show hero banners. The guide uses provider short-EPG data with at most four concurrent requests and a bounded, account/provider-scoped memory cache; gateway/no-EPG providers retain playable Live rows. Saved favorites persist IDs and metadata only, respect hidden movie/live categories and channels, and open movie details with Continue/Restart. New source files are added to existing Xcode projects by `bundle exec ruby update_project.rb`; signing and new direct HTTP configuration are preserved.
 
 ### Matching the Apple TV experience
 
@@ -91,6 +93,11 @@ Run `bundle exec ruby update_project.rb` in `ios` after pulling this update so
 existing Xcode projects include MobileExperience.swift without changing signing
 or direct HTTP settings.
 
+Ghost uses #0A0A0B / #141416 surfaces and white accents. Nebula uses #060609 /
+#0E0E14 surfaces with a #A78BFA to #22D3EE accent gradient. Midnight has been
+removed from both native theme pickers; existing Midnight selections migrate to
+Nebula without changing provider profiles or preferences unrelated to appearance.
+
 ## HTTP IPTV compatibility and App Store review
 
 The app enables `NSAppTransportSecurity` → `NSAllowsArbitraryLoads = YES` for user-entered third-party HTTP IPTV servers. There is no fixed provider hostname list, and live TV, movies and series use direct provider connections through the native player. The gateway remains available for legacy/web workflows, not as a prerequisite for iOS. This setting is **app-wide**, not limited to media requests; HTTPS account and Supabase requests still use HTTPS, but ATS's extra enforcement is relaxed for the app. Do not assume HTTP provider credentials or viewing history are private from network observers. Only connect to IPTV services you are authorized to use.
@@ -105,4 +112,4 @@ Guide and Settings → Live TV Guide both offer **Refresh EPG** for direct provi
 
 Category browsing in Guide and the Live TV/Movie category browser uses a compact button opening a searchable vertical sheet. Existing category pins and hidden-content filters still apply. The sheet follows the selected theme. Guide refresh does not change provider settings, favorites, hidden channels/categories, playback, or the selected category.
 
-On-device checks: refresh while watching a channel; refresh with the provider offline and retry after reconnecting; confirm favorites/hidden content remain unchanged; search/select a category under all three themes. No provider credentials are included in automated tests.
+On-device checks: refresh while watching a channel; refresh with the provider offline and retry after reconnecting; confirm favorites/hidden content remain unchanged; search/select a category under each theme. No provider credentials are included in automated tests.

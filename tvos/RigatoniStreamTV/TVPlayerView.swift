@@ -101,7 +101,7 @@ final class TVNativePlayer: ObservableObject {
 // which lives in the iOS-only Player.swift and is not shared.
 private enum TVChannelNavigation {
     static func adjacent(in channels: [CatalogItem], currentID: String, offset: Int) -> CatalogItem? {
-        guard let current = channels.firstIndex(where: { $0.id == currentID && $0.kind == .live }) else { return nil }
+        guard let current = channels.firstIndex(where: { $0.scopedID == currentID && $0.kind == .live }) else { return nil }
         let next = current + offset
         guard channels.indices.contains(next), channels[next].kind == .live else { return nil }
         return channels[next]
@@ -117,15 +117,24 @@ private extension Double {
 // Plain UIView as the VLC drawable. tvOS needs no PiP bridge.
 private struct TVVideoSurface: UIViewRepresentable {
     let player: TVNativePlayer
+    let url: URL
+    let cache: Int
+    let isLive: Bool
+    let startSeconds: Double
 
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
         view.backgroundColor = .black
         player.attach(view)
+        player.isLive = isLive
+        player.resumeSeconds = startSeconds
+        player.play(url: url, cache: cache)
         return view
     }
 
-    func updateUIView(_ uiView: UIView, context: Context) {}
+    func updateUIView(_ uiView: UIView, context: Context) {
+        player.attach(uiView)
+    }
 }
 
 // Full-screen tvOS player.
@@ -157,16 +166,18 @@ struct TVPlayerView: View {
         self.startSeconds = startSeconds
         self.lastWatchedKind = lastWatchedKind
         self.progressID = progressID
-        _currentID = State(initialValue: item.id)
+        _currentID = State(initialValue: item.scopedID)
     }
 
     private var currentItem: CatalogItem {
-        channels.first { $0.id == currentID } ?? item
+        channels.first { $0.scopedID == currentID } ?? item
     }
+
+    private var owner: Provider { model.provider(for: currentItem) }
 
     private var playbackURL: URL? {
         currentItem.playbackURL
-            ?? (provider.requiresGateway ? nil : try? provider.streamURL(item: currentItem))
+            ?? (try? owner.streamURL(item: currentItem))
     }
 
     private var cache: Int { currentItem.kind == .live ? liveBuffer : movieBuffer }
@@ -175,7 +186,8 @@ struct TVPlayerView: View {
         ZStack {
             Color.black.ignoresSafeArea()
             if let url = playbackURL {
-                TVVideoSurface(player: player)
+                TVVideoSurface(player: player, url: url, cache: cache,
+                               isLive: currentItem.kind == .live, startSeconds: startSeconds)
                     .ignoresSafeArea()
             } else {
                 Text(provider.requiresGateway ? GatewayAccess.signInMessage : "Invalid provider settings.")
@@ -253,6 +265,12 @@ struct TVPlayerView: View {
                 }
                 .foregroundStyle(.white)
                 .transition(.opacity)
+                // Tap anywhere while the overlay is up dismisses it immediately
+                // (the tapped button's own action still runs first). Deferred a
+                // tick so channel changes / play toggles settle before hiding.
+                .simultaneousGesture(TapGesture().onEnded {
+                    DispatchQueue.main.async { hideControls() }
+                })
             }
         }
         .focusable(!controlsVisible)
@@ -273,11 +291,8 @@ struct TVPlayerView: View {
             showControls()
         }
         .onAppear {
-            player.resumeSeconds = startSeconds
             player.progressRecorder = { seconds, duration in model.saveProgress(id: progressID ?? item.id, seconds: seconds, duration: duration) }
             player.title = currentItem.name
-            player.isLive = currentItem.kind == .live
-            if let url = playbackURL { player.play(url: url, cache: cache) }
             recordHistory()
             showControls()
         }
@@ -304,13 +319,13 @@ struct TVPlayerView: View {
     }
 
     private func adjacentChannel(_ offset: Int) -> CatalogItem? {
-        TVChannelNavigation.adjacent(in: channels, currentID: currentItem.id, offset: offset)
+        TVChannelNavigation.adjacent(in: channels, currentID: currentItem.scopedID, offset: offset)
     }
 
     private func changeChannel(_ offset: Int) {
         guard let next = adjacentChannel(offset) else { return }
         hideTask?.cancel(); controlsVisible = true; seeking = false
-        currentID = next.id
+        currentID = next.scopedID
     }
 
     private func showControls() {
@@ -323,5 +338,11 @@ struct TVPlayerView: View {
             guard !Task.isCancelled, player.playing, !seeking else { return }
             withAnimation(.easeOut(duration: 0.2)) { controlsVisible = false }
         }
+    }
+
+    /// Hides the overlay immediately; the timed auto-hide stays as a fallback.
+    private func hideControls() {
+        hideTask?.cancel()
+        withAnimation(.easeOut(duration: 0.2)) { controlsVisible = false }
     }
 }
