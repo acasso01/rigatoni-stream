@@ -269,7 +269,7 @@ struct PlayerView: View {
                 PlayerSurface(player: player, url: url, cache: currentItem.kind == .live ? liveBuffer : movieBuffer, mode: displayMode, onTap: toggleControls)
                     .ignoresSafeArea()
                     .accessibilityLabel("Video. Tap to toggle playback controls.")
-            } else { Text("Invalid provider settings.") }
+            } else { Text(provider.requiresGateway ? GatewayAccess.signInMessage : "Invalid provider settings.").multilineTextAlignment(.center).padding() }
             if controlsVisible {
                 HStack(spacing: 40) {
                     if currentItem.kind == .live {
