@@ -37,7 +37,7 @@ private struct TVSeriesBrowser: View {
                 selectedCategory = ""
                 await store.loadCategories()
                 guard !Task.isCancelled else { return }
-                selectedCategory = store.categories.first?.id ?? ""
+                selectedCategory = model.preferences.browseCategories(store.categories, section: .series).first?.id ?? ""
             }
             .task(id: selectedCategory) {
                 guard !selectedCategory.isEmpty else { return }
@@ -74,7 +74,7 @@ private struct TVSeriesBrowser: View {
 
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 16) {
-                            ForEach(Array(store.categories.enumerated()), id: \.element.id) { index, category in
+                            ForEach(Array(model.preferences.browseCategories(store.categories, section: .series).enumerated()), id: \.element.id) { index, category in
                                 let button = Button { selectedCategory = category.id } label: {
                                     Text(category.name)
                                         .font(.headline)
@@ -101,7 +101,7 @@ private struct TVSeriesBrowser: View {
                             Button("Retry") { Task {
                                 if store.categories.isEmpty {
                                     await store.loadCategories()
-                                    selectedCategory = store.categories.first?.id ?? ""
+                                    selectedCategory = model.preferences.browseCategories(store.categories, section: .series).first?.id ?? ""
                                 } else { await store.loadSeries(categoryID: selectedCategory) }
                             } }
                                 .buttonStyle(TVCardButtonStyle())
@@ -110,7 +110,7 @@ private struct TVSeriesBrowser: View {
                         Text("No shows in this category.").foregroundStyle(TVTheme.muted)
                     } else {
                         if let hero = store.series.first {
-                            TVHeroBanner(title: hero.name, subtitle: "TV show", badge: "FEATURED SHOW", poster: hero.poster, posterKind: .movies) { openSeries(hero) }
+                            TVHeroBanner(title: model.preferences.seriesTitle(hero), subtitle: PosterCaption.series(year: hero.year), badge: "FEATURED SHOW", poster: hero.poster, posterKind: .movies) { openSeries(hero) }
                         }
                         LazyVGrid(
                             columns: [GridItem(.adaptive(minimum: 220), spacing: 28)],
@@ -120,7 +120,7 @@ private struct TVSeriesBrowser: View {
                                 Button { openSeries(item) } label: {
                                     VStack(alignment: .leading, spacing: 10) {
                                         TVSeriesPoster(series: item)
-                                        TVFocusTitle(title: item.name)
+                                        TVFocusTitle(title: model.preferences.seriesTitle(item))
                                             .font(.headline)
                                             .lineLimit(2)
                                             .frame(width: 200, alignment: .leading)

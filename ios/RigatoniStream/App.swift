@@ -202,7 +202,8 @@ struct SettingsView: View {
                             }
                         }.foregroundStyle(StreamTheme.text)
                     }
-                    NavigationLink("Hidden categories / channels") { LibraryCustomizationView() }
+                    LibraryFilterToggles()
+                    NavigationLink("Categories, order and names") { LibraryCustomizationView() }
                 }
                 Section("Provider") {
                     Text(model.provider.requiresGateway

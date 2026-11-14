@@ -58,7 +58,7 @@ struct TVMoviesView: View {
                 loading = true; defer { loading = false }
                 do {
                     let loaded = try await catalog.categories(kind: .movies, model: model)
-                    try Task.checkCancellation(); categories = loaded.filter { model.preferences.categoryVisible($0.id, kind: .movies) }
+                    try Task.checkCancellation(); categories = model.preferences.browseCategories(loaded, section: .movies)
                     if let first = categories.first {
                         let items = try await catalog.items(kind: .movies, category: first.id, model: model)
                         try Task.checkCancellation(); featured = items.first { $0.poster != nil } ?? items.first
@@ -97,7 +97,7 @@ struct TVMoviesView: View {
             LinearGradient(colors: [.clear, .black.opacity(0.2), .black.opacity(0.92)], startPoint: .top, endPoint: .bottom)
             VStack(alignment: .leading, spacing: 18) {
                 Text("IN THE SPOTLIGHT").font(.caption.weight(.semibold)).tracking(4)
-                Text(item.name).font(.system(size: 48, weight: .bold)).lineLimit(2)
+                Text(model.preferences.itemTitle(item)).font(.system(size: 48, weight: .bold)).lineLimit(2)
                 Button { openDetail(item) } label: { Label("Watch movie", systemImage: "play.fill").padding(.horizontal, 22) }
                     .buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black)
             }.padding(40)

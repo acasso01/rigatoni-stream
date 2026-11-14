@@ -36,13 +36,14 @@ struct TVGuideView: View {
 
     private var selectedName: String {
         if selectedCategory == "all" { return "All Channels" }
-        return store?.categories.first { $0.id == selectedCategory }?.name ?? "Guide"
+        guard let store else { return "Guide" }
+        return model.preferences.browseCategories(store.categories, section: .live).first { $0.id == selectedCategory }?.name ?? "Guide"
     }
 
     // Pinned channels always float to the top, in every category view.
     private var ordered: [CatalogItem] {
         guard let store else { return [] }
-        let visible = store.items.filter(model.preferences.visible)
+        let visible = store.items.filter { model.preferences.accepts($0, categories: store.categories) }
         return visible.filter { pinned.contains($0.scopedID) } + visible.filter { !pinned.contains($0.scopedID) }
     }
 
@@ -191,7 +192,7 @@ struct TVGuideView: View {
             pinnedCatIDs = PinnedCategories.read(key: model.pinKey)
             await store.loadCategories()
             guard !Task.isCancelled else { return }
-            let ids = Set(store.categories.filter { model.preferences.categoryVisible($0.id, kind: .live) }.map(\.id))
+            let ids = Set(model.preferences.browseCategories(store.categories, section: .live).map(\.id))
             if selectedCategory != "all", !ids.contains(selectedCategory) { selectedCategory = "all" }
         }
         .task(id: "\(selectedCategory)-\(model.libraryRevision)-\(retry)") {
@@ -277,7 +278,7 @@ struct TVGuideView: View {
             ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     categoryRow(id: "all", name: "All")
-                    ForEach(orderedCats(store.categories.filter { model.preferences.categoryVisible($0.id, kind: .live) })) { category in
+                    ForEach(orderedCats(model.preferences.browseCategories(store.categories, section: .live))) { category in
                         categoryRow(id: category.id, name: category.name)
                     }
                 }
@@ -385,6 +386,7 @@ private struct TVGuideRow: View {
 }
 
 private struct TVGuideRowLabel: View {
+    @EnvironmentObject private var model: AppModel
     @Environment(\.isFocused) private var focused
     let channel: CatalogItem
     let nowNext: EPGNowNext
@@ -405,7 +407,7 @@ private struct TVGuideRowLabel: View {
             .frame(width: 124)
 
             VStack(alignment: .leading, spacing: 8) {
-                Text(nowNext.now?.title ?? (loading ? "Loading…" : channel.name))
+                Text(nowNext.now?.title ?? (loading ? "Loading…" : model.preferences.itemTitle(channel)))
                     .font(.system(size: 30, weight: .semibold))
                     .lineLimit(1)
                 if let next = nowNext.next {
@@ -450,7 +452,7 @@ extension TVGuideView {
                         Text("Preview unavailable")
                             .font(.system(size: 22, weight: .medium))
                             .foregroundStyle(TVTheme.muted)
-                        Text(item.name)
+                        Text(model.preferences.itemTitle(item))
                             .font(.system(size: 20))
                             .foregroundStyle(TVTheme.muted)
                             .lineLimit(1)
@@ -479,7 +481,7 @@ extension TVGuideView {
                                 .padding(.horizontal, 10).padding(.vertical, 5)
                                 .background(.white.opacity(0.22), in: Capsule())
                         }
-                        Text(item.name)
+                        Text(model.preferences.itemTitle(item))
                             .font(.system(size: 27, weight: .semibold))
                             .lineLimit(1)
                         Text(previewNowTitle.isEmpty ? "Live" : previewNowTitle)

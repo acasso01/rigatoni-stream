@@ -31,6 +31,7 @@ targets:
       - path: ../ios/RigatoniStream/EPG.swift
       - path: ../ios/RigatoniStream/Saved.swift
       - path: ../ios/RigatoniStream/LocalProviders.swift
+      - path: ../ios/RigatoniStream/CatalogPresentation.swift
     info:
       path: Generated/Info.plist
       properties:

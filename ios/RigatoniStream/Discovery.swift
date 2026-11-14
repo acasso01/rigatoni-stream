@@ -19,6 +19,10 @@ final class SessionCatalog: ObservableObject {
     private var combinedCompleted: [LibraryKind: CatalogLoadResult] = [:]
     private var combinedFullJobs: [LibraryKind: Task<CatalogLoadResult, Error>] = [:]
 
+    func knownCategories(kind: LibraryKind) -> [CatalogCategory] {
+        if let combined = combinedCategoryLists[kind], !combined.isEmpty { return combined }
+        return categoryLists[kind] ?? []
+    }
     func reset() {
         generation += 1
         PosterMemory.shared.removeAllObjects()
@@ -210,18 +214,10 @@ final class SessionCatalog: ObservableObject {
 
 #if os(iOS)
 struct MovieCard: View {
+    @EnvironmentObject private var model: AppModel
     let item: CatalogItem
-    @AppStorage("rigatoni-appearance") private var appearance = "dark"
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ProviderPoster(url: item.poster, kind: .movies)
-                .aspectRatio(2.0 / 3.0, contentMode: .fit)
-                .clipShape(RoundedRectangle(cornerRadius: StreamTheme.corner))
-            Text(item.name).font(.subheadline.weight(.semibold)).lineLimit(2)
-                .foregroundStyle(StreamTheme.text(for: AppAppearance(rawValue: appearance) ?? .dark))
-                .frame(maxWidth: .infinity, minHeight: 48, alignment: .topLeading).padding(10)
-        }.background(StreamTheme.panel(for: AppAppearance(rawValue: appearance) ?? .dark))
-            .clipShape(RoundedRectangle(cornerRadius: StreamTheme.corner))
+        PosterTile(title: model.preferences.itemTitle(item), caption: PosterCaption.film(year: item.year), poster: item.poster)
             .contextMenu { MobileSaveButton(record: MobileRecords.record(item)) }
     }
 }
@@ -263,7 +259,7 @@ struct MoviesHomeView: View {
                     }
                     if let featured {
                         Button { playing = featured } label: {
-                            MobileHero(title: featured.name, poster: featured.poster)
+                            MobileHero(title: model.preferences.itemTitle(featured), poster: featured.poster)
                         }.buttonStyle(.plain).padding(.horizontal, 16)
                     } else if featuredLoading && model.providerReady {
                         ProgressView("Loading movies…").frame(maxWidth: .infinity).padding(40)
@@ -297,7 +293,7 @@ struct MoviesHomeView: View {
                 do {
                     let loaded = try await catalog.categories(kind: .movies, model: model)
                     try Task.checkCancellation()
-                    categories = loaded.filter { model.preferences.categoryVisible($0.id, kind: .movies) }
+                    categories = model.preferences.browseCategories(loaded, section: .movies)
                     if let first = categories.first {
                         let items = try await catalog.items(kind: .movies, category: first.id, model: model)
                         try Task.checkCancellation()
@@ -416,7 +412,7 @@ struct GlobalSearchView: View {
                                 HStack(spacing: 14) {
                                     ProviderPoster(url: hit.item.poster, kind: hit.item.kind).frame(width: 64, height: 90).clipShape(RoundedRectangle(cornerRadius: 7))
                                     VStack(alignment: .leading, spacing: 5) {
-                                        Text(hit.item.name).font(.headline).lineLimit(2)
+                                        Text(model.preferences.itemTitle(hit.item)).font(.headline).lineLimit(2)
                                         Label(hit.item.kind.title, systemImage: hit.item.kind.symbol).font(.caption).foregroundStyle(.secondary)
                                     }
                                     Spacer(); Image(systemName: "play.circle").font(.title2)
@@ -433,7 +429,7 @@ struct GlobalSearchView: View {
                                         HStack(spacing: 14) {
                                             ProviderPoster(url: series.poster, kind: .movies).frame(width: 64, height: 90).clipShape(RoundedRectangle(cornerRadius: 7))
                                             VStack(alignment: .leading, spacing: 5) {
-                                                Text(series.name).font(.headline).lineLimit(2)
+                                                Text(model.preferences.seriesTitle(series)).font(.headline).lineLimit(2)
                                                 Label("TV Show", systemImage: "play.tv").font(.caption).foregroundStyle(.secondary)
                                             }
                                             Spacer(); Image(systemName: "chevron.right").font(.title2).foregroundStyle(.secondary)
@@ -471,7 +467,9 @@ struct GlobalSearchView: View {
                 limit = 60
                 guard hasQuery else { results = []; return }
                 do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
-                let snapshot = LibraryKind.allCases.flatMap { catalog.searchable[$0] ?? [] }.filter(model.preferences.visible)
+                let snapshot = LibraryKind.allCases.flatMap { kind in
+                    (catalog.searchable[kind] ?? []).filter { model.preferences.accepts($0, categories: catalog.knownCategories(kind: kind)) }
+                }
                 let term = query; let choice = filter
                 let worker = Task.detached(priority: .userInitiated) { UnifiedSearch.matches(snapshot, query: term, filter: choice) }
                 let found = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
@@ -510,8 +508,45 @@ struct MovieProgress: Codable, Equatable {
 struct LibraryPreferences: Codable {
     var hiddenLiveCategories: Set<String> = []
     var hiddenMovieCategories: Set<String> = []
+    var hiddenSeriesCategories: Set<String> = []
     var hiddenChannels: Set<String> = []
     var progress: [String: MovieProgress] = [:]
+    var categoryOrder: [String: [String]] = [:]
+    var renames: [String: String] = [:]
+    /// On hides categories explicitly tagged for another country. Untagged categories stay.
+    var unitedStatesOnly: Bool = true
+    /// Display-only cleanup of category and channel names.
+    var cleanNames: Bool = true
+
+    init() {}
+
+    enum CodingKeys: String, CodingKey {
+        case hiddenLiveCategories, hiddenMovieCategories, hiddenSeriesCategories, hiddenChannels, progress, categoryOrder, renames, unitedStatesOnly, cleanNames
+    }
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        hiddenLiveCategories = try container.decodeIfPresent(Set<String>.self, forKey: .hiddenLiveCategories) ?? []
+        hiddenMovieCategories = try container.decodeIfPresent(Set<String>.self, forKey: .hiddenMovieCategories) ?? []
+        hiddenSeriesCategories = try container.decodeIfPresent(Set<String>.self, forKey: .hiddenSeriesCategories) ?? []
+        hiddenChannels = try container.decodeIfPresent(Set<String>.self, forKey: .hiddenChannels) ?? []
+        progress = try container.decodeIfPresent([String: MovieProgress].self, forKey: .progress) ?? [:]
+        categoryOrder = try container.decodeIfPresent([String: [String]].self, forKey: .categoryOrder) ?? [:]
+        renames = try container.decodeIfPresent([String: String].self, forKey: .renames) ?? [:]
+        unitedStatesOnly = try container.decodeIfPresent(Bool.self, forKey: .unitedStatesOnly) ?? true
+        cleanNames = try container.decodeIfPresent(Bool.self, forKey: .cleanNames) ?? true
+    }
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(hiddenLiveCategories, forKey: .hiddenLiveCategories)
+        try container.encode(hiddenMovieCategories, forKey: .hiddenMovieCategories)
+        try container.encode(hiddenSeriesCategories, forKey: .hiddenSeriesCategories)
+        try container.encode(hiddenChannels, forKey: .hiddenChannels)
+        try container.encode(progress, forKey: .progress)
+        try container.encode(categoryOrder, forKey: .categoryOrder)
+        try container.encode(renames, forKey: .renames)
+        try container.encode(unitedStatesOnly, forKey: .unitedStatesOnly)
+        try container.encode(cleanNames, forKey: .cleanNames)
+    }
     static func read(key: String?) -> Self {
         guard let key, let data = UserDefaults.standard.data(forKey: key), let value = try? JSONDecoder().decode(Self.self, from: data) else { return Self() }
         return value
@@ -521,7 +556,7 @@ struct LibraryPreferences: Codable {
         UserDefaults.standard.set(data, forKey: key)
     }
     func categoryVisible(_ id: String, kind: LibraryKind) -> Bool {
-        !(kind == .live ? hiddenLiveCategories : hiddenMovieCategories).contains(id)
+        categoryVisible(id, section: CatalogSection(kind))
     }
     func visible(_ item: CatalogItem) -> Bool {
         categoryVisible(item.categoryID, kind: item.kind) && (item.kind != .live || !hiddenChannels.contains(item.scopedID))
@@ -553,12 +588,13 @@ struct LibraryCustomizationView: View {
     @AppStorage("rigatoni-appearance") private var appearance = AppAppearance.dark.rawValue
     @State private var categories: [CatalogCategory] = []
     @State private var channels: [CatalogItem] = []
-    @State private var kind = LibraryKind.live
+    @State private var section = CatalogSection.live
     @State private var selected = ""
     @State private var query = ""
     @State private var error = ""
     @State private var loading = false
     @State private var limit = 100
+    @State private var drafts: [String: String] = [:]
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
@@ -566,65 +602,130 @@ struct LibraryCustomizationView: View {
                 Picker("Theme", selection: $appearance) {
                     ForEach(AppAppearance.allCases) { Text($0.title).tag($0.rawValue) }
                 }
-                Text("Themes, hidden content and watch progress are saved on this device. Provider credentials are stored securely in Keychain.").font(.footnote).foregroundStyle(.secondary)
-                Picker("Manage", selection: $kind) { ForEach(LibraryKind.allCases) { Text($0.title).tag($0) } }
+                Text("Themes, hidden categories, order and names are saved on this device for the current provider. Credentials stay in the Keychain.").font(.footnote).foregroundStyle(.secondary)
+                LibraryFilterToggles()
+                Picker("Manage", selection: $section) { ForEach(CatalogSection.allCases) { Text($0.title).tag($0) } }
                 TextField("Find category or channel", text: $query)
-                Text("Visible categories").font(.title2.bold())
-                Text("Turn off categories you don’t watch. Hidden titles also disappear from search.").foregroundStyle(.secondary)
-                Button("Show all categories & channels") {
-                    model.preferences.hiddenLiveCategories = []; model.preferences.hiddenMovieCategories = []; model.preferences.hiddenChannels = []
-                    model.savePreferences()
-                }
-                if kind == .live && !categories.isEmpty {
-                    Button("Show only categories marked US / USA") {
-                        for category in categories {
-                            let isUS = category.name.range(of: #"^\s*\[?(US|USA)(\]|\s|\||:|-|$)"#, options: [.regularExpression, .caseInsensitive]) != nil
-                            model.preferences.setCategory(category.id, kind: .live, visible: isUS)
-                        }
+                Text("Categories").font(.title2.bold())
+                Text("Hide a category to remove it from browsing, the guide and Home. Move changes the order. A custom name replaces the automatic cleanup for that item only.").foregroundStyle(.secondary)
+                HStack {
+                    Button("Show all categories & channels") {
+                        model.preferences.hiddenLiveCategories = []
+                        model.preferences.hiddenMovieCategories = []
+                        model.preferences.hiddenSeriesCategories = []
+                        model.preferences.hiddenChannels = []
                         model.savePreferences()
                     }
-                    Text("Uses the provider’s category names. Unmarked categories are hidden too; Show all restores them.").font(.footnote).foregroundStyle(.secondary)
+                    Button("Reset order") {
+                        model.preferences.categoryOrder[section.rawValue] = nil
+                        model.savePreferences()
+                    }
                 }
                 if loading { ProgressView("Loading…") }
                 if !error.isEmpty { Text(error).foregroundStyle(.secondary); Button("Retry") { Task { await load() } } }
-                LazyVStack(alignment: .leading, spacing: 14) {
-                    ForEach(categories.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }) { category in
-                        Toggle(category.name, isOn: Binding(get: { model.preferences.categoryVisible(category.id, kind: kind) }, set: {
-                            model.preferences.setCategory(category.id, kind: kind, visible: $0); model.savePreferences()
-                        }))
+                LazyVStack(alignment: .leading, spacing: 16) {
+                    ForEach(listedCategories) { category in
+                        categoryRow(category)
                     }
                 }
-                if kind == .live && !categories.isEmpty {
-                    Text("Visible channels").font(.title2.bold())
+                if section == .live && !categories.isEmpty {
+                    Text("Channels").font(.title2.bold())
                     Picker("Channel category", selection: $selected) {
                         Text("Choose a category").tag("")
-                        ForEach(categories) { Text($0.name).tag($0.id) }
+                        ForEach(categories) { Text(model.preferences.categoryTitle($0, section: .live)).tag($0.id) }
                     }
-                    LazyVStack(alignment: .leading, spacing: 14) {
-                        ForEach(Array(channels.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }.prefix(limit))) { item in
-                            Toggle(item.name, isOn: Binding(get: { !model.preferences.hiddenChannels.contains(item.scopedID) }, set: {
-                                if $0 { model.preferences.hiddenChannels.remove(item.scopedID) } else { model.preferences.hiddenChannels.insert(item.scopedID) }
-                                model.savePreferences()
-                            }))
-                        }
+                    LazyVStack(alignment: .leading, spacing: 16) {
+                        ForEach(Array(listedChannels.prefix(limit))) { item in channelRow(item) }
                     }
-                    if channels.count > limit { Button("More channels") { limit += 100 } }
+                    if listedChannels.count > limit { Button("More channels") { limit += 100 } }
                 }
             }.padding(28).frame(maxWidth: 1100, alignment: .leading).frame(maxWidth: .infinity)
-        }.background { StreamBackdrop() }.navigationTitle("Appearance & library")
-        .task(id: "\(kind.rawValue)-\(model.provider.server)") { await load() }
+        }.background { StreamBackdrop() }.navigationTitle("Categories & names")
+        .task(id: "\(section.rawValue)-\(model.provider.server)") { await load() }
         .task(id: selected) {
-            channels = []; limit = 100; guard kind == .live, !selected.isEmpty else { return }
+            channels = []; limit = 100; guard section == .live, !selected.isEmpty else { return }
             do { channels = try await model.catalog.items(kind: .live, category: selected, model: model) }
             catch { if !Task.isCancelled { self.error = error.localizedDescription } }
         }
+    }
+    private var listedCategories: [CatalogCategory] {
+        model.preferences.managedOrder(categories, section: section).filter { category in
+            query.isEmpty || category.name.localizedCaseInsensitiveContains(query) || model.preferences.categoryTitle(category, section: section).localizedCaseInsensitiveContains(query)
+        }
+    }
+    private var listedChannels: [CatalogItem] {
+        channels.filter { item in
+            query.isEmpty || item.name.localizedCaseInsensitiveContains(query) || model.preferences.itemTitle(item).localizedCaseInsensitiveContains(query)
+        }
+    }
+    private func categoryRow(_ category: CatalogCategory) -> some View {
+        let key = LibraryPreferences.renameKey(section: section, role: "category", id: category.id)
+        let title = model.preferences.categoryTitle(category, section: section)
+        return VStack(alignment: .leading, spacing: 8) {
+            Toggle(title, isOn: Binding(get: { model.preferences.categoryVisible(category.id, section: section) }, set: {
+                model.preferences.setSection(category.id, section: section, visible: $0); model.savePreferences()
+            }))
+            if title != category.name { Text(category.name).font(.caption).foregroundStyle(.secondary) }
+            if model.preferences.unitedStatesOnly && !CategoryRegion.included(category.name, unitedStatesOnly: true) {
+                Text("Hidden while U.S. only is on").font(.caption).foregroundStyle(.secondary)
+            }
+            HStack {
+                TextField("Custom name", text: draft(key))
+                Button("Save name") { commit(key) }
+                if model.preferences.renames[key] != nil {
+                    Button("Use automatic") { model.preferences.setRename(nil, key: key); drafts[key] = ""; model.savePreferences() }
+                }
+            }
+            if query.isEmpty {
+                HStack {
+                    Button("Move up") { model.preferences.moveCategory(category.id, section: section, direction: -1, among: categories); model.savePreferences() }
+                    Button("Move down") { model.preferences.moveCategory(category.id, section: section, direction: 1, among: categories); model.savePreferences() }
+                }.buttonStyle(.bordered)
+            }
+        }
+    }
+    private func channelRow(_ item: CatalogItem) -> some View {
+        let key = LibraryPreferences.renameKey(section: .live, role: "item", id: item.scopedID)
+        return VStack(alignment: .leading, spacing: 8) {
+            Toggle(model.preferences.itemTitle(item), isOn: Binding(get: { !model.preferences.hiddenChannels.contains(item.scopedID) }, set: {
+                if $0 { model.preferences.hiddenChannels.remove(item.scopedID) } else { model.preferences.hiddenChannels.insert(item.scopedID) }
+                model.savePreferences()
+            }))
+            if model.preferences.itemTitle(item) != item.name { Text(item.name).font(.caption).foregroundStyle(.secondary) }
+            HStack {
+                TextField("Custom name", text: draft(key))
+                Button("Save name") { commit(key) }
+                if model.preferences.renames[key] != nil {
+                    Button("Use automatic") { model.preferences.setRename(nil, key: key); drafts[key] = ""; model.savePreferences() }
+                }
+            }
+        }
+    }
+    private func draft(_ key: String) -> Binding<String> {
+        Binding(get: { drafts[key] ?? model.preferences.renames[key] ?? "" }, set: { drafts[key] = $0 })
+    }
+    private func commit(_ key: String) {
+        model.preferences.setRename(drafts[key] ?? model.preferences.renames[key], key: key)
+        model.savePreferences()
     }
     private func load() async {
         categories = []; channels = []; selected = ""; error = ""; loading = true
         defer { loading = false }
         guard model.providerReady else { error = "Save a provider first."; return }
-        do { categories = try await model.catalog.categories(kind: kind, model: model) }
-        catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+        do {
+            switch section {
+            case .series:
+                let store = SeriesStore(model: model)
+                await store.loadCategories()
+                if let reason = store.unavailableReason { error = reason }
+                else if !store.error.isEmpty { error = store.error }
+                else { categories = store.categories }
+            case .live:
+                categories = try await model.catalog.categories(kind: .live, model: model)
+            case .movies:
+                categories = try await model.catalog.categories(kind: .movies, model: model)
+            }
+        } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
     }
 }
 
@@ -669,7 +770,7 @@ struct MovieDetailView: View {
                     ProviderPoster(url: item.poster, kind: .movies).aspectRatio(2.0 / 3.0, contentMode: .fit)
                         .frame(maxWidth: posterWidth).clipShape(RoundedRectangle(cornerRadius: 18))
                     VStack(alignment: .leading, spacing: 18) {
-                        Text(item.name).font(.largeTitle.bold())
+                        Text(model.preferences.itemTitle(item)).font(.largeTitle.bold())
                         if !info.release.isEmpty { Text("Released \(info.release)").foregroundStyle(.secondary) }
                         if !info.genre.isEmpty { Text(info.genre).foregroundStyle(.secondary) }
                         if let saved = model.preferences.progress[item.id] {

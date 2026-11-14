@@ -65,7 +65,7 @@ struct TVRootView: View {
 
     var body: some View {
         ZStack {
-            TVTheme.background.ignoresSafeArea()
+            StreamBackdrop()
             Group {
                 if model.starting {
                     ProgressView("Opening Ant Streams…")
@@ -153,7 +153,7 @@ struct TVRootView: View {
                         else { focused ? TVTheme.focusCard : Color.clear }
                     }
                     .foregroundStyle(selected ? TVTheme.onAccent : TVTheme.text)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                 }
                 .buttonStyle(TVCompactButtonStyle())
                 .focused($focusedItem, equals: section)

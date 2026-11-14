@@ -191,7 +191,8 @@ struct TVSettingsView: View {
 
                     settingsGroup(title: "Live TV Guide") { EPGRefreshControl() }
                     settingsGroup(title: "Personalize") {
-                        NavigationLink("Themes & hidden categories / channels") { LibraryCustomizationView() }
+                        LibraryFilterToggles()
+                        NavigationLink("Categories, order and names") { LibraryCustomizationView() }
                 Picker("Theme", selection: $appearance) {
                     ForEach(AppAppearance.allCases) { Text($0.title).tag($0.rawValue) }
                 }.pickerStyle(.segmented)

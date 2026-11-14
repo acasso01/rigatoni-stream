@@ -100,6 +100,12 @@ struct CatalogItem: Identifiable, Equatable {
     var playbackURL: URL? = nil
     var categoryID: String = ""
     var number: String = "" // Channel number (Xtream `num`); empty for M3U playlists.
+    /// Provider `added` / `last_modified` unix time. Zero when the provider omits it.
+    var added: Int = 0
+    /// Normalized 0–10 score from `rating` or `rating_5based`.
+    var rating: Double = 0
+    /// Four-digit release year when the provider sends one.
+    var year: String = ""
     /// Owning provider in combined-library mode. Nil means the currently
     /// selected provider (separate mode, and all pre-combined data).
     var providerID: UUID? = nil
@@ -125,7 +131,10 @@ struct CatalogItem: Identifiable, Equatable {
                            fileExtension: allowed.contains(ext) ? ext : "mp4",
                            poster: ["https", "http"].contains(image?.scheme ?? "") ? image : nil,
                            categoryID: row["category_id"].map { String(describing: $0) } ?? "",
-                           number: row["num"].map { String(describing: $0) } ?? "")
+                           number: row["num"].map { String(describing: $0) } ?? "",
+                           added: ProviderFields.added(from: row),
+                           rating: ProviderFields.rating(from: row),
+                           year: ProviderFields.year(from: row))
     }
 }
 

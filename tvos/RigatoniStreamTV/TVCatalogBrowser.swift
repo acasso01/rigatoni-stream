@@ -25,7 +25,7 @@ struct TVCatalogBrowser: View {
 
     private var orderedCategories: [CatalogCategory] {
         guard let store else { return [] }
-        let shown = store.categories.filter { model.preferences.categoryVisible($0.id, kind: kind) }
+        let shown = model.preferences.browseCategories(store.categories, section: CatalogSection(kind))
         return allowPins ? CategoryPins.ordered(shown, pins: pinnedIDs) : shown
     }
 
@@ -162,7 +162,7 @@ struct TVCatalogBrowser: View {
 
     @ViewBuilder
     private func itemGrid(_ store: TVLibraryStore) -> some View {
-        let shown = store.items.filter(model.preferences.visible)
+        let shown = store.items.filter { model.preferences.accepts($0, categories: store.categories) }
         let visible = Array(shown.prefix(visibleCount))
         if visible.isEmpty {
             Text("No titles available.").foregroundStyle(TVTheme.muted)
@@ -174,7 +174,7 @@ struct TVCatalogBrowser: View {
                             HStack(spacing: 22) {
                                 ProviderPoster(url: item.poster, kind: .live).frame(width: 100, height: 56)
                                     .clipShape(RoundedRectangle(cornerRadius: 14))
-                                Text(item.name).font(.headline).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                                Text(model.preferences.itemTitle(item)).font(.headline).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
                                 Image(systemName: "play.circle.fill").font(.title2).foregroundStyle(.secondary)
                             }.padding(.horizontal, 22).frame(minHeight: 86)
                         }.buttonStyle(TVCatalogRowStyle(selected: false)).focused($focusedCard, equals: item.id)
@@ -212,6 +212,7 @@ struct TVCatalogBrowser: View {
 // One focusable catalog card. Poster loading reuses the shared
 // ProviderPoster view (same bounded in-memory fetch as the iPhone build).
 struct TVCatalogCard: View {
+    @EnvironmentObject private var model: AppModel
     let item: CatalogItem
     @Environment(\.isFocused) private var focused
     @AppStorage("rigatoni-appearance") private var appearance = "dark"
@@ -224,10 +225,15 @@ struct TVCatalogCard: View {
             ProviderPoster(url: item.poster, kind: item.kind)
                 .frame(width: cardWidth, height: cardHeight)
                 .clipShape(RoundedRectangle(cornerRadius: TVTheme.corner))
-            Text(item.name)
-                .font(.callout.weight(.medium))
+            Text(model.preferences.itemTitle(item))
+                .font(.headline.weight(.semibold))
                 .lineLimit(2)
                 .frame(width: cardWidth, alignment: .leading)
+            if item.kind == .movies {
+                Text(PosterCaption.film(year: item.year))
+                    .font(.caption)
+                    .foregroundStyle(focused ? Color.black.opacity(0.65) : TVTheme.muted)
+            }
         }
         .foregroundStyle(focused ? Color.white : StreamTheme.text(for: AppAppearance(rawValue: appearance) ?? .dark))
     }

@@ -10,7 +10,7 @@ Dir.glob('RigatoniStreamTV/*.swift').map { |path| File.basename(path) }.sort.eac
   file = group.files.find { |candidate| candidate.path == name } || group.new_file(name)
   target.source_build_phase.add_file_reference(file) unless target.source_build_phase.files_references.include?(file)
 end
-%w[Core.swift Library.swift DirectProviders.swift ProviderManagement.swift DirectPlayback.swift Discovery.swift Series.swift EPG.swift Saved.swift LocalProviders.swift].each do |name|
+%w[Core.swift Library.swift DirectProviders.swift ProviderManagement.swift DirectPlayback.swift Discovery.swift Series.swift EPG.swift Saved.swift LocalProviders.swift CatalogPresentation.swift].each do |name|
   unless target.source_build_phase.files_references.any? { |file| file.path&.end_with?(name) }
     shared = project.main_group.children.find { |candidate| candidate.name == 'Shared' } || project.main_group.new_group('Shared')
     file = shared.new_file('../ios/RigatoniStream/' + name)

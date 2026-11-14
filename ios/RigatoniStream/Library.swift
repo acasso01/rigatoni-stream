@@ -265,7 +265,7 @@ enum StreamTheme {
     static func background(for appearance: AppAppearance) -> Color {
         switch appearance {
         case .light: return rgb(242, 242, 247)
-        case .dark: return rgb(9, 9, 11)
+        case .dark: return rgb(8, 7, 6)
         case .ghost: return rgb(10, 10, 11)
         case .nebula: return rgb(6, 6, 9)
         }
@@ -273,7 +273,7 @@ enum StreamTheme {
     static func panel(for appearance: AppAppearance) -> Color {
         switch appearance {
         case .light: return rgb(255, 255, 255)
-        case .dark: return rgb(23, 23, 27)
+        case .dark: return rgb(24, 20, 16)
         case .ghost: return rgb(20, 20, 22)
         case .nebula: return rgb(14, 14, 20)
         }
@@ -282,7 +282,7 @@ enum StreamTheme {
     static func text(for appearance: AppAppearance) -> Color {
         switch appearance {
         case .light: return rgb(28, 28, 30)
-        case .dark: return rgb(250, 250, 250)
+        case .dark: return rgb(247, 244, 239)
         case .ghost: return .white
         case .nebula: return rgb(237, 235, 245)
         }
@@ -290,7 +290,7 @@ enum StreamTheme {
     static func muted(for appearance: AppAppearance) -> Color {
         switch appearance {
         case .light: return rgb(107, 114, 128)
-        case .dark: return rgb(161, 161, 170)
+        case .dark: return rgb(176, 164, 148)
         case .ghost: return rgb(161, 161, 170)
         case .nebula: return rgb(143, 141, 163)
         }
@@ -299,13 +299,17 @@ enum StreamTheme {
         switch appearance {
         case .ghost: return .white
         case .nebula: return rgb(167, 139, 250)
-        default: return rgb(229, 9, 20)
+        case .dark: return rgb(232, 148, 74)
+        case .light: return rgb(229, 9, 20)
         }
     }
     static func accentFill(for appearance: AppAppearance) -> LinearGradient {
-        let colors = appearance == .nebula
-            ? [rgb(167, 139, 250), rgb(34, 211, 238)]
-            : [accent(for: appearance), accent(for: appearance)]
+        let colors: [Color]
+        switch appearance {
+        case .nebula: colors = [rgb(167, 139, 250), rgb(34, 211, 238)]
+        case .dark: colors = [rgb(242, 166, 90), rgb(214, 92, 70)]
+        default: colors = [accent(for: appearance), accent(for: appearance)]
+        }
         return LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing)
     }
     // White/aurora fills need dark labels, including selected chips and badges.
@@ -329,8 +333,19 @@ enum StreamTheme {
 struct StreamBackdrop: View {
     @AppStorage("rigatoni-appearance") private var appearance = "dark"
     var body: some View {
-        LinearGradient(colors: [StreamTheme.panel(for: AppAppearance(rawValue: appearance) ?? .dark), StreamTheme.background(for: AppAppearance(rawValue: appearance) ?? .dark)],
-                       startPoint: .topLeading, endPoint: .bottomTrailing).ignoresSafeArea()
+        let theme = AppAppearance(rawValue: appearance) ?? .dark
+        ZStack {
+            StreamTheme.background(for: theme)
+            if theme != .light {
+                RadialGradient(colors: [Color(red: 0.78, green: 0.42, blue: 0.14).opacity(theme == .dark ? 0.55 : 0.22), .clear],
+                               center: UnitPoint(x: 0.5, y: -0.08), startRadius: 10, endRadius: 560)
+                RadialGradient(colors: [Color(red: 0.55, green: 0.16, blue: 0.14).opacity(theme == .dark ? 0.28 : 0.12), .clear],
+                               center: UnitPoint(x: 0.92, y: 0.02), startRadius: 8, endRadius: 420)
+            } else {
+                LinearGradient(colors: [StreamTheme.panel(for: theme), StreamTheme.background(for: theme)],
+                               startPoint: .topLeading, endPoint: .bottomTrailing)
+            }
+        }.ignoresSafeArea()
     }
 }
 
@@ -339,8 +354,8 @@ struct StreamHeading: View {
     let subtitle: String
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("ANT STREAMS").font(.caption.weight(.semibold)).tracking(3).foregroundStyle(.secondary)
-            Text(title).font(.largeTitle.weight(.bold))
+            Text("ANT STREAMS").font(.caption.weight(.bold)).tracking(3).foregroundStyle(StreamTheme.accent)
+            Text(title).font(.system(size: 34, weight: .bold))
             Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
         }
     }
@@ -358,6 +373,7 @@ struct LiveChannelRow: View {
     let epgEnabled: Bool
     let scope: String
     var refreshToken: Int = 0
+    @EnvironmentObject private var model: AppModel
     @AppStorage("rigatoni-appearance") private var appearance = "dark"
     @State private var guide: EPGNowNext?
     private var theme: AppAppearance { AppAppearance(rawValue: appearance) ?? .dark }
@@ -368,7 +384,7 @@ struct LiveChannelRow: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12))
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 8) {
-                    Text(item.name).font(.headline).lineLimit(1)
+                    Text(model.preferences.itemTitle(item)).font(.headline).lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Text("LIVE").font(.caption2.weight(.bold))
                         .padding(.horizontal, 8).padding(.vertical, 4)
@@ -432,7 +448,7 @@ struct LibraryView: View {
     @State private var epgReload = 0
     @State private var epgReloading = false
     private var orderedCategories: [CatalogCategory] {
-        let shown = categories.filter { model.preferences.categoryVisible($0.id, kind: kind) }
+        let shown = model.preferences.browseCategories(categories, section: CatalogSection(kind))
         return kind == .live ? CategoryPins.ordered(shown, pins: pinnedIDs) : shown
     }
     private var pinKey: String? { model.pinKey }
@@ -597,7 +613,8 @@ struct LibraryView: View {
         } catch { if !Task.isCancelled { self.error = error.localizedDescription; loading = false } }
     }
     private func replaceItems(_ value: [CatalogItem]) {
-        items = value.filter(model.preferences.visible); searchRevision += 1; page = 0
+        let allowed = categories
+        items = value.filter { model.preferences.accepts($0, categories: allowed) }; searchRevision += 1; page = 0
         if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { filtered = items }
     }
     private func filterItems() async {

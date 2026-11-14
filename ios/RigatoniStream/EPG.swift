@@ -145,7 +145,7 @@ enum EPGParser {
             var ids = Set(channels.map(\.id)).union(known)
             if ids.isEmpty {
                 let categories = try await model.catalog.categories(kind: .live, model: model)
-                if let category = categories.first(where: { model.preferences.categoryVisible($0.id, kind: .live) }) {
+                if let category = model.preferences.browseCategories(categories, section: .live).first {
                     let items = try await model.catalog.items(kind: .live, category: category.id, model: model)
                     ids = Set(items.filter(model.preferences.visible).prefix(40).map(\.id))
                 }

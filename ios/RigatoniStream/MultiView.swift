@@ -100,15 +100,15 @@ struct MultiPlayerView: View {
         do {
             let cats = try await model.catalog.categories(kind: .live, model: model)
             try Task.checkCancellation()
-            categories = cats
+            categories = model.preferences.browseCategories(cats, section: .live)
             let result = try await model.catalog.loadAll(kind: .live, model: model)
             try Task.checkCancellation()
-            channels = result.items.filter(model.preferences.visible)
+            channels = result.items.filter { model.preferences.accepts($0, categories: cats) }
             error = result.notice
             if paneA == nil { paneA = channels.first }
             if paneB == nil { paneB = channels.dropFirst().first }
-        } catch {
-            if !Task.isCancelled { error = error.localizedDescription }
+        } catch let caught {
+            if !Task.isCancelled { error = caught.localizedDescription }
         }
     }
 

@@ -1,6 +1,7 @@
 """Local-only mock IPTV provider. No real content or credentials. Request logging disabled."""
 import argparse
 import json
+import socket
 import ssl
 import threading
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
@@ -65,15 +66,31 @@ class Handler(SimpleHTTPRequestHandler):
             self.path = '/media/live.m3u8' if parsed.path.startswith('/live/') else '/media/movie.mp4'
         return super().do_GET()
 
+class DualStackServer(ThreadingHTTPServer):
+    address_family = socket.AF_INET6
+
+    def server_bind(self):
+        self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        super().server_bind()
+
+def serve(port, cert=None, key=None):
+    try:
+        server = DualStackServer(('::', port), Handler)
+    except OSError as exc:
+        print(f'IPv6 listen failed on {port}: {exc}', flush=True)
+        server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
+    if cert and key:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert, key)
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+    print(f'listening {server.server_address} tls={bool(cert)}', flush=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--cert', required=True)
     parser.add_argument('--key', required=True)
     args = parser.parse_args()
-    http = ThreadingHTTPServer(('127.0.0.1', 8765), Handler)
-    https = ThreadingHTTPServer(('127.0.0.1', 8766), Handler)
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.load_cert_chain(args.cert, args.key)
-    https.socket = context.wrap_socket(https.socket, server_side=True)
-    threading.Thread(target=http.serve_forever, daemon=True).start()
-    https.serve_forever()
+    serve(8765)
+    serve(8766, args.cert, args.key)
+    threading.Event().wait()
