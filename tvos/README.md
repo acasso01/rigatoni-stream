@@ -85,3 +85,9 @@ The interface update includes Dark, iOS Light and Xfinity-inspired navy themes. 
 Apple TV shares the same provider and catalog code as iPhone. Both builds now permit user-entered HTTP IPTV hosts without a gateway. The tvOS `Info.plist` includes `NSAppTransportSecurity` → `NSAllowsArbitraryLoads = YES`. Apple requires an explanation for this broad ATS exception at review because provider hostnames are chosen by the user and many third-party providers only offer HTTP. This exception weakens app-wide ATS enforcement; prefer HTTPS provider URLs whenever possible.
 
 For an existing Apple TV project, pull the branch and run `cd tvos && bundle exec ruby update_project.rb` before building; increment the build number separately for TestFlight. Apple TV playback must be tested on physical hardware before release.
+
+## Guide refresh and vertical categories
+
+Guide now has a focusable vertical category sidebar next to the existing timeline, matching Live TV's vertical category navigation. Guide and Settings → Live TV Guide offer **Refresh EPG**, with shared progress, last fully successful manual refresh time, and error feedback. It forces fresh short-guide requests for displayed/recently requested channels without changing favorites, visibility preferences, playback, or timeline calculations. Refresh status is memory-only for the session. Direct providers are supported; the current gateway API does not expose guide data.
+
+Check on Apple TV: navigate between the sidebar, refresh button and timeline with the Siri Remote; switch categories; play a channel; refresh with the provider online/offline; confirm hidden categories/channels and favorites are unchanged.
