@@ -1,4 +1,4 @@
-# Update existing generated projects without resetting signing or version numbers.
+# Update existing generated projects without resetting signing, signing settings or version numbers.
 require 'xcodeproj'
 require 'pathname'
 Dir.chdir(__dir__)
@@ -7,7 +7,7 @@ target = project.targets.find { |candidate| candidate.name == 'RigatoniStream' }
 abort 'RigatoniStream application target missing' unless target
 group = project.main_group.children.find { |candidate| candidate.respond_to?(:path) && candidate.path == 'RigatoniStream' }
 group ||= project.main_group.new_group('RigatoniStream', 'RigatoniStream')
-%w[PictureInPictureBridge.h PictureInPictureBridge.m RigatoniStream-Bridging-Header.h Discovery.swift Series.swift ShowsView.swift EPG.swift Saved.swift MobileExperience.swift LocalProviders.swift].each do |name|
+%w[PictureInPictureBridge.h PictureInPictureBridge.m RigatoniStream-Bridging-Header.h DirectProviders.swift ProviderManagement.swift DirectPlayback.swift Discovery.swift Series.swift ShowsView.swift EPG.swift Saved.swift MobileExperience.swift LocalProviders.swift].each do |name|
   file = group.files.find { |candidate| candidate.path == name } || group.new_file(name)
   if (name.end_with?('.m') || name.end_with?('.swift')) && !target.source_build_phase.files_references.include?(file)
     target.source_build_phase.add_file_reference(file)
@@ -21,12 +21,16 @@ target.build_configurations.each do |config|
   path = config.build_settings['INFOPLIST_FILE']
   abort 'Expected local generated Info.plist' unless path && !path.include?('$')
   info = Xcodeproj::Plist.read_from_path(path)
+  info['NSAppTransportSecurity'] = { 'NSAllowsArbitraryLoads' => true }
   info['CFBundleDisplayName'] = 'Ant Streams'
   info['CFBundleName'] = 'Ant Streams'
+  info['CFBundleShortVersionString'] = '0.2.3'
+  info['CFBundleVersion'] = '5'
   config.build_settings['INFOPLIST_KEY_CFBundleDisplayName'] = 'Ant Streams'
-  info['NSAppTransportSecurity'] = { 'NSAllowsArbitraryLoads' => true }
+  config.build_settings['MARKETING_VERSION'] = '0.2.3'
+  config.build_settings['CURRENT_PROJECT_VERSION'] = '5'
   info['UIBackgroundModes'] = ((info['UIBackgroundModes'] || []) + ['audio']).uniq
   Xcodeproj::Plist.write_to_path(info, path)
 end
 project.save
-puts 'Added native PiP, background audio and direct HTTP provider support; kept signing and version numbers.'
+puts 'Added native PiP sources and audio background mode; enabled standalone/direct HTTP provider support; kept signing and version numbers.'
