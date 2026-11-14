@@ -18,6 +18,10 @@ struct TVCatalogBrowser: View {
     @State private var playing: CatalogItem?
     @State private var visibleCount = 60
     @FocusState private var focusedCard: String?
+    // Movies open their detail on the NavigationStack (single modal level
+    // for the player's cover). Live channels play straight from the cover.
+    @State private var detailItem: CatalogItem?
+    @State private var showingDetail = false
 
     private var orderedCategories: [CatalogCategory] {
         guard let store else { return [] }
@@ -94,11 +98,19 @@ struct TVCatalogBrowser: View {
         .fullScreenCover(item: $playing) { item in
             CatalogDestination(item: item, channels: kind == .live ? store.items : [])
         }
+        .navigationDestination(isPresented: $showingDetail) {
+            if let item = detailItem { MovieDetailView(item: item) }
+        }
     }
 
     private func loadSelection(_ store: TVLibraryStore) async {
         if selectedCategory == "all" { await store.loadAllForSearch { _, _ in } }
         else { await store.loadItems(categoryID: selectedCategory) }
+    }
+
+    private func openDetail(_ item: CatalogItem) {
+        detailItem = item
+        showingDetail = true
     }
 
     private func categorySidebar(_ store: TVLibraryStore) -> some View {
@@ -157,7 +169,7 @@ struct TVCatalogBrowser: View {
         } else {
             if kind == .live {
                 LazyVStack(spacing: 10) {
-                    ForEach(visible) { item in
+                    ForEach(visible, id: \.scopedID) { item in
                         Button { playing = item } label: {
                             HStack(spacing: 22) {
                                 ProviderPoster(url: item.poster, kind: .live).frame(width: 100, height: 56)
@@ -173,9 +185,9 @@ struct TVCatalogBrowser: View {
                 }.padding(.vertical, 12)
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: 22)], spacing: 36) {
-                    ForEach(visible) { item in
-                        Button { playing = item } label: { TVCatalogCard(item: item) }
-                            .buttonStyle(.card).focused($focusedCard, equals: item.id)
+                    ForEach(visible, id: \.scopedID) { item in
+                        Button { openDetail(item) } label: { TVCatalogCard(item: item) }
+                            .buttonStyle(TVCardButtonStyle()).focused($focusedCard, equals: item.id)
                             .contextMenu {
                                 Button(TVFavorites.contains(item: item, model: model) ? "Remove from Saved" : "Save to Favorites") { TVFavorites.toggle(item: item, model: model) }
                             }
@@ -186,7 +198,7 @@ struct TVCatalogBrowser: View {
                 Button("Show more (\(shown.count - visibleCount) remaining)") {
                     visibleCount += 60
                 }
-                .buttonStyle(.card)
+                .buttonStyle(TVCardButtonStyle())
                 .padding(.top, 8)
             }
             Text("\(shown.count) titles")
@@ -217,7 +229,7 @@ struct TVCatalogCard: View {
                 .lineLimit(2)
                 .frame(width: cardWidth, alignment: .leading)
         }
-        .foregroundStyle(focused ? Color.black : StreamTheme.text(for: AppAppearance(rawValue: appearance) ?? .dark))
+        .foregroundStyle(focused ? Color.white : StreamTheme.text(for: AppAppearance(rawValue: appearance) ?? .dark))
     }
 }
 
@@ -234,8 +246,8 @@ private struct TVCatalogRowLabel: View {
     @AppStorage("rigatoni-appearance") private var appearance = "dark"
     var body: some View {
         configuration.label
-            .foregroundStyle(focused ? Color.black : StreamTheme.text(for: AppAppearance(rawValue: appearance) ?? .dark))
-            .background(focused ? Color.white : (selected ? StreamTheme.accent.opacity(0.22) : StreamTheme.panel), in: RoundedRectangle(cornerRadius: 10))
+            .foregroundStyle(focused ? Color.white : StreamTheme.text(for: AppAppearance(rawValue: appearance) ?? .dark))
+            .background(focused ? TVTheme.focusFill : (selected ? StreamTheme.accent.opacity(0.22) : StreamTheme.panel), in: RoundedRectangle(cornerRadius: 10))
             .overlay(alignment: .leading) {
                 if selected { RoundedRectangle(cornerRadius: 2).fill(StreamTheme.accent).frame(width: 4).padding(.vertical, 12) }
             }

@@ -176,12 +176,13 @@ enum EPGParser {
     }
 
     private static func fetch(streamID: String, provider: Provider) async throws -> [EPGProgram] {
+        if provider.kind == .m3u { return try await PlaylistStore.shared.programs(streamID: streamID, provider: provider) }
         var components = URLComponents(url: try provider.apiURL(action: "get_short_epg"), resolvingAgainstBaseURL: false)!
         components.queryItems = (components.queryItems ?? []) + [URLQueryItem(name: "stream_id", value: streamID), URLQueryItem(name: "limit", value: "8")]
         guard let url = components.url else { throw AppFailure("Invalid guide URL.") }
         let data = try await BoundedTransfer(limit: 512 * 1024, timeout: 15).fetch(url, headers: ["Cache-Control": "no-cache", "Pragma": "no-cache"])
         return try await Task.detached(priority: .utility) {
-            guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any], root["epg_listings"] is [[String: Any]] else { throw AppFailure("Invalid guide response.") }
+            guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any], root["epg_listings"] is [[String: Any]] else { throw AppFailure("Invalid guide response.") }
             return EPGParser.programs(root)
         }.value
     }
