@@ -1,0 +1,157 @@
+import XCTest
+@testable import RigatoniStream
+
+final class CatalogPresentationTests: XCTestCase {
+    func testCleanNamesMatchProviderSamples() {
+        let samples: [(String, String)] = [
+            ("US| TUBI RAW 60fps", "Tubi"),
+            ("US| SPECTRUM NETWORK HD/RAW", "Spectrum Network"),
+            ("AT&T: 365BLK RAW", "365BLK"),
+            ("US| NETFLIX ON AIR RAW 60fps", "Netflix On Air"),
+            ("US| NETFLIX ON AIR RAW 60 FPS", "Netflix On Air"),
+            ("##### AT&T #####", "AT&T"),
+            ("===== ESPN =====", "ESPN"),
+            ("US| PEACOCK RAW", "Peacock"),
+            ("US: HBO HD", "HBO"),
+            ("(US) ESPN", "ESPN"),
+            ("USA | CNN HD", "CNN"),
+            ("UK| BBC ONE FHD", "BBC One"),
+            ("EN| DISNEY PLUS HD", "Disney Plus"),
+            ("US| PRIME RAW", "Prime"),
+            ("AT&T: 5-MINUTE CRAFTS RAW", "5-Minute Crafts"),
+            ("US| SPECTRUM NETWORK HD/RAW", "Spectrum Network"),
+            ("AT&T RAW", "AT&T"),
+            ("USA Network", "USA Network"),
+            ("US OPEN", "US Open"),
+            ("Movie (1080p)", "Movie"),
+            ("Channel (HD)", "Channel"),
+            ("The Batman (2022)", "The Batman (2022)"),
+            ("News HEVC H.265", "News"),
+            ("Sports 4K UHD", "Sports"),
+            ("Doc ᴴᴰ", "Doc"),
+            ("Clip ᴿᴬᵂ", "Clip"),
+            ("Feed ⁶⁰fps", "Feed"),
+            ("IN| BOLLYWOOD HD", "Bollywood"),
+            ("LATINO | NOVELAS FHD", "Novelas"),
+            ("US| TV LAND HD", "TV Land"),
+            ("##### AT&T RAW #####", "AT&T"),
+            ("XFINITY: USA NETWORK HD", "USA Network"),
+            ("Home · US| TUBI RAW", "Home · Tubi")
+        ]
+        for (raw, expected) in samples {
+            XCTAssertEqual(NameCleaner.clean(raw), expected, raw)
+        }
+    }
+
+    func testUnitedStatesFilterKeepsUntaggedAndDropsForeign() {
+        XCTAssertTrue(CategoryRegion.isUnitedStates("US| TUBI RAW"))
+        XCTAssertTrue(CategoryRegion.isUnitedStates("US: HBO"))
+        XCTAssertTrue(CategoryRegion.isUnitedStates("(US) ESPN"))
+        XCTAssertTrue(CategoryRegion.isUnitedStates("USA | CNN"))
+        XCTAssertTrue(CategoryRegion.isUnitedStates("EN| MOVIES HD"))
+        XCTAssertTrue(CategoryRegion.isUnitedStates("USA Network"))
+        XCTAssertTrue(CategoryRegion.isUnitedStates("ENGLISH PREMIER LEAGUE"))
+        XCTAssertFalse(CategoryRegion.isUnitedStates("UK| BBC ONE"))
+        XCTAssertFalse(CategoryRegion.isUnitedStates("SPORTS"))
+        XCTAssertTrue(CategoryRegion.isForeign("UK| SKY SPORTS HD"))
+        XCTAssertTrue(CategoryRegion.isForeign("CA| CBC"))
+        XCTAssertTrue(CategoryRegion.isForeign("SPANISH MOVIES"))
+        XCTAssertTrue(CategoryRegion.isForeign("LATINO | NOVELAS"))
+        XCTAssertTrue(CategoryRegion.isForeign("CANADA | NEWS"))
+        XCTAssertFalse(CategoryRegion.isForeign("US| UK NEWS"))
+        XCTAssertFalse(CategoryRegion.isForeign("##### AT&T #####"))
+        XCTAssertFalse(CategoryRegion.isForeign("AT&T RAW 60fps"))
+        XCTAssertFalse(CategoryRegion.isForeign("SPORTS"))
+        XCTAssertTrue(CategoryRegion.included("SPORTS", unitedStatesOnly: true))
+        XCTAssertTrue(CategoryRegion.included("US| TUBI", unitedStatesOnly: true))
+        XCTAssertFalse(CategoryRegion.included("MX| TELEMUNDO", unitedStatesOnly: true))
+        XCTAssertTrue(CategoryRegion.included("MX| TELEMUNDO", unitedStatesOnly: false))
+        XCTAssertTrue(CategoryRegion.included("Home · US| ESPN", unitedStatesOnly: true))
+        XCTAssertFalse(CategoryRegion.included("Home · UK| BBC", unitedStatesOnly: true))
+    }
+
+    func testBrowseCategoriesHidesForeignAndHonorsOrderAndRenames() {
+        let categories = [
+            CatalogCategory(id: "1", name: "UK| BBC ONE HD"),
+            CatalogCategory(id: "2", name: "US| TUBI RAW 60fps"),
+            CatalogCategory(id: "3", name: "SPORTS"),
+            CatalogCategory(id: "4", name: "##### ESPN #####")
+        ]
+        var preferences = LibraryPreferences()
+        XCTAssertEqual(preferences.browseCategories(categories, section: .live).map(\.id), ["2", "3", "4"])
+        XCTAssertEqual(preferences.browseCategories(categories, section: .live).map(\.name), ["Tubi", "Sports", "ESPN"])
+        preferences.unitedStatesOnly = false
+        preferences.moveCategory("3", section: .live, direction: -1, among: categories)
+        XCTAssertEqual(preferences.presented(categories, section: .live).map(\.id), ["1", "3", "2", "4"])
+        preferences.setSection("3", section: .live, visible: false)
+        XCTAssertFalse(preferences.browseCategories(categories, section: .live).contains { $0.id == "3" })
+        preferences.setRename("My Tubi", key: LibraryPreferences.renameKey(section: .live, role: "category", id: "2"))
+        XCTAssertEqual(preferences.categoryTitle(categories[1], section: .live), "My Tubi")
+        preferences.cleanNames = false
+        preferences.setRename(nil, key: LibraryPreferences.renameKey(section: .live, role: "category", id: "2"))
+        XCTAssertEqual(preferences.categoryTitle(categories[1], section: .live), "US| TUBI RAW 60fps")
+    }
+
+    func testLegacyPreferencesDecodeKeepsProgressAndDefaults() throws {
+        let legacy = #"{"hiddenLiveCategories":["23"],"hiddenMovieCategories":[],"hiddenChannels":[],"progress":{"7":{"seconds":125,"duration":7200,"updated":1}}}"#
+        let decoded = try JSONDecoder().decode(LibraryPreferences.self, from: Data(legacy.utf8))
+        XCTAssertFalse(decoded.categoryVisible("23", kind: .live))
+        XCTAssertEqual(decoded.progress["7"]?.label, "2:05")
+        XCTAssertTrue(decoded.unitedStatesOnly)
+        XCTAssertTrue(decoded.cleanNames)
+        XCTAssertTrue(decoded.hiddenSeriesCategories.isEmpty)
+        let key = "rigatoni-presentation-" + UUID().uuidString
+        defer { UserDefaults.standard.removeObject(forKey: key) }
+        decoded.write(key: key)
+        let stored = String(data: UserDefaults.standard.data(forKey: key)!, encoding: .utf8)!
+        for secret in ["username", "password", "server", "playbackURL", "api_key"] {
+            XCTAssertFalse(stored.contains(secret))
+        }
+        XCTAssertEqual(LibraryPreferences.read(key: key).progress["7"]?.seconds, 125)
+    }
+
+    func testShelfRankingUsesAddedRatingsAndTMDBMatches() {
+        let items = [
+            ShelfRanking.Candidate(index: 0, name: "Old Movie", added: 10, rating: 9, hasPoster: true),
+            ShelfRanking.Candidate(index: 1, name: "Fresh Movie", added: 50, rating: 1, hasPoster: true),
+            ShelfRanking.Candidate(index: 2, name: "Fresh Movie", added: 40, rating: 8, hasPoster: false),
+            ShelfRanking.Candidate(index: 3, name: "No Date", added: 0, rating: 10, hasPoster: true)
+        ]
+        XCTAssertEqual(ShelfRanking.recentlyAdded(items), [1, 0])
+        XCTAssertEqual(ShelfRanking.trending(items, tmdbTitles: []), [3, 0, 1])
+        XCTAssertEqual(ShelfRanking.trending(items, tmdbTitles: ["Fresh Movie", "Missing Title", "Old Movie (2020)"]), [1, 0])
+        XCTAssertEqual(ShelfRanking.normalize("Old Movie (2020)"), "old movie")
+    }
+
+    func testTMDBParserAndProviderFields() {
+        let json = #"{"results":[{"title":"Dune","release_date":"2021-10-22"},{"name":"The Bear"},{"title":"  "} ]}"#
+        XCTAssertEqual(TMDBClient.titles(in: Data(json.utf8)), ["Dune", "The Bear"])
+        let row: [String: Any] = ["added": "1710000000", "rating_5based": "4.5", "year": "2026", "stream_id": "9", "name": "Example", "stream_icon": "https://cdn.example/poster.jpg"]
+        let item = CatalogItem.parse(row, kind: .movies)
+        XCTAssertEqual(item?.added, 1710000000)
+        XCTAssertEqual(item?.rating, 9)
+        XCTAssertEqual(item?.year, "2026")
+        XCTAssertEqual(item?.poster?.host, "cdn.example")
+        let series = SeriesStore.parseSeries([[
+            "series_id": 4, "name": "US| SHOW RAW", "cover": "https://cdn.example/cover.jpg",
+            "category_id": 8, "last_modified": 180, "rating": 7.5, "releaseDate": "2024-05-01"
+        ]])
+        XCTAssertEqual(series.first?.categoryID, "8")
+        XCTAssertEqual(series.first?.added, 180)
+        XCTAssertEqual(series.first?.rating, 7.5)
+        XCTAssertEqual(series.first?.year, "2024")
+    }
+
+    func testItemRenameUsesScopedIdentity() {
+        var preferences = LibraryPreferences()
+        let item = CatalogItem(id: "7", name: "US| ESPN RAW 60fps", kind: .live, fileExtension: "ts", poster: nil, categoryID: "2")
+        XCTAssertEqual(preferences.itemTitle(item), "ESPN")
+        preferences.setRename("Main ESPN", key: LibraryPreferences.renameKey(section: .live, role: "item", id: item.scopedID))
+        XCTAssertEqual(preferences.itemTitle(item), "Main ESPN")
+        let show = SeriesItem(id: "3", name: "UK| BAKE OFF HD", poster: nil, categoryID: "9")
+        XCTAssertEqual(preferences.seriesTitle(show), "Bake Off")
+        XCTAssertFalse(preferences.acceptsSeries(show, categories: [CatalogCategory(id: "9", name: "UK| REALITY HD")]))
+        preferences.unitedStatesOnly = false
+        XCTAssertTrue(preferences.acceptsSeries(show, categories: [CatalogCategory(id: "9", name: "UK| REALITY HD")]))
+    }
+}

@@ -30,10 +30,14 @@ private struct TVHomeBody: View {
     @ObservedObject var store: TVLibraryStore
     @ObservedObject var model: AppModel
     @Binding var playing: CatalogItem?
+    @StateObject private var shelves = HomeShelfLoader()
+    @AppStorage("rigatoni-tmdb-api-key") private var tmdbKey = ""
+    @State private var openedShow: SeriesItem?
+    @State private var showDetail = false
 
     private var pinned: [CatalogCategory] {
         let ids = Set(store.pinnedIDs())
-        return CategoryPins.ordered(store.categories.filter { model.preferences.categoryVisible($0.id, kind: .live) }, pins: store.pinnedIDs())
+        return CategoryPins.ordered(model.preferences.browseCategories(store.categories, section: .live), pins: store.pinnedIDs())
             .filter { ids.contains($0.id) }
     }
 
@@ -41,12 +45,21 @@ private struct TVHomeBody: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 36) {
                 VStack(alignment: .leading, spacing: 8) {
-                    StreamHeading(title: "Welcome home", subtitle: "Continue watching and jump into your pinned channels.")
+                    StreamHeading(title: "Welcome home", subtitle: "Trending, recently added, and the channels you pinned.")
                 }
                 .padding(.top, 40)
                 .tvLanding(for: .home)
 
-                if model.providerReady { TVHistoryRail() }
+                if model.providerReady {
+                    if shelves.loading && shelves.trendingMovies.isEmpty && shelves.trendingShows.isEmpty {
+                        ProgressView("Loading posters…")
+                    }
+                    PosterShelf(title: "Trending this week, Movies", posters: shelves.trendingMovies, width: 230) { open($0) }
+                    PosterShelf(title: "Trending this week, Shows", posters: shelves.trendingShows, width: 230) { open($0) }
+                    PosterShelf(title: "Recently added", posters: shelves.recent, width: 230) { open($0) }
+                    TVHistoryRail(title: "Continue watching", onlyInProgress: true, hidesWhenEmpty: true)
+                    TVHistoryRail()
+                }
 
                 if !model.providerReady {
                     Text("Save your provider in Settings to start watching.")
@@ -70,8 +83,23 @@ private struct TVHomeBody: View {
             .padding(.bottom, 60)
         }
         .background { StreamBackdrop() }
-        .task(id: model.libraryRevision) {
+        .task(id: "\(model.libraryRevision)-\(tmdbKey.hashValue)") {
             await store.loadCategories()
+            await shelves.load(model: model, tmdbKey: tmdbKey)
+        }
+        .navigationDestination(isPresented: $showDetail) {
+            if let openedShow {
+                TVSeriesDetailView(series: openedShow, store: SeriesStore(model: model))
+            }
+        }
+    }
+
+    private func open(_ poster: ShelfPoster) {
+        switch poster.media {
+        case .movie(let item): playing = item
+        case .show(let series):
+            openedShow = series
+            showDetail = true
         }
     }
 }
@@ -98,7 +126,7 @@ private struct TVPinnedRow: View {
                                     ProviderPoster(url: item.poster, kind: .live)
                                         .frame(width: 240, height: 140)
                                         .clipShape(RoundedRectangle(cornerRadius: TVTheme.corner))
-                                    Text(item.name)
+                                    Text(model.preferences.itemTitle(item))
                                         .font(.headline)
                                         .lineLimit(1)
                                         .frame(width: 240, alignment: .leading)

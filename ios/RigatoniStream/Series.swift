@@ -8,6 +8,10 @@ struct SeriesItem: Identifiable {
     let poster: URL?
     /// Owning provider in combined-library mode. Nil = selected provider.
     var providerID: UUID? = nil
+    var categoryID: String = ""
+    var added: Int = 0
+    var rating: Double = 0
+    var year: String = ""
     var scopedID: String { CatalogItem.namespaced(providerID: providerID, id: id) }
 }
 
@@ -185,14 +189,20 @@ final class SeriesStore: ObservableObject {
         return all
     }
 
-    private static func parseSeries(_ rows: [[String: Any]], providerID: UUID? = nil) -> [SeriesItem] {
+    static func parseSeries(_ rows: [[String: Any]], providerID: UUID? = nil) -> [SeriesItem] {
         rows.compactMap { row in
             let id = row["series_id"].map { String(describing: $0) } ?? ""
             guard !id.isEmpty, id.allSatisfy(\.isNumber) else { return nil }
+            let rawCategory = ProviderFields.text(row["category_id"])
+            let categoryID = rawCategory.isEmpty ? "" : CatalogItem.namespaced(providerID: providerID, id: rawCategory)
             return SeriesItem(id: id,
                             name: row["name"] as? String ?? "Untitled",
                             poster: validURL(row["cover"] as? String),
-                            providerID: providerID)
+                            providerID: providerID,
+                            categoryID: categoryID,
+                            added: ProviderFields.added(from: row),
+                            rating: ProviderFields.rating(from: row),
+                            year: ProviderFields.year(from: row))
         }
     }
 

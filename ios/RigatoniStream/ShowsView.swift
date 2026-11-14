@@ -35,8 +35,15 @@ private struct ShowsBrowser: View {
     @State private var loadedCategory = ""
     @AppStorage("rigatoni-appearance") private var appearance = "dark"
 
+    private var visibleCategories: [CatalogCategory] {
+        model.preferences.browseCategories(store.categories, section: .series)
+    }
     private var matches: [SeriesItem] {
-        query.isEmpty ? store.series : store.series.filter { $0.name.localizedCaseInsensitiveContains(query) }
+        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !term.isEmpty else { return store.series }
+        return store.series.filter {
+            $0.name.localizedCaseInsensitiveContains(term) || model.preferences.seriesTitle($0).localizedCaseInsensitiveContains(term)
+        }
     }
 
     var body: some View {
@@ -63,7 +70,7 @@ private struct ShowsBrowser: View {
                 } else {
                     ScrollView(.horizontal, showsIndicators: true) {
                         LazyHStack(spacing: 10) {
-                            ForEach(store.categories) { entry in
+                            ForEach(visibleCategories) { entry in
                                 Button { category = entry.id } label: {
                                     Text(entry.name).font(.subheadline.weight(.semibold)).lineLimit(1)
                                         .padding(.horizontal, 18).frame(height: 54)
@@ -85,7 +92,7 @@ private struct ShowsBrowser: View {
                     } else {
                         if query.isEmpty, let featured = matches.first {
                             NavigationLink { ShowDetailView(series: featured, store: store) } label: {
-                                MobileHero(title: featured.name, poster: featured.poster, badge: "TV SHOWS")
+                                MobileHero(title: model.preferences.seriesTitle(featured), poster: featured.poster, badge: "TV SHOWS")
                             }.buttonStyle(.plain).padding(.horizontal)
                         }
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 14)], spacing: 20) {
@@ -93,7 +100,7 @@ private struct ShowsBrowser: View {
                                 NavigationLink { ShowDetailView(series: series, store: store) } label: {
                                     VStack(alignment: .leading, spacing: 0) {
                                         ProviderPoster(url: series.poster, kind: .movies).aspectRatio(2 / 3, contentMode: .fit)
-                                        Text(series.name).font(.subheadline.weight(.semibold)).lineLimit(2)
+                                        Text(model.preferences.seriesTitle(series)).font(.subheadline.weight(.semibold)).lineLimit(2)
                                             .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).padding(10)
                                     }
                                     .foregroundStyle(StreamTheme.text).background(StreamTheme.card)
@@ -118,8 +125,8 @@ private struct ShowsBrowser: View {
                 loadedRevision = model.libraryRevision; loadedRetry = retry; loadedCategory = ""
             }
             guard store.unavailableReason == nil, store.error.isEmpty else { return }
-            if !store.categories.contains(where: { $0.id == category }) {
-                category = store.categories.first?.id ?? ""
+            if !visibleCategories.contains(where: { $0.id == category }) {
+                category = visibleCategories.first?.id ?? ""
                 return
             }
             guard !category.isEmpty, loadedCategory != category else { return }
@@ -150,7 +157,7 @@ struct ShowDetailView: View {
                 HStack(alignment: .top, spacing: 18) {
                     ProviderPoster(url: series.poster, kind: .movies).frame(width: 120, height: 180)
                         .clipShape(RoundedRectangle(cornerRadius: 16))
-                    Text(series.name).font(.title2.bold()).frame(maxWidth: .infinity, alignment: .leading)
+                    Text(model.preferences.seriesTitle(series)).font(.title2.bold()).frame(maxWidth: .infinity, alignment: .leading)
                 }
                 MobileSaveButton(record: SavedRecord(kind: "series", itemID: series.id, name: series.name, ext: "", categoryID: "", addedAt: Date(), providerID: series.providerID))
                     .buttonStyle(.bordered)

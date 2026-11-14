@@ -49,19 +49,25 @@ struct MobileRootView: View {
                 }
             }.id(appearance).frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            HStack(spacing: 0) {
-                ForEach([MobileSection.home, .live, .movies, .shows, .search]) { entry in
+        .safeAreaInset(edge: .bottom, spacing: 8) {
+            HStack(spacing: 2) {
+                ForEach([MobileSection.home, .live, .movies, .shows]) { entry in
                     Button { section = entry } label: {
                         navLabel(entry.title, symbol: entry.symbol, selected: section == entry)
                     }.accessibilityAddTraits(section == entry ? .isSelected : [])
                 }
                 Button { more = true } label: {
-                    navLabel("More", symbol: "ellipsis.circle", selected: [.guide, .saved, .settings].contains(section))
+                    navLabel("More", symbol: "ellipsis.circle", selected: [.guide, .saved, .search, .settings].contains(section))
                 }
             }
-            .buttonStyle(.plain).padding(.top, 10).padding(.bottom, 6)
-            .background(.regularMaterial)
+            .buttonStyle(.plain)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 6)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(Capsule().stroke(Color.white.opacity(0.14), lineWidth: 1))
+            .shadow(color: .black.opacity(0.35), radius: 16, y: 8)
+            .padding(.horizontal, 14)
+            .padding(.bottom, 4)
         }
         .sheet(isPresented: $more) {
             NavigationStack {
@@ -88,13 +94,16 @@ struct MobileRootView: View {
         .sheet(isPresented: $model.settingsVisible) { SettingsView() }
     }
     private func navLabel(_ title: String, symbol: String, selected: Bool) -> some View {
-        VStack(spacing: 4) {
-            Image(systemName: symbol).font(.system(size: 21))
-            Text(title).font(.caption2.weight(.semibold))
+        VStack(spacing: 3) {
+            Image(systemName: symbol).font(.system(size: 18, weight: .semibold))
+            Text(title).font(.caption2.weight(.semibold)).lineLimit(1)
         }
-        .foregroundStyle(selected ? StreamTheme.accent : StreamTheme.muted)
-        .frame(maxWidth: .infinity, minHeight: 44)
-        .contentShape(Rectangle())
+        .foregroundStyle(selected ? StreamTheme.onAccent : StreamTheme.muted)
+        .frame(maxWidth: .infinity, minHeight: 48)
+        .background {
+            if selected { Capsule().fill(StreamTheme.accentFill) }
+        }
+        .contentShape(Capsule())
     }
 }
 
@@ -159,18 +168,23 @@ struct MobileSaveButton: View {
 struct MobileHomeView: View {
     @EnvironmentObject private var model: AppModel
     let select: (MobileSection) -> Void
+    @StateObject private var shelves = HomeShelfLoader()
+    @AppStorage("rigatoni-tmdb-api-key") private var tmdbKey = ""
     @State private var categories: [CatalogCategory] = []
     @State private var error = ""
     @State private var retry = 0
+    @State private var playing: CatalogItem?
+    @State private var openedShow: SeriesItem?
     private var pinned: [CatalogCategory] {
         let pins = PinnedCategories.read(key: model.pinKey)
-        return CategoryPins.ordered(categories.filter { pins.contains($0.id) && model.preferences.categoryVisible($0.id, kind: .live) }, pins: pins)
+        let shown = model.preferences.browseCategories(categories, section: .live)
+        return CategoryPins.ordered(shown.filter { pins.contains($0.id) }, pins: pins)
     }
     var body: some View {
         NavigationStack {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 24) {
-                    StreamHeading(title: "Welcome home", subtitle: "Your channels, movies and shows.").padding(.top, 12)
+                    StreamHeading(title: "Welcome home", subtitle: "Trending, recently added, and the channels you pinned.").padding(.top, 12)
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack {
                             ForEach([MobileSection.guide, .shows, .saved]) { entry in
@@ -182,8 +196,15 @@ struct MobileHomeView: View {
                     if !model.providerReady {
                         Button("Add your provider to start watching") { model.settingsVisible = true }.buttonStyle(.borderedProminent).foregroundStyle(StreamTheme.onAccent)
                     } else {
-                        MobileSavedContent(history: true)
-                        Text("Pinned live categories").font(.title2.bold())
+                        if shelves.loading && shelves.trendingMovies.isEmpty && shelves.trendingShows.isEmpty {
+                            ProgressView("Loading posters…")
+                        }
+                        PosterShelf(title: "Trending this week, Movies", posters: shelves.trendingMovies, width: 148) { open($0) }
+                        PosterShelf(title: "Trending this week, Shows", posters: shelves.trendingShows, width: 148) { open($0) }
+                        PosterShelf(title: "Recently added", posters: shelves.recent, width: 148) { open($0) }
+                        MobileSavedContent(history: true, shelfTitle: "Continue watching", onlyInProgress: true, horizontal: true)
+                        MobileSavedContent(history: true, shelfTitle: "Last watched", horizontal: true)
+                        Text("Pinned channels").font(.title2.bold())
                         if pinned.isEmpty { Text("Pin categories in Live TV to see them here.").foregroundStyle(.secondary) }
                         ForEach(pinned) { category in MobilePinnedShelf(category: category) }
                     }
@@ -192,14 +213,31 @@ struct MobileHomeView: View {
             }.background { StreamBackdrop() }
                 .navigationTitle("Ant Streams").navigationBarTitleDisplayMode(.inline)
                 .toolbar { Button { model.settingsVisible = true } label: { Image(systemName: "person.crop.circle") }.accessibilityLabel("Account settings") }
-                .task(id: "\(model.libraryRevision)-\(retry)") {
+                .task(id: "\(model.libraryRevision)-\(retry)-\(tmdbKey.hashValue)") {
                     categories = []; error = ""
-                    guard model.providerReady else { return }
+                    guard model.providerReady else {
+                        await shelves.load(model: model, tmdbKey: "")
+                        return
+                    }
                     do {
                         let loaded = try await model.catalog.categories(kind: .live, model: model)
                         try Task.checkCancellation(); categories = loaded
                     } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+                    await shelves.load(model: model, tmdbKey: tmdbKey)
                 }
+                .fullScreenCover(item: $playing) { CatalogDestination(item: $0) }
+                .sheet(item: $openedShow) { series in
+                    NavigationStack {
+                        ShowDetailView(series: series, store: SeriesStore(model: model))
+                            .toolbar { Button("Done") { openedShow = nil } }
+                    }
+                }
+        }
+    }
+    private func open(_ poster: ShelfPoster) {
+        switch poster.media {
+        case .movie(let item): playing = item
+        case .show(let series): openedShow = series
         }
     }
 }
@@ -222,7 +260,7 @@ struct MobilePinnedShelf: View {
                             VStack(alignment: .leading) {
                                 ProviderPoster(url: item.poster, kind: .live).frame(width: 160, height: 90)
                                     .clipShape(RoundedRectangle(cornerRadius: 12))
-                                Text(item.name).font(.subheadline.bold()).lineLimit(2).frame(width: 160, alignment: .leading)
+                                Text(model.preferences.itemTitle(item)).font(.subheadline.bold()).lineLimit(2).frame(width: 160, alignment: .leading)
                             }
                         }.buttonStyle(.plain).contextMenu { MobileSaveButton(record: MobileRecords.record(item)) }
                     }
@@ -328,7 +366,7 @@ struct MobileGuideView: View {
                     do {
                         let loaded = try await model.catalog.categories(kind: .live, model: model)
                         try Task.checkCancellation()
-                        categories = loaded.filter { model.preferences.categoryVisible($0.id, kind: .live) }
+                        categories = model.preferences.browseCategories(loaded, section: .live)
                     } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
                 }
                 .task(id: "\(selected)-\(model.libraryRevision)-\(retry)") {
@@ -402,7 +440,7 @@ struct MobileGuideRow: View {
                     }
                 }.frame(width: 64)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(nowNext.now?.title ?? (loading ? "Loading…" : item.name))
+                    Text(nowNext.now?.title ?? (loading ? "Loading…" : model.preferences.itemTitle(item)))
                         .font(.headline).lineLimit(1)
                     if let next = nowNext.next {
                         Text(next.title).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
@@ -448,6 +486,9 @@ struct MobileShowRequest: Identifiable {
 struct MobileSavedContent: View {
     @EnvironmentObject private var model: AppModel
     var history = false
+    var shelfTitle: String? = nil
+    var onlyInProgress = false
+    var horizontal = false
     @State private var records: [SavedRecord] = []
     @State private var playing: CatalogItem?
     @State private var episode = false
@@ -455,35 +496,9 @@ struct MobileSavedContent: View {
     @State private var notice = ""
     @State private var connecting = false
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            if history { Text("Last watched").font(.title2.bold()) }
-            if records.isEmpty {
-                Text(history ? "Watch something to find it here." : "Hold a channel, movie or show and choose Add to Saved.")
-                    .foregroundStyle(.secondary)
-            }
-            ForEach(records) { record in
-                Button { Task { await open(record) } } label: {
-                    HStack(spacing: 14) {
-                        Image(systemName: record.kind == "live" ? "tv" : record.kind == "movie" ? "film" : "play.tv")
-                            .font(.title2).frame(width: 56, height: 64)
-                            .background(StreamTheme.card, in: RoundedRectangle(cornerRadius: 12))
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(record.name).font(.headline).lineLimit(2)
-                            if let progress = model.preferences.progress[(record.kind == "episode" ? "series-" : "") + record.itemID], record.kind != "live" {
-                                Text("Continue from \(progress.label)").font(.caption).foregroundStyle(.secondary)
-                            } else { Text(record.kind == "live" ? "Live TV" : record.kind == "movie" ? "Movie" : "TV Show").font(.caption).foregroundStyle(.secondary) }
-                        }
-                        Spacer(); Image(systemName: "chevron.right")
-                    }.foregroundStyle(StreamTheme.text)
-                }.buttonStyle(.plain).disabled(connecting)
-                    .contextMenu {
-                        Button(history ? "Remove from history" : "Remove from Saved", role: .destructive) {
-                            SavedCollection.toggle(record, key: MobileRecords.key(model, history: history)); reload()
-                        }
-                    }
-            }
-            if connecting { ProgressView("Opening…") }
-            if !notice.isEmpty { Text(notice).font(.caption).foregroundStyle(.secondary) }
+        Group {
+            if onlyInProgress && records.isEmpty { EmptyView() }
+            else { shelfBody }
         }
         .onAppear(perform: reload)
         .onChange(of: model.libraryRevision) { _, _ in reload() }
@@ -499,8 +514,78 @@ struct MobileSavedContent: View {
             }
         }
     }
+    private var shelfBody: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if let shelfTitle { Text(shelfTitle).font(.title2.bold()) }
+            else if history { Text("Last watched").font(.title2.bold()) }
+            if records.isEmpty {
+                Text(history ? "Watch something to find it here." : "Hold a channel, movie or show and choose Add to Saved.")
+                    .foregroundStyle(.secondary)
+            }
+            if horizontal {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(alignment: .top, spacing: 14) {
+                        ForEach(records) { record in historyCard(record) }
+                    }
+                }
+            } else {
+                ForEach(records) { record in historyCard(record) }
+            }
+            if connecting { ProgressView("Opening…") }
+            if !notice.isEmpty { Text(notice).font(.caption).foregroundStyle(.secondary) }
+        }
+    }
+    private func historyCard(_ record: SavedRecord) -> some View {
+        Button { Task { await open(record) } } label: {
+            if horizontal {
+                VStack(alignment: .leading, spacing: 8) {
+                    Image(systemName: record.kind == "live" ? "tv" : record.kind == "movie" ? "film" : "play.tv")
+                        .font(.title).frame(width: 156, height: 96)
+                        .background(StreamTheme.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    Text(displayName(record)).font(.subheadline.weight(.semibold)).lineLimit(2).frame(width: 156, alignment: .leading)
+                    Text(recordCaption(record)).font(.caption).foregroundStyle(StreamTheme.muted).lineLimit(1)
+                }.foregroundStyle(StreamTheme.text)
+            } else {
+                HStack(spacing: 14) {
+                    Image(systemName: record.kind == "live" ? "tv" : record.kind == "movie" ? "film" : "play.tv")
+                        .font(.title2).frame(width: 56, height: 64)
+                        .background(StreamTheme.card, in: RoundedRectangle(cornerRadius: 12))
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(displayName(record)).font(.headline).lineLimit(2)
+                        Text(recordCaption(record)).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer(); Image(systemName: "chevron.right")
+                }.foregroundStyle(StreamTheme.text)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(connecting)
+        .contextMenu {
+            Button(history ? "Remove from history" : "Remove from Saved", role: .destructive) {
+                SavedCollection.toggle(record, key: MobileRecords.key(model, history: history)); reload()
+            }
+        }
+    }
+    private func displayName(_ record: SavedRecord) -> String {
+        let section: CatalogSection = record.kind == "live" ? .live : (record.kind == "series" || record.kind == "episode" ? .series : .movies)
+        let id = CatalogItem.namespaced(providerID: record.providerID, id: record.itemID)
+        return model.preferences.displayName(raw: record.name, key: LibraryPreferences.renameKey(section: section, role: "item", id: id))
+    }
+    private func recordCaption(_ record: SavedRecord) -> String {
+        let key = (record.kind == "episode" || record.kind == "series" ? "series-" : "") + record.itemID
+        if record.kind != "live", let progress = model.preferences.progress[key] { return "Continue from \(progress.label)" }
+        switch record.kind {
+        case "live": return "Live TV"
+        case "movie": return "Film"
+        default: return "Series"
+        }
+    }
     private func reload() {
-        records = SavedCollection.items(key: MobileRecords.key(model, history: history)).filter { MobileRecords.visible($0, model: model) }
+        var loaded = SavedCollection.items(key: MobileRecords.key(model, history: history)).filter { MobileRecords.visible($0, model: model) }
+        if onlyInProgress {
+            loaded = loaded.filter { ResumeList.isInProgress(kind: $0.kind, itemID: $0.itemID, progress: model.preferences.progress) }
+        }
+        records = loaded
         notice = ""
     }
     private func open(_ record: SavedRecord) async {

@@ -2,6 +2,9 @@ import SwiftUI
 
 struct TVHistoryRail: View {
     @EnvironmentObject private var model: AppModel
+    var title = "Last watched"
+    var onlyInProgress = false
+    var hidesWhenEmpty = false
     @State private var records: [TVWatchedRecord] = []
     @State private var playing: CatalogItem?
     @State private var playingKind = "movie"
@@ -12,8 +15,11 @@ struct TVHistoryRail: View {
     @State private var showingDetail = false
 
     var body: some View {
+        if hidesWhenEmpty && records.isEmpty {
+            Color.clear.frame(width: 0, height: 0).onAppear { reload() }.onChange(of: model.libraryRevision) { _, _ in reload() }
+        } else {
         VStack(alignment: .leading, spacing: 18) {
-            Text("Last watched").font(.title2.bold())
+            Text(title).font(.title2.bold())
             if records.isEmpty {
                 Text("Watch a channel, movie or episode to find it here.").foregroundStyle(.secondary)
             } else {
@@ -25,7 +31,7 @@ struct TVHistoryRail: View {
                                     Image(systemName: record.kind == "live" ? "tv" : record.kind == "series" ? "play.tv" : "film")
                                         .font(.system(size: 44)).frame(width: 260, height: 130)
                                         .background(StreamTheme.panel, in: RoundedRectangle(cornerRadius: 18))
-                                    TVFocusTitle(title: record.name).lineLimit(2).frame(width: 260, alignment: .leading)
+                                    TVFocusTitle(title: displayName(record)).lineLimit(2).frame(width: 260, alignment: .leading)
                                 }
                             }.buttonStyle(TVCardButtonStyle())
                         }
@@ -46,13 +52,23 @@ struct TVHistoryRail: View {
         .navigationDestination(isPresented: $showingDetail) {
             if let item = detailItem { MovieDetailView(item: item) }
         }
+        }
     }
 
     private func reload() {
-        records = TVLastWatched.items(model: model).filter {
-            let kind: LibraryKind = $0.kind == "live" ? .live : .movies
-            return $0.kind == "series" || model.preferences.visible(CatalogItem(id: $0.itemID, name: $0.name, kind: kind, fileExtension: $0.ext, poster: nil, categoryID: $0.categoryID, providerID: $0.providerID))
+        records = TVLastWatched.items(model: model).filter { record in
+            let kind: LibraryKind = record.kind == "live" ? .live : .movies
+            let visible = record.kind == "series" || model.preferences.visible(CatalogItem(id: record.itemID, name: record.name, kind: kind, fileExtension: record.ext, poster: nil, categoryID: record.categoryID, providerID: record.providerID))
+            guard visible else { return false }
+            if !onlyInProgress { return true }
+            return ResumeList.isInProgress(kind: record.kind, itemID: record.itemID, progress: model.preferences.progress)
         }
+    }
+
+    private func displayName(_ record: TVWatchedRecord) -> String {
+        let section: CatalogSection = record.kind == "live" ? .live : (record.kind == "series" ? .series : .movies)
+        let id = CatalogItem.namespaced(providerID: record.providerID, id: record.itemID)
+        return model.preferences.displayName(raw: record.name, key: LibraryPreferences.renameKey(section: section, role: "item", id: id))
     }
 
     private func open(_ record: TVWatchedRecord) async {
