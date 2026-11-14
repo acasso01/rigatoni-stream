@@ -116,6 +116,7 @@ struct TVSettingsView: View {
                             .foregroundStyle(TVTheme.muted)
                     }
 
+                    settingsGroup(title: "Live TV Guide") { EPGRefreshControl() }
                     settingsGroup(title: "Personalize") {
                         NavigationLink("Themes & hidden categories / channels") { LibraryCustomizationView() }
                             .tvContentEntry()
