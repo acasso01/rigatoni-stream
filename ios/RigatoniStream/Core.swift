@@ -4,6 +4,8 @@ import Security
 
 enum TransportPolicy {
     static func permits(_ url: URL, settings: [String: Any]? = Bundle.main.object(forInfoDictionaryKey: "NSAppTransportSecurity") as? [String: Any]) -> Bool {
+        guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil,
+              url.user == nil, url.password == nil else { return false }
         if url.scheme?.lowercased() == "https" { return true }
         guard url.scheme?.lowercased() == "http" else { return false }
         // User-entered provider hosts cannot be enumerated at build time.
@@ -15,33 +17,50 @@ enum TransportPolicy {
     }
 }
 
-struct Provider: Equatable {
+enum ProviderKind: String, Codable, CaseIterable, Identifiable {
+    case xtream, m3u
+    var id: String { rawValue }
+    var title: String { self == .xtream ? "Xtream Codes" : "M3U Playlist" }
+}
+struct Provider: Codable, Equatable {
     var server = ""
     var username = ""
     var password = ""
-
+    var name = ""
+    var kind: ProviderKind = .xtream
+    var epgURL = ""
     var requiresGateway: Bool {
         guard let url = try? baseURL() else { return false }
         return usesHTTP && !TransportPolicy.permits(url)
     }
     var usesHTTP: Bool { (try? baseURL().scheme?.lowercased()) == "http" }
     func baseURL() throws -> URL {
-        guard let url = URL(string: server.trimmingCharacters(in: .whitespacesAndNewlines)),
-              ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
-              url.host != nil, url.user == nil, url.password == nil,
-              url.query == nil, url.fragment == nil,
-              !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !password.isEmpty else { throw AppFailure("Enter a server URL, username and password.") }
+        let url = try Self.validURL(server)
+        guard kind == .m3u || (url.query == nil && !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !password.isEmpty)
+        else { throw AppFailure("Enter the server URL, username and password. Use the server address, not a player_api.php login link.") }
+        return url
+    }
+    static func validURL(_ value: String) throws -> URL {
+        guard let url = URL(string: value.trimmingCharacters(in: .whitespacesAndNewlines)),
+              ["http", "https"].contains(url.scheme?.lowercased() ?? ""), let host = url.host, !host.isEmpty,
+              url.user == nil, url.password == nil, url.fragment == nil,
+              url.port.map({ (1...65535).contains($0) }) ?? true else {
+            throw AppFailure("Enter a valid http:// or https:// URL, including the port if required.")
+        }
         return url
     }
     func apiURL(action: String, category: String? = nil) throws -> URL {
+        guard kind == .xtream else { throw AppFailure("This feature requires an Xtream Codes provider.") }
         var parts = URLComponents(url: try baseURL().appendingPathComponent("player_api.php"), resolvingAgainstBaseURL: false)!
-        parts.queryItems = [URLQueryItem(name: "username", value: username), URLQueryItem(name: "password", value: password), URLQueryItem(name: "action", value: action)]
+        parts.queryItems = [URLQueryItem(name: "username", value: username), URLQueryItem(name: "password", value: password)]
+        if !action.isEmpty { parts.queryItems?.append(URLQueryItem(name: "action", value: action)) }
         if let category { parts.queryItems?.append(URLQueryItem(name: "category_id", value: category)) }
         guard let url = parts.url else { throw AppFailure("Invalid provider URL.") }
         return url
     }
     func streamURL(item: CatalogItem) throws -> URL {
+        if let url = item.playbackURL { return url }
+        guard kind == .xtream else { throw AppFailure("Refresh the playlist to reopen this stream.") }
         let folder = item.kind == .movies ? "movie" : "live"
         var parts = URLComponents(url: try baseURL(), resolvingAgainstBaseURL: false)!
         let allowed = CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "/%?#"))
@@ -80,6 +99,22 @@ struct CatalogItem: Identifiable, Equatable {
     let poster: URL?
     var playbackURL: URL? = nil
     var categoryID: String = ""
+    var number: String = "" // Channel number (Xtream `num`); empty for M3U playlists.
+    /// Owning provider in combined-library mode. Nil means the currently
+    /// selected provider (separate mode, and all pre-combined data).
+    var providerID: UUID? = nil
+    /// Collision-free identity for ForEach, pins and favorites in combined
+    /// mode. Identical to `id` in separate mode.
+    var scopedID: String { Self.namespaced(providerID: providerID, id: id) }
+    static func namespaced(providerID: UUID?, id: String) -> String {
+        guard let providerID else { return id }
+        return providerID.uuidString + ":" + id
+    }
+    static func splitNamespaced(_ value: String) -> (UUID, String)? {
+        let parts = value.split(separator: ":", maxSplits: 1).map(String.init)
+        guard parts.count == 2, let uuid = UUID(uuidString: parts[0]) else { return nil }
+        return (uuid, parts[1])
+    }
     static func parse(_ row: [String: Any], kind: LibraryKind) -> CatalogItem? {
         let id = row["stream_id"].map { String(describing: $0) } ?? ""
         guard !id.isEmpty, id.allSatisfy(\.isNumber) else { return nil }
@@ -89,8 +124,18 @@ struct CatalogItem: Identifiable, Equatable {
         return CatalogItem(id: id, name: row["name"] as? String ?? "Untitled", kind: kind,
                            fileExtension: allowed.contains(ext) ? ext : "mp4",
                            poster: ["https", "http"].contains(image?.scheme ?? "") ? image : nil,
-                           categoryID: row["category_id"].map { String(describing: $0) } ?? "")
+                           categoryID: row["category_id"].map { String(describing: $0) } ?? "",
+                           number: row["num"].map { String(describing: $0) } ?? "")
     }
+}
+
+struct ProviderProfile: Codable, Identifiable, Equatable {
+    var id = UUID()
+    var provider: Provider
+}
+struct ProviderVault: Codable, Equatable {
+    var profiles: [ProviderProfile] = []
+    var selectedID: UUID?
 }
 
 struct AccountUser: Codable {
@@ -137,6 +182,59 @@ enum SessionKeychain {
         } else if code != errSecSuccess { throw AppFailure("Could not update your saved sign-in.") }
     }
     static func clear() { SecItemDelete(query as CFDictionary) }
+}
+
+// Multi-profile vault storage (ui-polish). ProviderKeychain itself is defined
+// in LocalProviders.swift, where it stores the LocalProviderVault record;
+// this extension only adds the ProviderVault record on a separate service,
+// so the two stores never share a Keychain item. The `service:` parameter
+// deliberately takes no default value: the no-argument read()/clear()
+// spellings belong to the LocalProviderVault API in LocalProviders.swift,
+// and a default here would make those calls ambiguous.
+extension ProviderKeychain {
+    static let vaultService = "com.acasso01.antstreams.local-providers"
+    private static func vaultQuery(service: String) -> [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+         kSecAttrAccount as String: "profiles"]
+    }
+    static func read(service: String) throws -> ProviderVault {
+        var request = vaultQuery(service: service)
+        request[kSecReturnData as String] = true; request[kSecMatchLimit as String] = kSecMatchLimitOne
+        var value: CFTypeRef?
+        let code = SecItemCopyMatching(request as CFDictionary, &value)
+        if code == errSecItemNotFound { return ProviderVault() }
+        guard code == errSecSuccess, let data = value as? Data else { throw AppFailure("Unlock this device and retry loading your saved providers.") }
+        do { return try JSONDecoder().decode(ProviderVault.self, from: data) }
+        catch { throw AppFailure("Saved providers could not be read. Your Keychain data has not been overwritten.") }
+    }
+    static func write(_ vault: ProviderVault, service: String) throws {
+        let data = try JSONEncoder().encode(vault)
+        let query = vaultQuery(service: service)
+        let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if status == errSecItemNotFound {
+            var entry = query; entry[kSecValueData as String] = data
+            entry[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            guard SecItemAdd(entry as CFDictionary, nil) == errSecSuccess else { throw AppFailure("Could not save providers securely in Keychain.") }
+        } else if status != errSecSuccess { throw AppFailure("Could not update providers in Keychain.") }
+    }
+    static func clear(service: String) throws {
+        let code = SecItemDelete(vaultQuery(service: service) as CFDictionary)
+        guard code == errSecSuccess || code == errSecItemNotFound else { throw AppFailure("Could not delete saved providers.") }
+    }
+}
+
+/// Library scope: per-provider libraries (default, today's behavior) or one
+/// merged library across every saved provider profile.
+enum LibraryMode: String, CaseIterable, Identifiable {
+    case separate, combined
+    var id: String { rawValue }
+    var title: String { self == .separate ? "Separate providers" : "Combined library" }
+    var blurb: String {
+        switch self {
+        case .separate: return "Each provider keeps its own guide, pins and favorites. Switch providers to change libraries."
+        case .combined: return "Merges every saved provider into one guide. Channels stay tied to their own provider for playback."
+        }
+    }
 }
 
 @MainActor
@@ -252,12 +350,12 @@ final class AccountAPI {
     }
 }
 
-@MainActor
-final class AppModel: ObservableObject {
-    @Published var signedIn = false
+@MainActor final class AppModel: ObservableObject {
     @Published var starting = true
     @Published var busy = false
     @Published var notice = ""
+    @Published var signedIn = false
+    @Published private(set) var vault = ProviderVault()
     @Published var provider = Provider()
     @Published var providerName = ""
     @Published var gateway = ""
@@ -265,9 +363,27 @@ final class AppModel: ObservableObject {
     @Published var libraryRevision = 0
     @Published var localProviders: [LocalProvider] = []
     @Published var activeLocalID: String?
+    @Published var preferences = LibraryPreferences()
     let account = AccountAPI()
     let catalog = SessionCatalog()
-    @Published var preferences = LibraryPreferences()
+    private var restored = false
+    private var warmup: Task<Void, Never>?
+    var gatewayConnection: [String: Any]?
+    var gatewayConnectTask: Task<[String: Any], Error>?
+    var gatewayMovieCatalog: [String: Any]?
+    var gatewayMedia: [LibraryKind: [String: String]] = [:]
+    /// Saved profiles with a usable base URL. Used for the combined library.
+    var combinedProfiles: [ProviderProfile] {
+        vault.profiles.filter { (try? $0.provider.baseURL()) != nil }
+    }
+    var libraryMode: LibraryMode {
+        get { LibraryMode(rawValue: UserDefaults.standard.string(forKey: "ant-library-mode") ?? "") ?? .separate }
+        set { setLibraryMode(newValue) }
+    }
+    var providerReady: Bool {
+        if libraryMode == .combined { return !combinedProfiles.isEmpty }
+        return (try? provider.baseURL()) != nil
+    }
     /// True until a provider is saved on device or an account session exists.
     var needsProviderSetup: Bool { !signedIn && !providerReady }
     /// Signed-in favorites stay on the account id. Otherwise each device provider has its own scope.
@@ -278,29 +394,64 @@ final class AppModel: ObservableObject {
         return nil
     }
     var preferenceKey: String? {
+        if libraryMode == .combined { return "ant-combined-library-v1" }
+        if let selected = vault.selectedID { return "ant-provider-" + selected.uuidString + "-library-v1" }
+        // Device-local / account provider with no vault profile: scope by
+        // account id and provider host, as before.
         guard let id = libraryAccountID, let host = try? provider.baseURL().host else { return nil }
         return CategoryPins.key(accountID: id, host: host) + "-library-v1"
     }
-    func savePreferences() {
-        preferences.write(key: preferenceKey); libraryRevision += 1
+    var pinKey: String? {
+        if libraryMode == .combined { return "ant-combined-library-v1-pins" }
+        if let selected = vault.selectedID { return "ant-provider-" + selected.uuidString + "-pins" }
+        guard let id = libraryAccountID, let host = try? provider.baseURL().host else { return nil }
+        return CategoryPins.key(accountID: id, host: host)
     }
+    /// The provider that owns an item: its tagged profile in combined mode,
+    /// otherwise the currently selected provider.
+    func provider(for item: CatalogItem) -> Provider {
+        if libraryMode == .combined, let pid = item.providerID,
+           let profile = vault.profiles.first(where: { $0.id == pid }) { return profile.provider }
+        return provider
+    }
+    /// EPG cache scope, namespaced per owning provider in combined mode so
+    /// identical stream IDs on two providers never share guide data.
+    func epgScope(for item: CatalogItem) -> String {
+        var scope = (preferenceKey ?? "ant") + "-\(libraryRevision)"
+        if libraryMode == .combined, let pid = item.providerID { scope += "-" + pid.uuidString }
+        return scope
+    }
+    func setLibraryMode(_ mode: LibraryMode) {
+        guard mode != libraryMode else { return }
+        UserDefaults.standard.set(mode.rawValue, forKey: "ant-library-mode")
+        resetCatalog()
+        if providerReady { preload() }
+    }
+    func savePreferences() { preferences.write(key: preferenceKey); libraryRevision += 1 }
     func saveProgress(id: String, seconds: Double, duration: Double) {
         guard preferenceKey != nil, seconds.isFinite, duration.isFinite, seconds >= 10, duration > 0 else { return }
         if seconds >= duration - 20 { preferences.progress[id] = nil }
         else { preferences.progress[id] = MovieProgress(seconds: seconds, duration: duration, updated: Date().timeIntervalSince1970) }
-        // Bound preferences without saving any provider URLs or login details.
-        if preferences.progress.count > 500 {
-            let oldest = preferences.progress.min { $0.value.updated < $1.value.updated }?.key
-            if let oldest { preferences.progress[oldest] = nil }
-        }
+        if preferences.progress.count > 500, let oldest = preferences.progress.min(by: { $0.value.updated < $1.value.updated })?.key { preferences.progress[oldest] = nil }
         preferences.write(key: preferenceKey)
     }
-    var gatewayConnection: [String: Any]?
-    var gatewayConnectTask: Task<[String: Any], Error>?
-    var gatewayMovieCatalog: [String: Any]?
-    var gatewayMedia: [LibraryKind: [String: String]] = [:]
+    func resetCatalog() {
+        warmup?.cancel()
+        EPGCache.shared.reset(); PlaylistStore.shared.reset()
+        #if os(tvOS)
+        TVFavorites.reset()
+        #endif
+        catalog.reset()
+        preferences = LibraryPreferences.read(key: preferenceKey)
+        // A catalog reset follows a provider change, so gateway state for the
+        // old provider must not survive it.
+        gatewayConnectTask?.cancel(); gatewayConnectTask = nil; gatewayConnection = nil
+        gatewayMovieCatalog = nil; gatewayMedia = [:]
+        libraryRevision += 1
+    }
     func resetGateway() {
         EPGCache.shared.reset()
+        PlaylistStore.shared.reset()
         #if os(tvOS)
         TVFavorites.reset()
         #endif
@@ -309,9 +460,20 @@ final class AppModel: ObservableObject {
         gatewayConnectTask?.cancel(); gatewayConnectTask = nil; gatewayConnection = nil
         gatewayMovieCatalog = nil; gatewayMedia = [:]
     }
-    var providerReady: Bool { (try? provider.baseURL()) != nil }
     func restore() async {
+        guard !restored else { return }
         defer { starting = false }
+        // Multi-profile vault first: it carries kind/epgURL and feeds the
+        // combined library.
+        do {
+            vault = try ProviderKeychain.read(service: ProviderKeychain.vaultService)
+            restored = true
+            if let profile = vault.profiles.first(where: { $0.id == vault.selectedID }) ?? vault.profiles.first {
+                vault.selectedID = profile.id; provider = profile.provider
+                resetCatalog(); preload()
+            }
+        } catch { notice = error.localizedDescription }
+        // Device-local providers and the account session.
         do {
             let store = try ProviderKeychain.read()
             localProviders = store.providers
@@ -319,10 +481,10 @@ final class AppModel: ObservableObject {
         do {
             signedIn = try await account.restore()
             if signedIn { try await reloadSettings() }
-            else { activateLocalProvider(); resetGateway() }
+            else { activateDeviceProvider(); resetGateway() }
         } catch {
             notice = error.localizedDescription
-            if !providerReady { activateLocalProvider() }
+            if !providerReady { activateDeviceProvider() }
             resetGateway()
             settingsVisible = signedIn && !providerReady
         }
@@ -337,7 +499,7 @@ final class AppModel: ObservableObject {
                 providerName = result.name
                 activeLocalID = nil
             } else if !providerReady {
-                activateLocalProvider()
+                activateDeviceProvider()
             }
             resetGateway(); libraryRevision += 1
             if vaultReady { notice = "Provider and gateway loaded from your account." }
@@ -345,7 +507,7 @@ final class AppModel: ObservableObject {
             else { notice = "Save your provider to start watching." }
             settingsVisible = !providerReady
         } else {
-            activateLocalProvider()
+            activateDeviceProvider()
             resetGateway(); libraryRevision += 1
             notice = providerReady ? "Provider loaded from this device." : "Save your provider to start watching."
             settingsVisible = !providerReady
@@ -396,7 +558,7 @@ final class AppModel: ObservableObject {
         signedIn = false
         provider = Provider(); providerName = ""; gateway = ""; activeLocalID = nil
         await account.signOut()
-        activateLocalProvider()
+        activateDeviceProvider()
         resetGateway(); libraryRevision += 1; settingsVisible = false
         notice = providerReady ? "Signed out. Using the provider saved on this device." : "Signed out."
     }
@@ -469,6 +631,17 @@ final class AppModel: ObservableObject {
             : "Provider saved on this device. No account required."
     }
 
+    /// Device-local provider: the multi-profile vault wins when it has a
+    /// usable selected profile; otherwise fall back to the local store.
+    private func activateDeviceProvider() {
+        if let profile = vault.profiles.first(where: { $0.id == vault.selectedID }) ?? vault.profiles.first,
+           (try? profile.provider.baseURL()) != nil {
+            provider = profile.provider
+            return
+        }
+        activateLocalProvider()
+    }
+
     private func activateLocalProvider() {
         let store = (try? ProviderKeychain.read()) ?? LocalProviderVault()
         localProviders = store.providers
@@ -506,8 +679,79 @@ final class AppModel: ObservableObject {
         localProviders = store.providers
         if makeActive { activeLocalID = record.id }
     }
+    func saveProvider(_ value: Provider, editing id: UUID?) async throws {
+        guard restored else { throw AppFailure("Retry loading your saved providers before making changes.") }
+        guard !busy else { throw AppFailure("Wait for the current provider operation to finish.") }
+        busy = true; defer { busy = false }
+        guard !value.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AppFailure("Enter a provider name.") }
+        _ = try value.baseURL()
+        if !value.epgURL.isEmpty { _ = try Provider.validURL(value.epgURL) }
+        try await ProviderAuthentication.validate(value)
+        try Task.checkCancellation()
+        var next = vault
+        if let id, let index = next.profiles.firstIndex(where: { $0.id == id }) { next.profiles[index].provider = value; next.selectedID = id }
+        else {
+            guard next.profiles.count < 20 else { throw AppFailure("You can save up to 20 providers.") }
+            let entry = ProviderProfile(provider: value); next.profiles.append(entry); next.selectedID = entry.id
+        }
+        try ProviderKeychain.write(next, service: ProviderKeychain.vaultService)
+        vault = next; provider = value; restored = true
+        resetCatalog(); preload(); notice = "Provider saved securely on this device."
+    }
+    func selectProvider(_ id: UUID) throws {
+        guard !busy, let selected = vault.profiles.first(where: { $0.id == id }) else { return }
+        var next = vault; next.selectedID = id
+        try ProviderKeychain.write(next, service: ProviderKeychain.vaultService)
+        vault = next; provider = selected.provider; resetCatalog(); preload(); notice = ""
+    }
+    func deleteProvider(_ id: UUID) throws {
+        guard !busy else { return }
+        var next = vault; next.profiles.removeAll { $0.id == id }
+        if next.selectedID == id { next.selectedID = next.profiles.first?.id }
+        if next.profiles.isEmpty {
+            try ProviderKeychain.clear(service: ProviderKeychain.vaultService)
+            for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("ant-combined-library-v1") {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        } else { try ProviderKeychain.write(next, service: ProviderKeychain.vaultService) }
+        let switched = next.selectedID != vault.selectedID
+        vault = next
+        let prefix = "ant-provider-" + id.uuidString
+        for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix(prefix) { UserDefaults.standard.removeObject(forKey: key) }
+        if switched || next.profiles.isEmpty {
+            provider = next.profiles.first(where: { $0.id == next.selectedID })?.provider ?? Provider()
+            resetCatalog(); if providerReady { preload() }
+        }
+        notice = "Provider deleted from this device."
+    }
+    func refreshProvider() {
+        resetCatalog(); if providerReady { preload() }
+    }
+    private func preload() {
+        guard libraryMode == .separate else { return }
+        let source = provider; let revision = libraryRevision
+        warmup = Task { @MainActor in
+            // Load category indexes automatically, fetch large catalogs only when opened/searched.
+            for kind in LibraryKind.allCases {
+                guard !Task.isCancelled else { return }
+                do {
+                    let categories = try await catalog.categories(kind: kind, model: self)
+                    if let first = categories.first { _ = try await catalog.items(kind: kind, category: first.id, model: self) }
+                } catch { if !Task.isCancelled, revision == libraryRevision { notice = "Provider saved. Some catalogs could not be loaded; open the section to retry." } }
+            }
+            if source.kind == .xtream, !Task.isCancelled { _ = try? await DirectCatalog.rows(provider: source, action: "get_series_categories") }
+        }
+    }
+    func resolve(_ item: CatalogItem) async throws -> CatalogItem {
+        let owner = self.provider(for: item)
+        guard owner.kind == .m3u else { return item }
+        let revision = libraryRevision
+        let playlist = try await PlaylistStore.shared.load(owner)
+        guard revision == libraryRevision else { throw CancellationError() }
+        guard let fresh = playlist.items.first(where: { $0.id == item.id }) else { throw AppFailure("This title is no longer in the playlist.") }
+        return fresh
+    }
 }
-
 
 extension AppModel {
     private func gatewayRequest(_ url: URL, method: String = "GET") async throws -> [String: Any] {
@@ -558,5 +802,45 @@ extension AppModel {
               path.range(of: "^/media/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+$", options: .regularExpression) != nil,
               let url = URL(string: try AccountAPI.gatewayOrigin(gateway) + path) else { throw AppFailure("Reconnect the provider to refresh this stream.") }
         return url
+    }
+}
+
+// Pinned live categories, persisted per scope in UserDefaults. "All" always
+// stays first; pinned categories follow in pin order, then the rest.
+// Shared by the iPhone guide and the Apple TV guide.
+enum PinnedCategories {
+    static func read(key: String?) -> [String] {
+        guard let key, let ids = UserDefaults.standard.stringArray(forKey: key + "-pinned-categories") else { return [] }
+        return ids
+    }
+    static func write(_ ids: [String], key: String?) {
+        guard let key else { return }
+        UserDefaults.standard.set(ids, forKey: key + "-pinned-categories")
+    }
+    static func toggled(_ id: String, in pins: [String]) -> [String] {
+        guard !id.isEmpty else { return pins }
+        if pins.contains(id) { return pins.filter { $0 != id } }
+        return Array((pins + [id]).suffix(100))
+    }
+    /// "All" is handled by callers; pinned categories (in pin order) come
+    /// first, then every remaining category in its original order.
+    static func ordered(_ categories: [CatalogCategory], pins: [String]) -> [CatalogCategory] {
+        let byID = Dictionary(categories.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let ids = Set(pins)
+        return pins.compactMap { byID[$0] } + categories.filter { !ids.contains($0.id) }
+    }
+}
+
+// Starred (pinned) live channels, persisted per provider in UserDefaults.
+// Shared by the iPhone guide and the Apple TV guide so pins sync across
+// devices (same key, same provider scope).
+enum PinnedChannels {
+    static func read(key: String?) -> Set<String> {
+        guard let key, let ids = UserDefaults.standard.stringArray(forKey: key + "-pinned-channels") else { return [] }
+        return Set(ids)
+    }
+    static func write(_ ids: Set<String>, key: String?) {
+        guard let key else { return }
+        UserDefaults.standard.set(Array(ids), forKey: key + "-pinned-channels")
     }
 }

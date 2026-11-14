@@ -13,68 +13,77 @@ final class SessionCatalog: ObservableObject {
     private var jobs: [String: Task<[CatalogItem], Error>] = [:]
     private var fullJobs: [LibraryKind: Task<CatalogLoadResult, Error>] = [:]
     private var generation = 0
+    // Combined-library caches live apart from the single-provider caches so
+    // switching modes (which resets the catalog) can never mix providers.
+    private var combinedCategoryLists: [LibraryKind: [CatalogCategory]] = [:]
+    private var combinedCompleted: [LibraryKind: CatalogLoadResult] = [:]
+    private var combinedFullJobs: [LibraryKind: Task<CatalogLoadResult, Error>] = [:]
 
     func reset() {
         generation += 1
         PosterMemory.shared.removeAllObjects()
         jobs.values.forEach { $0.cancel() }; fullJobs.values.forEach { $0.cancel() }
-        jobs = [:]; fullJobs = [:]; batches = [:]; batchOrder = []
-        completed = [:]; categoryLists = [:]; searchable = [:]; progress = [:]; revision += 1
+        combinedFullJobs.values.forEach { $0.cancel() }
+        jobs = [:]; fullJobs = [:]; combinedFullJobs = [:]; batches = [:]; batchOrder = []
+        completed = [:]; combinedCompleted = [:]; categoryLists = [:]; combinedCategoryLists = [:]
+        searchable = [:]; progress = [:]; revision += 1
     }
     func categories(kind: LibraryKind, model: AppModel) async throws -> [CatalogCategory] {
+        if model.libraryMode == .combined { return try await combinedCategories(kind: kind, model: model) }
         if let cached = categoryLists[kind] { return cached }
         let epoch = generation
-        let rows: [[String: Any]]
-        if model.provider.requiresGateway { rows = try await model.gatewayRows(kind: kind, category: nil) }
-        else {
-            let url = try model.provider.apiURL(action: kind.categoryAction)
-            let data = try await BoundedTransfer(limit: 4 * 1024 * 1024).fetch(url)
-            guard let result = try JSONSerialization.jsonObject(with: data) as? [[String: Any]], result.count <= 50000 else { throw AppFailure("The category list is too large or invalid.") }
-            rows = result
+        let result = try await fetchCategories(kind: kind, provider: model.provider)
+        guard epoch == generation else { throw CancellationError() }
+        categoryLists[kind] = result
+        return result
+    }
+    /// Categories for every saved provider, merged. IDs are namespaced
+    /// "<providerUUID>:<categoryID>" so identical IDs never collide. One
+    /// failing provider is skipped; the others' categories are kept.
+    private func combinedCategories(kind: LibraryKind, model: AppModel) async throws -> [CatalogCategory] {
+        if let cached = combinedCategoryLists[kind] { return cached }
+        let epoch = generation
+        let profiles = model.combinedProfiles
+        var merged: [CatalogCategory] = []
+        var failed = 0
+        for profile in profiles {
+            try Task.checkCancellation()
+            do {
+                let cats = try await fetchCategories(kind: kind, provider: profile.provider)
+                let prefix = profiles.count > 1 ? profile.provider.name + " · " : ""
+                merged += cats.map {
+                    CatalogCategory(id: CatalogItem.namespaced(providerID: profile.id, id: $0.id),
+                                    name: prefix + $0.name)
+                }
+            } catch { failed += 1 }
         }
         guard epoch == generation else { throw CancellationError() }
+        if merged.isEmpty && failed > 0 { throw AppFailure("Every provider failed to load categories.") }
+        combinedCategoryLists[kind] = merged
+        return merged
+    }
+    private func fetchCategories(kind: LibraryKind, provider: Provider) async throws -> [CatalogCategory] {
+        if provider.kind == .m3u {
+            let playlist = try await PlaylistStore.shared.load(provider)
+            return playlist.categories[kind] ?? []
+        }
+        let rows = try await DirectCatalog.rows(provider: provider, action: kind.categoryAction)
         var seen = Set<String>()
-        let result = rows.compactMap { row -> CatalogCategory? in
+        return rows.compactMap { row -> CatalogCategory? in
             let id = row["category_id"].map { String(describing: $0) } ?? ""
             guard !id.isEmpty, id.allSatisfy(\.isNumber), seen.insert(id).inserted else { return nil }
             return CatalogCategory(id: id, name: row["category_name"] as? String ?? "Category")
         }
-        categoryLists[kind] = result
-        return result
     }
     func items(kind: LibraryKind, category: String?, model: AppModel) async throws -> [CatalogItem] {
+        if model.libraryMode == .combined { return try await combinedItems(kind: kind, category: category, model: model) }
         let key = "\(kind.rawValue):\(category ?? "all")"
         if let cached = batches[key] { return cached }
         if category == nil, let cached = completed[kind] { return cached.items }
         if let job = jobs[key] { return try await job.value }
         let epoch = generation
         let task = Task { @MainActor in
-            let rows: [[String: Any]]
-            if model.provider.requiresGateway {
-                guard let category else { throw AppFailure("Load gateway categories individually.") }
-                rows = try await model.gatewayRows(kind: kind, category: category)
-            } else {
-                let url = try model.provider.apiURL(action: kind.streamAction, category: category)
-                let data = try await BoundedTransfer(limit: 32 * 1024 * 1024, timeout: category == nil ? 10 : 30).fetch(url)
-                let worker = Task.detached(priority: .userInitiated) {
-                    guard let result = try JSONSerialization.jsonObject(with: data) as? [[String: Any]], result.count <= CatalogIndex.maximumItems else { throw AppFailure("The catalog is too large or invalid.") }
-            return result
-                }
-                rows = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
-            }
-            try Task.checkCancellation()
-            let worker = Task.detached(priority: .userInitiated) { rows.compactMap { CatalogItem.parse($0, kind: kind) } }
-            var result = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
-            try Task.checkCancellation()
-            if model.provider.requiresGateway {
-                result = result.map { item in
-                    var item = item
-                    item.playbackURL = try? model.gatewayPlaybackURL(id: item.id, kind: kind)
-                    return item
-                }
-            }
-            if let category { result = result.map { var item = $0; if item.categoryID.isEmpty { item.categoryID = category }; return item } }
-            return result
+            try await self.fetchItems(kind: kind, category: category, provider: model.provider)
         }
         jobs[key] = task
         do {
@@ -89,13 +98,61 @@ final class SessionCatalog: ObservableObject {
             return result
         } catch { if epoch == generation { jobs[key] = nil }; throw error }
     }
+    /// Items in combined mode. A namespaced category ("<uuid>:<catID>")
+    /// loads from its owning provider only; nil loads every provider's full
+    /// catalog (one request each), tagging items and skipping failures.
+    private func combinedItems(kind: LibraryKind, category: String?, model: AppModel) async throws -> [CatalogItem] {
+        if let category {
+            guard let (pid, raw) = CatalogItem.splitNamespaced(category),
+                  let profile = model.vault.profiles.first(where: { $0.id == pid }) else { return [] }
+            let rawItems = try await fetchItems(kind: kind, category: raw, provider: profile.provider)
+            return tagCombined(rawItems, providerID: pid)
+        }
+        var merged: [CatalogItem] = []
+        var seen = Set<String>()
+        var failed = 0
+        for profile in model.combinedProfiles {
+            try Task.checkCancellation()
+            do {
+                let batch = tagCombined(try await fetchItems(kind: kind, category: nil, provider: profile.provider),
+                                        providerID: profile.id)
+                for item in batch where seen.insert(item.scopedID).inserted { merged.append(item) }
+            } catch { failed += 1 }
+        }
+        if merged.isEmpty && failed > 0 { throw AppFailure("Every provider failed to load.") }
+        return merged
+    }
+    /// Tags items with their owning provider and namespaces their category
+    /// IDs to match the combined category list.
+    private func tagCombined(_ items: [CatalogItem], providerID pid: UUID) -> [CatalogItem] {
+        items.map { item in
+            var tagged = item
+            tagged.providerID = pid
+            tagged.categoryID = CatalogItem.namespaced(providerID: pid, id: item.categoryID)
+            return tagged
+        }
+    }
+    private func fetchItems(kind: LibraryKind, category: String?, provider: Provider) async throws -> [CatalogItem] {
+        if provider.kind == .m3u {
+            let playlist = try await PlaylistStore.shared.load(provider)
+            return playlist.items.filter { $0.kind == kind && (category == nil || $0.categoryID == category) }
+        }
+        let rows = try await DirectCatalog.rows(provider: provider, action: kind.streamAction, category: category)
+        try Task.checkCancellation()
+        let worker = Task.detached(priority: .userInitiated) { rows.compactMap { CatalogItem.parse($0, kind: kind) } }
+        var result = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
+        try Task.checkCancellation()
+        if let category { result = result.map { var item = $0; if item.categoryID.isEmpty { item.categoryID = category }; return item } }
+        return result
+    }
     func loadAll(kind: LibraryKind, model: AppModel) async throws -> CatalogLoadResult {
+        if model.libraryMode == .combined { return try await combinedLoadAll(kind: kind, model: model) }
         if let cached = completed[kind] { return cached }
         if let job = fullJobs[kind] { return try await job.value }
         let epoch = generation
         let task = Task { @MainActor in
             let categories = try await self.categories(kind: kind, model: model)
-            return try await CatalogLoader.load(categoryIDs: categories.map(\.id), preferFullCatalog: !model.provider.requiresGateway, fetch: { category in
+            return try await CatalogLoader.load(categoryIDs: categories.map(\.id), preferFullCatalog: true, fetch: { category in
                 try await self.items(kind: kind, category: category, model: model)
             }, progress: { partial, message in
                 guard epoch == self.generation else { return }
@@ -111,6 +168,43 @@ final class SessionCatalog: ObservableObject {
             if result.notice.isEmpty { completed[kind] = result }
             return result
         } catch { if epoch == generation { fullJobs[kind] = nil; progress[kind] = nil }; throw error }
+    }
+    /// Whole-catalog load across every saved provider for search: one bounded
+    /// request per provider, partial results published as each arrives, and a
+    /// failing provider never aborts the others.
+    private func combinedLoadAll(kind: LibraryKind, model: AppModel) async throws -> CatalogLoadResult {
+        if let cached = combinedCompleted[kind] { return cached }
+        if let job = combinedFullJobs[kind] { return try await job.value }
+        let epoch = generation
+        let task = Task { @MainActor in
+            var merged: [CatalogItem] = []
+            var seen = Set<String>()
+            var failed = 0
+            let profiles = model.combinedProfiles
+            for (offset, profile) in profiles.enumerated() {
+                try Task.checkCancellation()
+                do {
+                    let batch = self.tagCombined(try await self.fetchItems(kind: kind, category: nil, provider: profile.provider),
+                                                 providerID: profile.id)
+                    try Task.checkCancellation()
+                    for item in batch where seen.insert(item.scopedID).inserted { merged.append(item) }
+                } catch { failed += 1 }
+                guard epoch == self.generation else { throw CancellationError() }
+                self.searchable[kind] = merged
+                self.progress[kind] = "Loading provider \(offset + 1) of \(profiles.count)…"
+                self.revision += 1
+            }
+            let notice = failed == 0 ? "" : "\(failed) providers could not be loaded. Showing available results."
+            return CatalogLoadResult(items: merged, notice: notice)
+        }
+        combinedFullJobs[kind] = task
+        do {
+            let result = try await task.value
+            guard epoch == generation else { throw CancellationError() }
+            combinedFullJobs[kind] = nil; searchable[kind] = result.items; progress[kind] = nil; revision += 1
+            if result.notice.isEmpty { combinedCompleted[kind] = result }
+            return result
+        } catch { if epoch == generation { combinedFullJobs[kind] = nil; progress[kind] = nil }; throw error }
     }
 }
 
@@ -230,7 +324,7 @@ struct MovieShelf: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
                 Capsule()
-                    .fill(StreamTheme.accent(for: AppAppearance(rawValue: appearance) ?? .dark))
+                    .fill(StreamTheme.accentFill(for: AppAppearance(rawValue: appearance) ?? .dark))
                     .frame(width: 4, height: 22)
                 Text(category.name).font(.title3.bold()).lineLimit(1)
                 Spacer()
@@ -262,7 +356,7 @@ struct MovieShelf: View {
 
 struct SearchHit: Identifiable {
     let item: CatalogItem
-    var id: String { "\(item.kind.rawValue):\(item.id)" }
+    var id: String { "\(item.kind.rawValue):\(item.scopedID)" }
 }
 
 enum UnifiedSearch {
@@ -280,6 +374,9 @@ struct GlobalSearchView: View {
     @State private var results: [SearchHit] = []
     @State private var notices: [String] = []
     @State private var playing: CatalogItem?
+    @State private var seriesStore: SeriesStore?
+    @State private var allSeries: [SeriesItem] = []
+    @State private var selectedSeries: SeriesItem?
     @State private var limit = 60
     @State private var retry = 0
     private var hasQuery: Bool { query.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 }
@@ -287,17 +384,29 @@ struct GlobalSearchView: View {
         NavigationStack {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
-                    Picker("Search in", selection: $filter) {
-                        Text("All").tag("all"); Text("Movies").tag(LibraryKind.movies.rawValue); Text("Live TV").tag(LibraryKind.live.rawValue)
-                    }.pickerStyle(.segmented)
+                    HStack(spacing: 10) {
+                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                        TextField("Movies, Live TV and TV Shows", text: $query)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .submitLabel(.search)
+                        if !query.isEmpty {
+                            Button { query = "" } label: {
+                                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                            }.accessibilityLabel("Clear search")
+                        }
+                    }
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    StreamOptionPicker(options: [("all", "All"), (LibraryKind.movies.rawValue, "Movies"), (LibraryKind.live.rawValue, "Live TV"), ("series", "TV Shows")], selection: $filter)
                     if !hasQuery {
-                        StreamHeading(title: "Find your next favorite", subtitle: "Search movies and live channels together. Enter at least two characters.").padding(.vertical, 20)
+                        StreamHeading(title: "Find your next favorite", subtitle: "Search movies, live channels and TV shows together. Enter at least two characters.").padding(.vertical, 20)
                         Label("Every category. One search.", systemImage: "sparkle.magnifyingglass")
                             .frame(maxWidth: .infinity, alignment: .leading).padding(24)
                             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: StreamTheme.corner))
                     }
                     if hasQuery {
-                        ForEach(LibraryKind.allCases) { kind in
+                        ForEach(LibraryKind.allCases.filter { filter == "all" || $0.rawValue == filter }) { kind in
                             if let progress = catalog.progress[kind] { ProgressView("\(kind.title): \(progress)").font(.caption) }
                         }
                         ForEach(notices, id: \.self) { Text($0).font(.caption).foregroundStyle(.secondary) }
@@ -315,19 +424,48 @@ struct GlobalSearchView: View {
                             }.buttonStyle(.plain)
                         }
                         if results.count > limit { Button("More results") { limit += 60 } }
+                        if filter == "all" || filter == "series" {
+                            let seriesMatches = allSeries.filter { query.isEmpty ? false : $0.name.localizedCaseInsensitiveContains(query) }
+                            if !seriesMatches.isEmpty {
+                                Text("TV Shows").font(.title3.bold()).padding(.top, 8)
+                                ForEach(Array(seriesMatches.prefix(limit))) { series in
+                                    Button { selectedSeries = series } label: {
+                                        HStack(spacing: 14) {
+                                            ProviderPoster(url: series.poster, kind: .movies).frame(width: 64, height: 90).clipShape(RoundedRectangle(cornerRadius: 7))
+                                            VStack(alignment: .leading, spacing: 5) {
+                                                Text(series.name).font(.headline).lineLimit(2)
+                                                Label("TV Show", systemImage: "play.tv").font(.caption).foregroundStyle(.secondary)
+                                            }
+                                            Spacer(); Image(systemName: "chevron.right").font(.title2).foregroundStyle(.secondary)
+                                        }.foregroundStyle(.primary)
+                                    }.buttonStyle(.plain)
+                                }
+                            }
+                        }
                         if catalog.progress.isEmpty && results.isEmpty { Text("No matching titles in the loaded catalogs.").foregroundStyle(.secondary) }
                     }
                 }.padding()
             }.background { StreamBackdrop() }
             .navigationTitle("Search")
-            .searchable(text: $query, prompt: "Movies and Live TV")
-            .task(id: "\(hasQuery)-\(model.libraryRevision)-\(retry)") {
+            .task(id: "\(hasQuery)-\(filter)-\(model.libraryRevision)-\(retry)") {
                 guard hasQuery, model.providerReady else { return }
                 notices = []
-                // Two media types at most, never one network request per keystroke.
-                async let movies: Void = load(.movies)
-                async let live: Void = load(.live)
-                _ = await (movies, live)
+                // Only load the catalogs the selected filter needs — no more
+                // "Movies: Loading full catalog…" when TV Shows is selected.
+                let scope = filter
+                if scope == "all" {
+                    // Three media types at most, never one network request per keystroke.
+                    async let movies: Void = load(.movies)
+                    async let live: Void = load(.live)
+                    async let series: Void = loadSeries()
+                    _ = await (movies, live, series)
+                } else if scope == LibraryKind.movies.rawValue {
+                    await load(.movies)
+                } else if scope == LibraryKind.live.rawValue {
+                    await load(.live)
+                } else if scope == "series" {
+                    await loadSeries()
+                }
             }
             .task(id: "\(query)-\(filter)-\(catalog.revision)-\(model.libraryRevision)") {
                 limit = 60
@@ -340,6 +478,9 @@ struct GlobalSearchView: View {
                 guard !Task.isCancelled else { return }; results = found
             }
             .fullScreenCover(item: $playing) { CatalogDestination(item: $0, channels: catalog.searchable[.live] ?? []) }
+            .fullScreenCover(item: $selectedSeries) { series in
+                if let store = seriesStore { ShowDetailView(series: series, store: store) }
+            }
         }
     }
     private func load(_ kind: LibraryKind) async {
@@ -347,6 +488,13 @@ struct GlobalSearchView: View {
             let result = try await catalog.loadAll(kind: kind, model: model)
             if !Task.isCancelled && !result.notice.isEmpty { notices.append("\(kind.title): \(result.notice)") }
         } catch { if !Task.isCancelled { notices.append("\(kind.title): \(error.localizedDescription)") } }
+    }
+    private func loadSeries() async {
+        if seriesStore == nil { seriesStore = SeriesStore(model: model) }
+        guard let store = seriesStore else { return }
+        let items = await store.loadAllSeries()
+        guard !Task.isCancelled else { return }
+        allSeries = items
     }
 }
 
@@ -376,7 +524,7 @@ struct LibraryPreferences: Codable {
         !(kind == .live ? hiddenLiveCategories : hiddenMovieCategories).contains(id)
     }
     func visible(_ item: CatalogItem) -> Bool {
-        categoryVisible(item.categoryID, kind: item.kind) && (item.kind != .live || !hiddenChannels.contains(item.id))
+        categoryVisible(item.categoryID, kind: item.kind) && (item.kind != .live || !hiddenChannels.contains(item.scopedID))
     }
     mutating func setCategory(_ id: String, kind: LibraryKind, visible: Bool) {
         if kind == .live { if visible { hiddenLiveCategories.remove(id) } else { hiddenLiveCategories.insert(id) } }
@@ -384,11 +532,20 @@ struct LibraryPreferences: Codable {
     }
 }
 enum AppAppearance: String, CaseIterable, Identifiable {
-    case dark, light, xfinity
+    case dark, light, ghost, nebula
     var id: String { rawValue }
-    var title: String { switch self { case .dark: return "Dark"; case .light: return "iOS Light"; case .xfinity: return "Xfinity" } }
+    var title: String { switch self { case .dark: return "Dark"; case .light: return "iOS Light"; case .ghost: return "Ghost"; case .nebula: return "Nebula" } }
     var scheme: ColorScheme { self == .light ? .light : .dark }
     var accent: Color { StreamTheme.accent(for: self) }
+
+    static func migrateStoredSelection(in defaults: UserDefaults = .standard) {
+        let key = "rigatoni-appearance"
+        switch defaults.string(forKey: key) {
+        case "netflix": defaults.set(AppAppearance.dark.rawValue, forKey: key)
+        case "xfinity", "midnight": defaults.set(AppAppearance.nebula.rawValue, forKey: key)
+        default: break
+        }
+    }
 }
 
 struct LibraryCustomizationView: View {
@@ -409,7 +566,7 @@ struct LibraryCustomizationView: View {
                 Picker("Theme", selection: $appearance) {
                     ForEach(AppAppearance.allCases) { Text($0.title).tag($0.rawValue) }
                 }
-                Text("Themes, hidden content and watch progress are saved on this device. Provider and gateway settings remain in your account.").font(.footnote).foregroundStyle(.secondary)
+                Text("Themes, hidden content and watch progress are saved on this device. Provider credentials are stored securely in Keychain.").font(.footnote).foregroundStyle(.secondary)
                 Picker("Manage", selection: $kind) { ForEach(LibraryKind.allCases) { Text($0.title).tag($0) } }
                 TextField("Find category or channel", text: $query)
                 Text("Visible categories").font(.title2.bold())
@@ -445,8 +602,8 @@ struct LibraryCustomizationView: View {
                     }
                     LazyVStack(alignment: .leading, spacing: 14) {
                         ForEach(Array(channels.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }.prefix(limit))) { item in
-                            Toggle(item.name, isOn: Binding(get: { !model.preferences.hiddenChannels.contains(item.id) }, set: {
-                                if $0 { model.preferences.hiddenChannels.remove(item.id) } else { model.preferences.hiddenChannels.insert(item.id) }
+                            Toggle(item.name, isOn: Binding(get: { !model.preferences.hiddenChannels.contains(item.scopedID) }, set: {
+                                if $0 { model.preferences.hiddenChannels.remove(item.scopedID) } else { model.preferences.hiddenChannels.insert(item.scopedID) }
                                 model.savePreferences()
                             }))
                         }
@@ -500,10 +657,14 @@ struct MovieDetailView: View {
     @State private var metadataNotice = ""
     @State private var playing = false
     @State private var resumeSeconds = 0.0
+    // tvOS focus entry point: the focus engine can lose its way in a pushed
+    // detail view, so the primary action is focused explicitly on appear.
+    @FocusState private var detailFocus: String?
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 Button { dismiss() } label: { Label("Back", systemImage: "chevron.left") }
+                    .focused($detailFocus, equals: "back")
                 HStack(alignment: .top, spacing: 28) {
                     ProviderPoster(url: item.poster, kind: .movies).aspectRatio(2.0 / 3.0, contentMode: .fit)
                         .frame(maxWidth: posterWidth).clipShape(RoundedRectangle(cornerRadius: 18))
@@ -512,10 +673,13 @@ struct MovieDetailView: View {
                         if !info.release.isEmpty { Text("Released \(info.release)").foregroundStyle(.secondary) }
                         if !info.genre.isEmpty { Text(info.genre).foregroundStyle(.secondary) }
                         if let saved = model.preferences.progress[item.id] {
-                            Button { resumeSeconds = saved.seconds; playing = true } label: { Label("Continue from \(saved.label)", systemImage: "play.fill") }.buttonStyle(.borderedProminent)
+                            Button { resumeSeconds = saved.seconds; playing = true } label: { Label("Continue from \(saved.label)", systemImage: "play.fill") }.buttonStyle(.borderedProminent).foregroundStyle(StreamTheme.onAccent)
+                                .focused($detailFocus, equals: "play")
                             Button("Restart movie") { restart() }.buttonStyle(.bordered)
+                                .focused($detailFocus, equals: "restart")
                         } else {
-                            Button { resumeSeconds = 0; playing = true } label: { Label("Play movie", systemImage: "play.fill") }.buttonStyle(.borderedProminent)
+                            Button { resumeSeconds = 0; playing = true } label: { Label("Play movie", systemImage: "play.fill") }.buttonStyle(.borderedProminent).foregroundStyle(StreamTheme.onAccent)
+                                .focused($detailFocus, equals: "play")
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -528,11 +692,13 @@ struct MovieDetailView: View {
                 if !metadataNotice.isEmpty { Text(metadataNotice).font(.footnote).foregroundStyle(.secondary) }
             }.padding(28).frame(maxWidth: 1200, alignment: .leading).frame(maxWidth: .infinity)
         }.background { StreamBackdrop() }
+        .onAppear { detailFocus = "play" }
         .task {
             defer { loading = false }
             do {
-                guard !model.provider.requiresGateway else { throw AppFailure("Movie details require direct provider access in this build. Playback is still available through the gateway.") }
-                var parts = URLComponents(url: try model.provider.apiURL(action: "get_vod_info"), resolvingAgainstBaseURL: false)!
+                let owner = model.provider(for: item)
+                guard owner.kind == .xtream else { throw AppFailure("M3U playlists do not include a movie overview or release date.") }
+                var parts = URLComponents(url: try owner.apiURL(action: "get_vod_info"), resolvingAgainstBaseURL: false)!
                 parts.queryItems?.append(URLQueryItem(name: "vod_id", value: item.id))
                 let data = try await BoundedTransfer(limit: 2 * 1024 * 1024).fetch(parts.url!)
                 let row = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
@@ -540,11 +706,7 @@ struct MovieDetailView: View {
             } catch { if !Task.isCancelled { metadataNotice = error.localizedDescription } }
         }
         .fullScreenCover(isPresented: $playing) {
-            #if os(iOS)
-            PlayerView(item: item, provider: model.provider, startSeconds: resumeSeconds)
-            #else
-            TVPlayerView(item: item, provider: model.provider, startSeconds: resumeSeconds)
-            #endif
+            DirectPlayerView(item: item, provider: model.provider(for: item), startSeconds: resumeSeconds)
         }
     }
     private var posterWidth: CGFloat {
@@ -567,11 +729,7 @@ struct CatalogDestination: View {
     var body: some View {
         if item.kind == .movies { MovieDetailView(item: item) }
         else {
-            #if os(iOS)
-            PlayerView(item: item, provider: model.provider, channels: channels.filter(model.preferences.visible))
-            #else
-            TVPlayerView(item: item, provider: model.provider, channels: channels.filter(model.preferences.visible))
-            #endif
+            DirectPlayerView(item: item, provider: model.provider(for: item), channels: channels.filter(model.preferences.visible))
         }
     }
 }

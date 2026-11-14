@@ -13,6 +13,8 @@ final class BoundedTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendab
     private var session: URLSession?
     private var task: URLSessionDataTask?
     private var finished = false
+    private var finalURL: URL?
+    var resolvedURL: URL? { lock.lock(); defer { lock.unlock() }; return finalURL }
     init(limit: Int, timeout: TimeInterval = 30) { self.limit = limit; self.timeout = timeout }
     func fetch(_ url: URL, headers: [String: String] = [:], method: String = "GET") async throws -> Data {
         guard TransportPolicy.permits(url) else { throw AppFailure("This provider URL is blocked by this app build's network settings. Rebuild with direct HTTP IPTV support enabled.") }
@@ -28,7 +30,7 @@ final class BoundedTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendab
                 let connection = URLSession(configuration: config, delegate: self, delegateQueue: nil)
                 session = connection
                 var request = URLRequest(url: url); request.httpMethod = method
-                headers.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }; request.setValue("application/json,image/*", forHTTPHeaderField: "Accept")
+                headers.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }; request.setValue("*/*", forHTTPHeaderField: "Accept")
                 let nextTask = connection.dataTask(with: request); task = nextTask
                 lock.unlock(); nextTask.resume()
             }
@@ -47,12 +49,26 @@ final class BoundedTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendab
         guard let url = request.url, TransportPolicy.permits(url) else {
             completionHandler(nil); finish(.failure(AppFailure("The provider redirected to a URL blocked by this app build's network settings. Check the provider URL and rebuild if needed."))); return
         }
-        completionHandler(request)
+        var next = request
+        if response.url?.host != request.url?.host || response.url?.scheme != request.url?.scheme || response.url?.port != request.url?.port {
+            next.setValue(nil, forHTTPHeaderField: "Authorization")
+            next.setValue(nil, forHTTPHeaderField: "Cookie")
+        }
+        completionHandler(next)
     }
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
-        guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode), response.expectedContentLength <= Int64(limit) else {
-            completionHandler(.cancel); finish(.failure(AppFailure("Provider response failed or is too large. Try another category."))); return
+        guard let response = response as? HTTPURLResponse else {
+            completionHandler(.cancel); finish(.failure(AppFailure("The server returned an unsupported response."))); return
         }
+        guard (200..<300).contains(response.statusCode) else {
+            let message = [401,403].contains(response.statusCode) ? "Provider access was denied. Check your credentials or subscription." :
+                response.statusCode == 429 ? "The provider is rate limiting requests. Wait before retrying." : "Provider request failed (HTTP \(response.statusCode))."
+            completionHandler(.cancel); finish(.failure(AppFailure(message))); return
+        }
+        guard response.expectedContentLength <= Int64(limit) else {
+            completionHandler(.cancel); finish(.failure(AppFailure("Provider response is too large. Try a smaller category."))); return
+        }
+        lock.lock(); finalURL = response.url; lock.unlock()
         completionHandler(.allow)
     }
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
@@ -113,6 +129,52 @@ struct ProviderPoster: View {
 
 enum CatalogSearchScope: String, CaseIterable {
     case category = "This category", all = "All categories"
+}
+
+/// Capsule option picker with explicit selected styling: the selected option
+/// always pairs an accent fill with `StreamTheme.onAccent` text, so it stays
+/// readable in every theme (Ghost's white accent would wash out a default
+/// segmented control or a prominent button with light text).
+struct StreamOptionPicker<Value: Hashable>: View {
+    let options: [(Value, String)]
+    @Binding var selection: Value
+    var body: some View {
+        HStack(spacing: 10) {
+            ForEach(options, id: \.0) { value, title in
+                let selected = value == selection
+                Button { selection = value } label: {
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .padding(.horizontal, 18).padding(.vertical, 12)
+                        .frame(maxWidth: .infinity)
+                        .foregroundStyle(selected ? StreamTheme.onAccent : StreamTheme.text)
+                        .background(selected ? AnyShapeStyle(StreamTheme.accentFill) : AnyShapeStyle(StreamTheme.panel), in: Capsule())
+                }
+                .buttonStyle(StreamOptionButtonStyle())
+                .accessibilityAddTraits(selected ? .isSelected : [])
+            }
+        }
+    }
+}
+
+private struct StreamOptionButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        StreamOptionBody(configuration: configuration)
+    }
+    private struct StreamOptionBody: View {
+        let configuration: ButtonStyleConfiguration
+        @Environment(\.isFocused) private var focused
+        var body: some View {
+            configuration.label
+                .opacity(configuration.isPressed ? 0.8 : 1)
+                .overlay {
+                    #if os(tvOS)
+                    Capsule().stroke(focused ? TVTheme.focusRing : Color.clear, lineWidth: 3)
+                    #endif
+                }
+        }
+    }
 }
 
 struct CatalogIndex {
@@ -204,39 +266,61 @@ enum StreamTheme {
         switch appearance {
         case .light: return rgb(242, 242, 247)
         case .dark: return rgb(9, 9, 11)
-        case .xfinity: return rgb(11, 27, 51)
+        case .ghost: return rgb(10, 10, 11)
+        case .nebula: return rgb(6, 6, 9)
         }
     }
     static func panel(for appearance: AppAppearance) -> Color {
         switch appearance {
         case .light: return rgb(255, 255, 255)
         case .dark: return rgb(23, 23, 27)
-        case .xfinity: return rgb(19, 41, 75)
+        case .ghost: return rgb(20, 20, 22)
+        case .nebula: return rgb(14, 14, 20)
         }
     }
+    static func card(for appearance: AppAppearance) -> Color { panel(for: appearance) }
     static func text(for appearance: AppAppearance) -> Color {
         switch appearance {
         case .light: return rgb(28, 28, 30)
         case .dark: return rgb(250, 250, 250)
-        case .xfinity: return rgb(255, 255, 255)
+        case .ghost: return .white
+        case .nebula: return rgb(237, 235, 245)
         }
     }
     static func muted(for appearance: AppAppearance) -> Color {
         switch appearance {
         case .light: return rgb(107, 114, 128)
         case .dark: return rgb(161, 161, 170)
-        case .xfinity: return rgb(143, 163, 191)
+        case .ghost: return rgb(161, 161, 170)
+        case .nebula: return rgb(143, 141, 163)
         }
     }
     static func accent(for appearance: AppAppearance) -> Color {
         switch appearance {
-        case .xfinity: return rgb(59, 157, 255)
+        case .ghost: return .white
+        case .nebula: return rgb(167, 139, 250)
         default: return rgb(229, 9, 20)
         }
     }
+    static func accentFill(for appearance: AppAppearance) -> LinearGradient {
+        let colors = appearance == .nebula
+            ? [rgb(167, 139, 250), rgb(34, 211, 238)]
+            : [accent(for: appearance), accent(for: appearance)]
+        return LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing)
+    }
+    // White/aurora fills need dark labels, including selected chips and badges.
+    static func onAccent(for appearance: AppAppearance) -> Color {
+        switch appearance {
+        case .ghost, .nebula: return rgb(6, 6, 9)
+        default: return .white
+        }
+    }
+    static var accentFill: LinearGradient { accentFill(for: appearance) }
+    static var onAccent: Color { onAccent(for: appearance) }
     static var text: Color { text(for: appearance) }
     static var background: Color { background(for: appearance) }
     static var panel: Color { panel(for: appearance) }
+    static var card: Color { card(for: appearance) }
     static var muted: Color { muted(for: appearance) }
     static var accent: Color { accent(for: appearance) }
     static let corner: CGFloat = 18
@@ -273,6 +357,7 @@ struct LiveChannelRow: View {
     let provider: Provider
     let epgEnabled: Bool
     let scope: String
+    var refreshToken: Int = 0
     @AppStorage("rigatoni-appearance") private var appearance = "dark"
     @State private var guide: EPGNowNext?
     private var theme: AppAppearance { AppAppearance(rawValue: appearance) ?? .dark }
@@ -287,8 +372,8 @@ struct LiveChannelRow: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Text("LIVE").font(.caption2.weight(.bold))
                         .padding(.horizontal, 8).padding(.vertical, 4)
-                        .foregroundStyle(.white)
-                        .background(StreamTheme.accent(for: theme), in: Capsule())
+                        .foregroundStyle(StreamTheme.onAccent(for: theme))
+                        .background(StreamTheme.accentFill(for: theme), in: Capsule())
                         .accessibilityHidden(true)
                 }
                 if let now = guide?.now {
@@ -308,7 +393,7 @@ struct LiveChannelRow: View {
             .contextMenu { MobileSaveButton(record: MobileRecords.record(item)) }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("\(item.name), live" + (guide?.now.map { ", now playing \($0.title)" } ?? ""))
-            .task(id: scope + ":" + item.id + ":" + String(epgCache.revision)) {
+            .task(id: scope + ":" + item.id + "-\(refreshToken):\(epgCache.revision)") {
                 guide = nil
                 guard epgEnabled else { return }
                 while !Task.isCancelled {
@@ -343,14 +428,14 @@ struct LibraryView: View {
     @State private var page = 0
     @State private var playing: CatalogItem?
     @State private var retry = 0
+    @State private var multiViewShown = false
+    @State private var epgReload = 0
+    @State private var epgReloading = false
     private var orderedCategories: [CatalogCategory] {
         let shown = categories.filter { model.preferences.categoryVisible($0.id, kind: kind) }
         return kind == .live ? CategoryPins.ordered(shown, pins: pinnedIDs) : shown
     }
-    private var pinKey: String? {
-        guard let accountID = model.libraryAccountID, let host = try? model.provider.baseURL().host else { return nil }
-        return CategoryPins.key(accountID: accountID, host: host)
-    }
+    private var pinKey: String? { model.pinKey }
     private var visible: [CatalogItem] { Array(filtered.dropFirst(page * 120).prefix(120)) }
     var body: some View {
         if embedded { libraryContent }
@@ -363,37 +448,53 @@ struct LibraryView: View {
                         .padding(.vertical, 12)
                     if !model.providerReady {
                         Text("Add or restore your provider settings to browse.")
-                        Button("Provider settings") { model.settingsVisible = true }.buttonStyle(.borderedProminent).foregroundStyle(.white)
+                        Button("Provider settings") { model.settingsVisible = true }.buttonStyle(.borderedProminent).foregroundStyle(StreamTheme.onAccent)
                     } else {
+                        if kind == .live {
+                            Button { multiViewShown = true } label: {
+                                Label("Multi View — watch 2 channels at once", systemImage: "square.split.2x2")
+                            }
+                            .buttonStyle(.bordered)
+                            .accessibilityLabel("Multi View: watch two channels at once")
+                            .fullScreenCover(isPresented: $multiViewShown) { MultiPlayerView() }
+                        }
                         if kind == .movies {
-                            Picker("Browse movies", selection: $scope) {
-                                Text("All titles").tag(CatalogSearchScope.all)
-                                Text("Categories").tag(CatalogSearchScope.category)
-                            }.pickerStyle(.segmented)
+                            StreamOptionPicker(options: [(CatalogSearchScope.all, "All titles"), (.category, "Categories")], selection: $scope)
                         }
                         if kind == .movies && scope == .category {
                             GuideCategoryPicker(categories: orderedCategories, selected: $selected)
                         }
-                        if kind == .live && !categories.isEmpty && scope == .category {
+                        if kind == .live && !categories.isEmpty {
                             HStack {
-                                GuideCategoryPicker(categories: orderedCategories, selected: $selected)
-                                if kind == .live {
-                                    Button {
-                                        pinnedIDs = CategoryPins.toggled(selected, in: pinnedIDs)
-                                        if let pinKey { UserDefaults.standard.set(pinnedIDs, forKey: pinKey) }
-                                    } label: { Image(systemName: pinnedIDs.contains(selected) ? "pin.fill" : "pin").frame(width: 44, height: 44) }
-                                    .accessibilityLabel(pinnedIDs.contains(selected) ? "Unpin category" : "Pin category")
-                                    .disabled(selected.isEmpty)
+                                Text("Categories").font(.headline)
+                                Spacer()
+                                Button {
+                                    pinnedIDs = PinnedCategories.toggled(selected, in: pinnedIDs)
+                                    PinnedCategories.write(pinnedIDs, key: pinKey)
+                                } label: { Image(systemName: pinnedIDs.contains(selected) ? "pin.fill" : "pin").frame(width: 44, height: 44) }
+                                .accessibilityLabel(pinnedIDs.contains(selected) ? "Unpin category" : "Pin category")
+                                .disabled(selected.isEmpty)
+                                .buttonStyle(.plain)
+                                Button { reloadEPG() } label: {
+                                    if epgReloading { ProgressView() } else { Image(systemName: "arrow.clockwise") }
                                 }
+                                .buttonStyle(.plain)
+                                .disabled(epgReloading)
+                                .accessibilityLabel("Reload program guide")
                             }
-                        }
-                        if kind == .live && !pinnedIDs.isEmpty {
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack {
-                                    ForEach(orderedCategories.filter { pinnedIDs.contains($0.id) }) { category in
-                                        Button { scope = .category; selected = category.id } label: {
-                                            Label(category.name, systemImage: "pin.fill")
-                                        }.buttonStyle(.bordered)
+                            LazyVStack(spacing: 8) {
+                                Button { scope = .all } label: {
+                                    liveCategoryRow(name: "All Channels", selected: scope == .all, pinned: false)
+                                }.buttonStyle(.plain)
+                                ForEach(orderedCategories) { category in
+                                    Button { scope = .category; selected = category.id } label: {
+                                        liveCategoryRow(name: category.name, selected: scope == .category && selected == category.id, pinned: pinnedIDs.contains(category.id))
+                                    }.buttonStyle(.plain)
+                                    .contextMenu {
+                                        Button(pinnedIDs.contains(category.id) ? "Unpin category" : "Pin category") {
+                                            pinnedIDs = PinnedCategories.toggled(category.id, in: pinnedIDs)
+                                            PinnedCategories.write(pinnedIDs, key: pinKey)
+                                        }
                                     }
                                 }
                             }
@@ -401,19 +502,19 @@ struct LibraryView: View {
                         if loading { ProgressView(progress.isEmpty ? "Loading \(kind.title.lowercased())…" : progress).frame(maxWidth: .infinity) }
                         if !error.isEmpty {
                             Text(error).foregroundStyle(.secondary)
-                            Button("Retry") { model.resetGateway(); retry += 1 }.buttonStyle(.bordered)
+                            Button("Retry") { model.refreshProvider(); retry += 1 }.buttonStyle(.bordered)
                         } else if !loading && filtered.isEmpty { Text(query.isEmpty ? "No titles available." : "No matching titles.").foregroundStyle(.secondary) }
                         if kind == .live {
                             LazyVStack(spacing: 10) {
-                                ForEach(visible) { item in
+                                ForEach(visible, id: \.scopedID) { item in
                                     Button { playing = item } label: {
-                                        LiveChannelRow(item: item, provider: model.provider, epgEnabled: !model.provider.requiresGateway, scope: (model.preferenceKey ?? "") + "-\(model.libraryRevision)")
+                                        LiveChannelRow(item: item, provider: model.provider(for: item), epgEnabled: true, scope: model.epgScope(for: item), refreshToken: epgReload)
                                     }.buttonStyle(.plain)
                                 }
                             }
                         } else {
                             LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 16)], spacing: 22) {
-                                ForEach(visible) { item in
+                                ForEach(visible, id: \.scopedID) { item in
                                     Button { playing = item } label: { MovieCard(item: item) }.buttonStyle(.plain)
                                 }
                             }
@@ -444,26 +545,52 @@ struct LibraryView: View {
             }
             .fullScreenCover(item: $playing) { CatalogDestination(item: $0, channels: kind == .live ? items : []) }
     }
-    private func rows(action: String, category: String? = nil) async throws -> [[String: Any]] {
-        if model.provider.requiresGateway { return try await model.gatewayRows(kind: kind, category: category) }
-        let url = try model.provider.apiURL(action: action, category: category)
-        let data = try await BoundedTransfer(limit: 32 * 1024 * 1024).fetch(url)
-        guard let rows = try JSONSerialization.jsonObject(with: data) as? [[String: Any]], rows.count <= 50000 else { throw AppFailure("The provider returned an invalid or oversized category.") }
-        return rows
+
+    private func liveCategoryRow(name: String, selected: Bool, pinned: Bool) -> some View {
+        HStack {
+            Text((pinned ? "★ " : "") + name)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+            Spacer()
+            if selected {
+                Image(systemName: "checkmark")
+                    .font(.subheadline.weight(.semibold))
+            }
+        }
+        .foregroundStyle(StreamTheme.text)
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .background(selected ? StreamTheme.accent.opacity(0.18) : StreamTheme.panel, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(selected ? StreamTheme.accent : .clear, lineWidth: 2))
     }
+
+    // Manual EPG reload: clear the cache so stale programs can't stick,
+    // then restart every visible row's EPG task so it refetches fresh.
+    private func reloadEPG() {
+        guard !epgReloading else { return }
+        Task { @MainActor in
+            epgReloading = true
+            EPGCache.shared.reset()
+            epgReload += 1
+            try? await Task.sleep(for: .seconds(1))
+            epgReloading = false
+        }
+    }
+
     private func loadCategories() async {
         categories = []; selected = ""; replaceItems([]); error = ""; query = ""; page = 0; progress = ""; categoryCache = [:]; allCache = nil
-        pinnedIDs = pinKey.flatMap { UserDefaults.standard.stringArray(forKey: $0) } ?? []
+        var pins = PinnedCategories.read(key: pinKey)
+        if pins.isEmpty, let legacy = pinKey.flatMap({ UserDefaults.standard.stringArray(forKey: $0) }), !legacy.isEmpty {
+            // Adopt pins saved by the older inline pin button (same scope, no suffix).
+            pins = legacy
+            PinnedCategories.write(pins, key: pinKey)
+        }
+        pinnedIDs = pins
         guard model.providerReady else { return }
         loading = true
         do {
-            let result = try await rows(action: kind.categoryAction)
-            guard !Task.isCancelled else { return }
-            categories = result.compactMap { row in
-                let id = row["category_id"].map { String(describing: $0) } ?? ""
-                guard !id.isEmpty, id.allSatisfy(\.isNumber) else { return nil }
-                return CatalogCategory(id: id, name: row["category_name"] as? String ?? "Category")
-            }
+            let loaded = try await model.catalog.categories(kind: kind, model: model)
+            try Task.checkCancellation()
+            categories = loaded
             selected = orderedCategories.first { $0.id == initialCategoryID }?.id ?? orderedCategories.first?.id ?? ""
             if initialCategoryID == "all" { scope = .all }
             if selected.isEmpty { loading = false }
@@ -489,7 +616,7 @@ struct LibraryView: View {
     private func loadItems() async {
         guard !selected.isEmpty, !categories.isEmpty, model.providerReady else { return }
         error = ""; progress = ""; page = 0
-        if scope == .all, let cached = allCache, !model.provider.requiresGateway {
+        if scope == .all, let cached = allCache {
             replaceItems(cached.items); error = cached.notice; loading = false; return
         }
         replaceItems([]); loading = true
