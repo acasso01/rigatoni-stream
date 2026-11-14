@@ -55,17 +55,21 @@ jobs:
         run: |
           set -o pipefail
           xcodebuild build -workspace RigatoniStreamTV.xcworkspace -scheme RigatoniStreamTV -destination 'generic/platform=tvOS' -derivedDataPath .build-device CODE_SIGNING_ALLOWED=NO | tee device-build.log
-      - name: Run shared provider tests on Apple TV
+      - name: Run shared provider and playback tests on Apple TV
         run: |
           set -o pipefail
           DEVICE_ID=$(xcrun simctl list devices available -j | ruby -rjson -e 'JSON.parse(STDIN.read)["devices"].values.flatten.each { |d| if d["name"].start_with?("Apple TV"); puts d["udid"]; break; end }')
           test -n "$DEVICE_ID"
+          bash ../ios/fixtures/start.sh
           xcrun simctl boot "$DEVICE_ID" || true
           xcrun simctl bootstatus "$DEVICE_ID" -b
-          # DirectConnectionTests need the local HTTPS fixture. The simulator
-          # does not trust that certificate (NSURLError -1202), so CI runs the
-          # pure unit tests only. Run fixtures/start.sh locally to exercise it.
-          xcodebuild test-without-building -workspace RigatoniStreamTV.xcworkspace -scheme RigatoniStreamTV -destination "platform=tvOS Simulator,id=$DEVICE_ID" -derivedDataPath .build -skip-testing:RigatoniStreamTVTests/DirectConnectionTests CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- | tee tests.log
+          xcrun simctl keychain "$DEVICE_ID" add-root-cert ../ios/fixtures/media/ca.pem
+          xcrun simctl shutdown "$DEVICE_ID"
+          xcrun simctl boot "$DEVICE_ID"
+          xcrun simctl bootstatus "$DEVICE_ID" -b
+          export SIMCTL_CHILD_ANT_REQUIRE_FIXTURES=1
+          export TEST_RUNNER_ANT_REQUIRE_FIXTURES=1
+          xcodebuild test-without-building -workspace RigatoniStreamTV.xcworkspace -scheme RigatoniStreamTV -destination "platform=tvOS Simulator,id=$DEVICE_ID" -derivedDataPath .build CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- | tee tests.log
       - name: Save build reports
         if: always()
         uses: actions/upload-artifact@v4

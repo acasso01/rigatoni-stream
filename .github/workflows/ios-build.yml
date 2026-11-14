@@ -67,12 +67,16 @@ jobs:
           set -o pipefail
           DEVICE_ID=$(xcrun simctl list devices available -j | ruby -rjson -e 'JSON.parse(STDIN.read)["devices"].values.flatten.each { |d| if d["name"].start_with?("iPhone"); puts d["udid"]; break; end }')
           test -n "$DEVICE_ID"
+          bash fixtures/start.sh
           xcrun simctl boot "$DEVICE_ID" || true
           xcrun simctl bootstatus "$DEVICE_ID" -b
-          # DirectConnectionTests need the local HTTPS fixture. The simulator
-          # does not trust that certificate (NSURLError -1202), so CI runs the
-          # pure unit tests only. Run fixtures/start.sh locally to exercise it.
-          xcodebuild test-without-building -workspace RigatoniStream.xcworkspace -scheme RigatoniStream -destination "platform=iOS Simulator,id=$DEVICE_ID" -derivedDataPath .build -skip-testing:RigatoniStreamTests/DirectConnectionTests CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- | tee tests.log
+          xcrun simctl keychain "$DEVICE_ID" add-root-cert fixtures/media/ca.pem
+          xcrun simctl shutdown "$DEVICE_ID"
+          xcrun simctl boot "$DEVICE_ID"
+          xcrun simctl bootstatus "$DEVICE_ID" -b
+          export SIMCTL_CHILD_ANT_REQUIRE_FIXTURES=1
+          export TEST_RUNNER_ANT_REQUIRE_FIXTURES=1
+          xcodebuild test-without-building -workspace RigatoniStream.xcworkspace -scheme RigatoniStream -destination "platform=iOS Simulator,id=$DEVICE_ID" -derivedDataPath .build CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- | tee tests.log
       - name: Save build reports
         if: always()
         uses: actions/upload-artifact@v4

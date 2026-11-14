@@ -6,8 +6,7 @@ import AVFoundation
 @testable import RigatoniStream
 #endif
 
-// Run fixtures/start.sh and trust its one-day CA in the simulator first.
-// CI skips this class: hosted simulators reject the fixture certificate.
+// Run fixtures/start.sh first. CI adds media/ca.pem as a trusted simulator root.
 // Local runs without the fixture service skip these tests.
 final class DirectConnectionTests: XCTestCase {
     private func fixture() async throws {
