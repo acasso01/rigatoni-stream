@@ -1,7 +1,7 @@
 import SwiftUI
 
 // Shared, bounded Xtream series access for iPhone and Apple TV.
-// Provider credentials stay in memory and the existing encrypted account vault.
+// Provider credentials stay in memory. They are saved in the device Keychain, or the account vault when signed in.
 struct SeriesItem: Identifiable {
     let id: String
     let name: String
@@ -36,8 +36,8 @@ final class SeriesStore: ObservableObject {
     init(model: AppModel) { self.model = model }
 
     var unavailableReason: String? {
-        guard model.signedIn, model.providerReady else {
-            return "Save your provider in Settings to browse TV shows."
+        guard model.providerReady else {
+            return "Save your provider to browse TV shows."
         }
         if model.provider.requiresGateway {
             return "TV Shows needs a direct provider connection — it isn't available through the gateway yet."

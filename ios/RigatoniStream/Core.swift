@@ -108,7 +108,7 @@ struct AuthSession: Codable {
     var needsRefresh: Bool { (expires_at ?? 0) < Date().timeIntervalSince1970 + 90 }
 }
 
-// Only account tokens enter Keychain. Provider credentials stay in memory and the encrypted vault.
+// Account tokens only. Provider logins use ProviderKeychain (or the account vault when signed in).
 enum SessionKeychain {
     private static let service = "com.acasso01.rigatonistream.auth"
     private static let account = "supabase-session"
@@ -166,7 +166,7 @@ final class AccountAPI {
         request.setValue(publicKey, forHTTPHeaderField: "apikey")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if authenticated {
-            guard let session else { throw AppFailure("Sign in to access your saved settings.") }
+            guard let session else { throw AppFailure("Sign in to sync provider settings with your Ant Streams account. Direct providers work without an account.") }
             request.setValue("Bearer \(session.access_token)", forHTTPHeaderField: "Authorization")
         }
         if let body { request.httpBody = try JSONSerialization.data(withJSONObject: body) }
@@ -208,30 +208,33 @@ final class AccountAPI {
     }
     func accessToken() async throws -> String {
         try await refreshIfNeeded()
-        guard let session else { throw AppFailure("Sign in again to use the gateway.") }
+        guard let session else { throw AppFailure(GatewayAccess.signInMessage) }
         return session.access_token
     }
     func signOut() async {
         _ = try? await send(path: "auth/v1/logout", method: "POST")
         session = nil; SessionKeychain.clear()
     }
-    func loadSettings() async throws -> (Provider, String) {
+    func loadSettings() async throws -> (provider: Provider, gateway: String, name: String) {
         let user = try JSONDecoder().decode(AccountUser.self, from: await send(path: "auth/v1/user"))
         let data = try await send(path: "functions/v1/provider-vault")
         let row = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
         let provider = Provider(server: row["server_url"] as? String ?? "", username: row["username"] as? String ?? "", password: row["password"] as? String ?? "")
-        return (provider, user.user_metadata?.rigatoni_gateway_url ?? "")
+        return (provider, user.user_metadata?.rigatoni_gateway_url ?? "", row["label"] as? String ?? "")
     }
-    func save(provider: Provider, gateway: String) async throws {
+    func save(provider: Provider, gateway: String, name: String = "") async throws {
         let url = try provider.baseURL()
         let origin = try Self.gatewayOrigin(gateway)
-        let data = try await send(path: "functions/v1/provider-vault", method: "POST", body: ["server_url": url.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")), "username": provider.username, "password": provider.password])
+        var body: [String: Any] = ["server_url": url.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")), "username": provider.username, "password": provider.password]
+        let label = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !label.isEmpty { body["label"] = String(label.prefix(60)) }
+        let data = try await send(path: "functions/v1/provider-vault", method: "POST", body: body)
         let result = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         guard result?["saved"] as? Bool == true else { throw AppFailure("The vault did not confirm saving your provider.") }
         do { _ = try await send(path: "auth/v1/user", method: "PUT", body: ["data": ["rigatoni_gateway_url": origin.isEmpty ? NSNull() : origin as Any]]) }
         catch { throw AppFailure("Provider saved, but the gateway preference could not be saved. Retry Save settings.") }
     }
-    static func gatewayOrigin(_ value: String) throws -> String {
+    nonisolated static func gatewayOrigin(_ value: String) throws -> String {
         if value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "" }
         guard let parts = URLComponents(string: value.trimmingCharacters(in: .whitespacesAndNewlines)),
               parts.scheme == "https", parts.host?.hasSuffix(".ts.net") == true,
@@ -256,14 +259,26 @@ final class AppModel: ObservableObject {
     @Published var busy = false
     @Published var notice = ""
     @Published var provider = Provider()
+    @Published var providerName = ""
     @Published var gateway = ""
     @Published var settingsVisible = false
     @Published var libraryRevision = 0
+    @Published var localProviders: [LocalProvider] = []
+    @Published var activeLocalID: String?
     let account = AccountAPI()
     let catalog = SessionCatalog()
     @Published var preferences = LibraryPreferences()
+    /// True until a provider is saved on device or an account session exists.
+    var needsProviderSetup: Bool { !signedIn && !providerReady }
+    /// Signed-in favorites stay on the account id. Otherwise each device provider has its own scope.
+    var libraryAccountID: String? {
+        if let id = account.session?.user.id { return id }
+        if let activeLocalID { return "device-\(activeLocalID)" }
+        if providerReady { return "device" }
+        return nil
+    }
     var preferenceKey: String? {
-        guard let id = account.session?.user.id, let host = try? provider.baseURL().host else { return nil }
+        guard let id = libraryAccountID, let host = try? provider.baseURL().host else { return nil }
         return CategoryPins.key(accountID: id, host: host) + "-library-v1"
     }
     func savePreferences() {
@@ -297,30 +312,199 @@ final class AppModel: ObservableObject {
     var providerReady: Bool { (try? provider.baseURL()) != nil }
     func restore() async {
         defer { starting = false }
-        do { signedIn = try await account.restore(); if signedIn { try await reloadSettings() } }
-        catch { notice = error.localizedDescription; settingsVisible = signedIn }
+        do {
+            let store = try ProviderKeychain.read()
+            localProviders = store.providers
+        } catch { notice = error.localizedDescription }
+        do {
+            signedIn = try await account.restore()
+            if signedIn { try await reloadSettings() }
+            else { activateLocalProvider(); resetGateway() }
+        } catch {
+            notice = error.localizedDescription
+            if !providerReady { activateLocalProvider() }
+            resetGateway()
+            settingsVisible = signedIn && !providerReady
+        }
     }
     func reloadSettings() async throws {
-        let result = try await account.loadSettings(); provider = result.0; gateway = result.1
-        resetGateway(); libraryRevision += 1
-        notice = providerReady ? "Provider and gateway loaded from your account." : "Save your provider to start watching."
-        settingsVisible = !providerReady
+        if account.session != nil {
+            let result = try await account.loadSettings()
+            let vaultReady = (try? result.provider.baseURL()) != nil
+            if vaultReady {
+                provider = result.provider
+                gateway = result.gateway
+                providerName = result.name
+                activeLocalID = nil
+            } else if !providerReady {
+                activateLocalProvider()
+            }
+            resetGateway(); libraryRevision += 1
+            if vaultReady { notice = "Provider and gateway loaded from your account." }
+            else if providerReady { notice = "No provider in your account. Using the provider saved on this device." }
+            else { notice = "Save your provider to start watching." }
+            settingsVisible = !providerReady
+        } else {
+            activateLocalProvider()
+            resetGateway(); libraryRevision += 1
+            notice = providerReady ? "Provider loaded from this device." : "Save your provider to start watching."
+            settingsVisible = !providerReady
+        }
     }
     func saveSettings() async {
         busy = true; defer { busy = false }
-        do { try await account.save(provider: provider, gateway: gateway); gateway = try AccountAPI.gatewayOrigin(gateway); resetGateway(); libraryRevision += 1; notice = "Settings saved securely. No provider connection required." }
-        catch { notice = error.localizedDescription }
+        do {
+            if account.session != nil {
+                try await account.save(provider: provider, gateway: gateway, name: providerName)
+                gateway = try AccountAPI.gatewayOrigin(gateway)
+                if let id = activeLocalID {
+                    let record = try LocalProvider.make(id: id, name: providerName, provider: provider, gateway: gateway)
+                    try storeLocal(record, makeActive: true)
+                    applyLocal(record)
+                }
+                resetGateway(); libraryRevision += 1
+                notice = "Settings saved securely. No provider connection required."
+            } else {
+                let record = try LocalProvider.make(id: activeLocalID ?? UUID().uuidString, name: providerName, provider: provider, gateway: gateway)
+                try storeLocal(record, makeActive: true)
+                applyLocal(record)
+                resetGateway(); libraryRevision += 1
+                notice = localSaveNotice(for: provider)
+            }
+        } catch { notice = error.localizedDescription }
     }
     func deleteSettings() async {
         busy = true; defer { busy = false }
-        do { try await account.deleteSettings(); provider = Provider(); gateway = ""; resetGateway(); libraryRevision += 1; notice = "Saved provider and gateway deleted." }
-        catch { notice = error.localizedDescription }
+        do {
+            if account.session != nil {
+                try await account.deleteSettings()
+                provider = Provider(); providerName = ""; gateway = ""
+                activeLocalID = nil
+                resetGateway(); libraryRevision += 1
+                notice = "Saved provider and gateway deleted."
+            } else if let id = activeLocalID {
+                await removeLocalProvider(id)
+            } else {
+                notice = "No provider is saved on this device."
+            }
+        } catch { notice = error.localizedDescription }
     }
     func signOut() async {
         busy = true; defer { busy = false }
-        // Clear provider credentials immediately, including catalog/player state in views.
-        signedIn = false; provider = Provider(); gateway = ""; resetGateway(); libraryRevision += 1; settingsVisible = false
-        await account.signOut(); notice = "Signed out."
+        // Drop the in-memory account provider first. A provider saved only on
+        // this device is restored afterwards and is not deleted.
+        signedIn = false
+        provider = Provider(); providerName = ""; gateway = ""; activeLocalID = nil
+        await account.signOut()
+        activateLocalProvider()
+        resetGateway(); libraryRevision += 1; settingsVisible = false
+        notice = providerReady ? "Signed out. Using the provider saved on this device." : "Signed out."
+    }
+
+    @discardableResult
+    func addLocalProvider(name: String, provider: Provider, gateway: String) async -> Bool {
+        busy = true; defer { busy = false }
+        do {
+            let record = try LocalProvider.make(id: UUID().uuidString, name: name, provider: provider, gateway: gateway)
+            let becomesActive = account.session == nil
+            try storeLocal(record, makeActive: becomesActive)
+            if becomesActive {
+                applyLocal(record)
+                resetGateway(); libraryRevision += 1
+                notice = localSaveNotice(for: provider)
+            } else {
+                notice = "Provider saved on this device. It is used after you sign out."
+            }
+            return true
+        } catch {
+            notice = error.localizedDescription
+            return false
+        }
+    }
+
+    func useLocalProvider(_ id: String) {
+        guard account.session == nil else {
+            notice = "Sign out to switch to a provider saved only on this device."
+            return
+        }
+        guard let record = localProviders.first(where: { $0.id == id }) else { return }
+        do {
+            try storeLocal(record, makeActive: true)
+            applyLocal(record)
+            resetGateway(); libraryRevision += 1
+            notice = "Using \(record.displayName)."
+        } catch { notice = error.localizedDescription }
+    }
+
+    func removeLocalProvider(_ id: String) async {
+        let wasBusy = busy
+        if !wasBusy { busy = true }
+        defer { if !wasBusy { busy = false } }
+        do {
+            var store = try ProviderKeychain.read()
+            store.providers.removeAll { $0.id == id }
+            if store.activeID == id { store.activeID = store.providers.first?.id }
+            if store.providers.isEmpty {
+                ProviderKeychain.clear()
+                localProviders = []
+            } else {
+                try ProviderKeychain.write(store)
+                localProviders = store.providers
+            }
+            if account.session == nil, activeLocalID == id {
+                if let nextID = store.activeID, let next = store.providers.first(where: { $0.id == nextID }) {
+                    applyLocal(next)
+                } else {
+                    provider = Provider(); providerName = ""; gateway = ""; activeLocalID = nil
+                }
+                resetGateway(); libraryRevision += 1
+            }
+            notice = "Provider removed from this device."
+        } catch { notice = error.localizedDescription }
+    }
+
+    private func localSaveNotice(for provider: Provider) -> String {
+        provider.requiresGateway
+            ? "Provider saved on this device. \(GatewayAccess.signInMessage)"
+            : "Provider saved on this device. No account required."
+    }
+
+    private func activateLocalProvider() {
+        let store = (try? ProviderKeychain.read()) ?? LocalProviderVault()
+        localProviders = store.providers
+        guard let record = store.providers.first(where: { $0.id == store.activeID }) ?? store.providers.first else {
+            activeLocalID = nil
+            return
+        }
+        if store.activeID != record.id {
+            var fixed = store
+            fixed.activeID = record.id
+            try? ProviderKeychain.write(fixed)
+        }
+        applyLocal(record)
+    }
+
+    private func applyLocal(_ record: LocalProvider) {
+        provider = Provider(server: record.server, username: record.username, password: record.password)
+        providerName = record.name
+        gateway = record.gateway
+        activeLocalID = record.id
+    }
+
+    private func storeLocal(_ record: LocalProvider, makeActive: Bool) throws {
+        var store = try ProviderKeychain.read()
+        if let index = store.providers.firstIndex(where: { $0.id == record.id }) {
+            store.providers[index] = record
+        } else {
+            guard store.providers.count < LocalProviderVault.limit else {
+                throw AppFailure("You can save up to \(LocalProviderVault.limit) providers on this device.")
+            }
+            store.providers.append(record)
+        }
+        if makeActive || store.activeID == nil { store.activeID = record.id }
+        try ProviderKeychain.write(store)
+        localProviders = store.providers
+        if makeActive { activeLocalID = record.id }
     }
 }
 
@@ -333,6 +517,7 @@ extension AppModel {
         return result
     }
     private func connectGateway() async throws -> [String: Any] {
+        guard account.session != nil else { throw AppFailure(GatewayAccess.signInMessage) }
         if let gatewayConnection { return gatewayConnection }
         if let gatewayConnectTask { return try await gatewayConnectTask.value }
         guard let origin = URL(string: try AccountAPI.gatewayOrigin(gateway)), !gateway.isEmpty else { throw AppFailure("This HTTP provider needs your saved HTTPS gateway. Open settings and save the gateway URL.") }
@@ -368,6 +553,7 @@ extension AppModel {
         return result["movies"] as? [[String: Any]] ?? []
     }
     func gatewayPlaybackURL(id: String, kind: LibraryKind) throws -> URL {
+        guard account.session != nil else { throw AppFailure(GatewayAccess.signInMessage) }
         guard let path = gatewayMedia[kind]?[id],
               path.range(of: "^/media/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+$", options: .regularExpression) != nil,
               let url = URL(string: try AccountAPI.gatewayOrigin(gateway) + path) else { throw AppFailure("Reconnect the provider to refresh this stream.") }

@@ -1,9 +1,8 @@
 import SwiftUI
 
-// Sign-in screen. Same account and vault as the iPhone build: sign in with
-// the existing Ant Streams account and the saved provider populates automatically.
-// Provider credentials themselves stay in the encrypted account vault and are
-// never written to preferences, logs or disk caches.
+// Optional account sign-in. Direct providers do not need this. Credentials
+// saved without an account stay in the device Keychain, never in preferences,
+// logs, or disk caches. A signed-in provider still uses the encrypted vault.
 struct TVLoginView: View {
     @EnvironmentObject private var model: AppModel
     @State private var email = ""
@@ -17,9 +16,9 @@ struct TVLoginView: View {
                 Image("BrandLogo").resizable().scaledToFit().frame(width: 160, height: 160).accessibilityHidden(true)
                 Text("Ant Streams")
                     .font(.largeTitle.weight(.bold))
-                Text(createAccount ? "Create your account" : "Welcome back")
+                Text(createAccount ? "Create your account" : "Sign in to sync")
                     .font(.title.bold())
-                Text("Your channels and movies, on the big screen.")
+                Text("Optional. Syncs a provider with your Ant Streams account and unlocks the HTTPS gateway.")
                     .foregroundStyle(TVTheme.muted)
 
                 TextField("Email", text: $email)
@@ -61,7 +60,7 @@ struct TVLoginView: View {
                 if !model.notice.isEmpty {
                     Text(model.notice).font(.callout).foregroundStyle(TVTheme.muted)
                 }
-                Text("Use your existing Ant Streams account. Your provider login stays in the encrypted account vault.")
+                Text("Direct providers work without an account. This password is for the Ant Streams account, not the IPTV provider.")
                     .font(.footnote)
                     .foregroundStyle(TVTheme.muted)
             }
@@ -92,14 +91,84 @@ struct TVLoginView: View {
     }
 }
 
-// Settings tab. Mirrors the iPhone build's SettingsView: provider + gateway
-// preferences (saved through the shared encrypted vault), playback buffers,
-// delete settings, sign out. No vault semantics were changed.
+// First launch, when no provider is saved and nobody is signed in.
+// Focus lands on Server URL, matching Settings.
+struct TVProviderSetupView: View {
+    @EnvironmentObject private var model: AppModel
+    @Namespace private var setupFocus
+    @FocusState private var serverFocused: Bool
+    @State private var visiblePassword = false
+    @State private var showAccount = false
+
+    var body: some View {
+        Group {
+            if showAccount {
+                VStack(alignment: .leading, spacing: 24) {
+                    TVLoginView()
+                    Button("Back to provider setup") { showAccount = false }
+                        .buttonStyle(.card)
+                }
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 24) {
+                        Image("BrandLogo").resizable().scaledToFit().frame(width: 140, height: 140).accessibilityHidden(true)
+                        Text("Set up your provider")
+                            .font(.largeTitle.bold())
+                        Text("Enter your IPTV provider. No Ant Streams account is required.")
+                            .foregroundStyle(TVTheme.muted)
+                        TextField("Server URL", text: $model.provider.server)
+                            .focused($serverFocused)
+                            .prefersDefaultFocus(in: setupFocus)
+                        TextField("Username", text: $model.provider.username)
+                        HStack {
+                            Group {
+                                if visiblePassword { TextField("Provider password", text: $model.provider.password) }
+                                else { SecureField("Provider password", text: $model.provider.password) }
+                            }
+                            Button { visiblePassword.toggle() } label: {
+                                Image(systemName: visiblePassword ? "eye.slash" : "eye")
+                            }
+                            .accessibilityLabel("Show or hide provider password")
+                        }
+                        TextField("Name (optional)", text: $model.providerName)
+                        Button("Start watching") { Task { await model.saveSettings() } }
+                            .buttonStyle(.card)
+                            .tint(.white)
+                            .disabled(model.busy || model.provider.server.isEmpty || model.provider.username.isEmpty || model.provider.password.isEmpty)
+                        Button("Sign in to sync") { showAccount = true }
+                            .buttonStyle(.card)
+                        if model.busy { ProgressView() }
+                        if !model.notice.isEmpty {
+                            Text(model.notice).font(.callout).foregroundStyle(TVTheme.muted)
+                        }
+                        Text("The provider login is saved in this device's Keychain only. Direct providers play immediately. The HTTPS gateway is in Settings and needs an Ant Streams sign-in.")
+                            .font(.footnote)
+                            .foregroundStyle(TVTheme.muted)
+                    }
+                    .frame(maxWidth: 900, alignment: .leading)
+                    .padding(60)
+                }
+                .focusScope(setupFocus)
+                .defaultFocus($serverFocused, true)
+            }
+        }
+        .background { StreamBackdrop() }
+        .onAppear { serverFocused = true }
+        .onChange(of: showAccount) { _, showing in
+            if !showing { serverFocused = true }
+        }
+    }
+}
+
+// Settings tab. Provider fields are saved on this device unless an account
+// session is active, in which case Save still writes the encrypted vault.
+// Right from the nav rail lands on Server URL.
 struct TVSettingsView: View {
     @EnvironmentObject private var model: AppModel
     @AppStorage("rigatoni-appearance") private var appearance = "dark"
     @State private var deleting = false
     @State private var visiblePassword = false
+    @State private var pendingRemoval: String?
     @AppStorage("rigatoni-live-buffer-ms") private var liveBuffer = 1500
     @AppStorage("rigatoni-movie-buffer-ms") private var movieBuffer = 4000
 
@@ -125,7 +194,7 @@ struct TVSettingsView: View {
                     }
                     settingsGroup(title: "Provider") {
                         Text(model.provider.requiresGateway
-                             ? "Playback route: HTTPS gateway"
+                             ? (model.signedIn ? "Playback route: HTTPS gateway" : "Playback route: HTTPS gateway — sign in required. Direct providers still play.")
                              : "Playback route: direct provider")
                             .font(.footnote).foregroundStyle(TVTheme.muted)
                         TVEntryControl(section: .settings) {
@@ -143,8 +212,11 @@ struct TVSettingsView: View {
                             }
                             .accessibilityLabel("Show or hide provider password")
                         }
+                        TextField("Name (optional)", text: $model.providerName)
                         TextField("HTTPS gateway URL (optional)", text: $model.gateway)
-                        Text("Providers play directly when HTTPS or locally approved HTTP is available. Other HTTP hosts use your saved HTTPS gateway.")
+                        Text(model.signedIn
+                             ? "Providers play directly when HTTPS or HTTP is available. Other playback can use your saved HTTPS gateway."
+                             : "Direct providers play without an account. The HTTPS gateway needs an Ant Streams sign-in and does not block a direct provider.")
                             .font(.footnote).foregroundStyle(TVTheme.muted)
                         HStack(spacing: 16) {
                             Button("Save provider & gateway") { Task { await model.saveSettings() } }
@@ -157,6 +229,48 @@ struct TVSettingsView: View {
                                 }
                             }
                             .buttonStyle(.card).disabled(model.busy)
+                        }
+                        if !model.signedIn && model.localProviders.count < LocalProviderVault.limit {
+                            NavigationLink("Add another provider") { TVAddProviderView() }
+                                .buttonStyle(.card)
+                        }
+                        if !model.signedIn {
+                            ForEach(model.localProviders) { item in
+                                HStack(spacing: 16) {
+                                    VStack(alignment: .leading) {
+                                        Text(item.displayName)
+                                        Text(item.hostLabel).font(.footnote).foregroundStyle(TVTheme.muted)
+                                    }
+                                    Spacer()
+                                    if item.id == model.activeLocalID {
+                                        Text("In use").foregroundStyle(TVTheme.muted)
+                                    } else {
+                                        Button("Use") { model.useLocalProvider(item.id) }
+                                            .buttonStyle(.card).disabled(model.busy)
+                                    }
+                                    Button("Remove") { pendingRemoval = item.id }
+                                        .buttonStyle(.card).disabled(model.busy)
+                                        .accessibilityLabel("Remove \(item.displayName)")
+                                }
+                            }
+                        }
+                    }
+                    if model.signedIn && !model.localProviders.isEmpty {
+                        settingsGroup(title: "On this device") {
+                            Text("These providers stay on this device and are used after you sign out.")
+                                .font(.footnote).foregroundStyle(TVTheme.muted)
+                            ForEach(model.localProviders) { item in
+                                HStack(spacing: 16) {
+                                    VStack(alignment: .leading) {
+                                        Text(item.displayName)
+                                        Text(item.hostLabel).font(.footnote).foregroundStyle(TVTheme.muted)
+                                    }
+                                    Spacer()
+                                    Button("Remove") { pendingRemoval = item.id }
+                                        .buttonStyle(.card).disabled(model.busy)
+                                        .accessibilityLabel("Remove \(item.displayName)")
+                                }
+                            }
                         }
                     }
 
@@ -179,12 +293,23 @@ struct TVSettingsView: View {
                         Text(model.notice).foregroundStyle(TVTheme.muted)
                     }
 
-                    settingsGroup(title: "Account") {
+                    settingsGroup(title: model.signedIn ? "Account" : "Sign in to sync") {
+                        if model.signedIn {
+                            Text("Provider settings sync to your Ant Streams account. The HTTPS gateway uses this sign-in.")
+                                .font(.footnote).foregroundStyle(TVTheme.muted)
+                        } else {
+                            Text("Optional. Sign in to copy this provider to your Ant Streams account and to use the HTTPS gateway. Direct providers work without an account.")
+                                .font(.footnote).foregroundStyle(TVTheme.muted)
+                            NavigationLink("Sign in to sync") { TVLoginView() }
+                                .buttonStyle(.card)
+                        }
                         HStack(spacing: 16) {
-                            Button("Delete saved provider & gateway") { deleting = true }
+                            Button(model.signedIn ? "Delete saved provider & gateway" : "Remove this provider") { deleting = true }
                                 .buttonStyle(.card).disabled(model.busy)
-                            Button("Sign out") { Task { await model.signOut() } }
-                                .buttonStyle(.card).disabled(model.busy)
+                            if model.signedIn {
+                                Button("Sign out") { Task { await model.signOut() } }
+                                    .buttonStyle(.card).disabled(model.busy)
+                            }
                         }
                     }
 
@@ -199,14 +324,78 @@ struct TVSettingsView: View {
             .focusSection()
             .background { StreamBackdrop() }
             .confirmationDialog(
-                "Delete your saved provider and gateway from your account?",
+                model.signedIn ? "Delete your saved provider and gateway from your account?" : "Remove this provider from this device?",
                 isPresented: $deleting, titleVisibility: .visible
             ) {
-                Button("Delete settings", role: .destructive) { Task { await model.deleteSettings() } }
+                Button(model.signedIn ? "Delete settings" : "Remove provider", role: .destructive) { Task { await model.deleteSettings() } }
+            }
+            .confirmationDialog(
+                "Remove this provider from this device?",
+                isPresented: Binding(get: { pendingRemoval != nil }, set: { if !$0 { pendingRemoval = nil } }),
+                titleVisibility: .visible
+            ) {
+                Button("Remove provider", role: .destructive) {
+                    if let id = pendingRemoval { Task { await model.removeLocalProvider(id) } }
+                    pendingRemoval = nil
+                }
             }
         }
     }
 
+}
+
+private struct TVAddProviderView: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @Namespace private var addFocus
+    @FocusState private var serverFocused: Bool
+    @State private var name = ""
+    @State private var server = ""
+    @State private var username = ""
+    @State private var password = ""
+    @State private var visiblePassword = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Text("Add provider").font(.largeTitle.bold()).padding(.top, 40)
+                TextField("Server URL", text: $server)
+                    .focused($serverFocused)
+                    .prefersDefaultFocus(in: addFocus)
+                TextField("Username", text: $username)
+                HStack {
+                    Group {
+                        if visiblePassword { TextField("Provider password", text: $password) }
+                        else { SecureField("Provider password", text: $password) }
+                    }
+                    Button { visiblePassword.toggle() } label: {
+                        Image(systemName: visiblePassword ? "eye.slash" : "eye")
+                    }
+                    .accessibilityLabel("Show or hide provider password")
+                }
+                TextField("Name (optional)", text: $name)
+                Button("Save provider") {
+                    Task {
+                        let saved = await model.addLocalProvider(name: name, provider: Provider(server: server, username: username, password: password), gateway: "")
+                        if saved { password = ""; dismiss() }
+                    }
+                }
+                .buttonStyle(.card).tint(.white)
+                .disabled(model.busy || server.isEmpty || username.isEmpty || password.isEmpty)
+                if !model.notice.isEmpty { Text(model.notice).foregroundStyle(TVTheme.muted) }
+            }
+            .frame(maxWidth: 900, alignment: .leading)
+            .padding(.horizontal, 60)
+            .padding(.bottom, 60)
+        }
+        .focusScope(addFocus)
+        .defaultFocus($serverFocused, true)
+        .background { StreamBackdrop() }
+        .onAppear { serverFocused = true }
+    }
+}
+
+extension TVSettingsView {
     private func settingsGroup<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(title).font(.title2.bold())

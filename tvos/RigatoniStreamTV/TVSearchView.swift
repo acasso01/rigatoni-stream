@@ -66,7 +66,7 @@ struct TVSearchView: View {
         }
         .background { StreamBackdrop() }
         .task(id: "\(hasQuery)-\(model.libraryRevision)-\(retry)") {
-            guard hasQuery, model.signedIn, model.providerReady else { return }
+            guard hasQuery, model.providerReady else { return }
             notices = []
             async let movies: Void = load(.movies)
             async let live: Void = load(.live)

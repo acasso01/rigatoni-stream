@@ -10,7 +10,7 @@ group ||= project.main_group.new_group('RigatoniStreamTV', 'RigatoniStreamTV')
   file = group.files.find { |candidate| candidate.path == name } || group.new_file(name)
   target.source_build_phase.add_file_reference(file) unless target.source_build_phase.files_references.include?(file)
 end
-%w[Discovery.swift Series.swift EPG.swift Saved.swift].each do |name|
+%w[Discovery.swift Series.swift EPG.swift Saved.swift LocalProviders.swift].each do |name|
   unless target.source_build_phase.files_references.any? { |file| file.path&.end_with?(name) }
     shared = project.main_group.children.find { |candidate| candidate.name == 'Shared' } || project.main_group.new_group('Shared')
     file = shared.new_file('../ios/RigatoniStream/' + name)

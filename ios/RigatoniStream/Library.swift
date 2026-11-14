@@ -348,7 +348,7 @@ struct LibraryView: View {
         return kind == .live ? CategoryPins.ordered(shown, pins: pinnedIDs) : shown
     }
     private var pinKey: String? {
-        guard let accountID = model.account.session?.user.id, let host = try? model.provider.baseURL().host else { return nil }
+        guard let accountID = model.libraryAccountID, let host = try? model.provider.baseURL().host else { return nil }
         return CategoryPins.key(accountID: accountID, host: host)
     }
     private var visible: [CatalogItem] { Array(filtered.dropFirst(page * 120).prefix(120)) }
@@ -454,7 +454,7 @@ struct LibraryView: View {
     private func loadCategories() async {
         categories = []; selected = ""; replaceItems([]); error = ""; query = ""; page = 0; progress = ""; categoryCache = [:]; allCache = nil
         pinnedIDs = pinKey.flatMap { UserDefaults.standard.stringArray(forKey: $0) } ?? []
-        guard model.signedIn, model.providerReady else { return }
+        guard model.providerReady else { return }
         loading = true
         do {
             let result = try await rows(action: kind.categoryAction)
@@ -487,7 +487,7 @@ struct LibraryView: View {
         try await model.catalog.items(kind: kind, category: category, model: model)
     }
     private func loadItems() async {
-        guard !selected.isEmpty, !categories.isEmpty, model.signedIn, model.providerReady else { return }
+        guard !selected.isEmpty, !categories.isEmpty, model.providerReady else { return }
         error = ""; progress = ""; page = 0
         if scope == .all, let cached = allCache, !model.provider.requiresGateway {
             replaceItems(cached.items); error = cached.notice; loading = false; return

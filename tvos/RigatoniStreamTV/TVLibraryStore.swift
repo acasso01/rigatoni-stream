@@ -4,8 +4,8 @@ import SwiftUI
 // tvOS catalog store. Mirrors the loading semantics of the iPhone build's
 // LibraryView (same shared types: Provider, LibraryKind, CatalogItem,
 // CatalogCategory, CatalogLoader, CatalogIndex, BoundedTransfer), but drives
-// tvOS grids instead of iOS pickers. Provider credentials and the encrypted
-// vault flow through the shared AppModel/AccountAPI only.
+// tvOS grids instead of iOS pickers. Provider credentials flow through the
+// shared AppModel: device Keychain, or the account vault when signed in.
 @MainActor
 final class TVLibraryStore: ObservableObject {
     let kind: LibraryKind
@@ -26,7 +26,7 @@ final class TVLibraryStore: ObservableObject {
     }
 
     var pinKey: String? {
-        guard let accountID = model.account.session?.user.id,
+        guard let accountID = model.libraryAccountID,
               let host = try? model.provider.baseURL().host else { return nil }
         return CategoryPins.key(accountID: accountID, host: host)
     }
@@ -54,7 +54,7 @@ final class TVLibraryStore: ObservableObject {
 
     func loadCategories() async {
         reset()
-        guard model.signedIn, model.providerReady else { return }
+        guard model.providerReady else { return }
         loading = true
         defer { loading = false }
         do {
@@ -77,7 +77,7 @@ final class TVLibraryStore: ObservableObject {
 
     /// Load one category's items (grid browsing).
     func loadItems(categoryID: String) async {
-        guard model.signedIn, model.providerReady else { return }
+        guard model.providerReady else { return }
         error = ""; progress = ""; items = []; loading = true
         defer { loading = false }
         do {
@@ -93,7 +93,7 @@ final class TVLibraryStore: ObservableObject {
     /// Load the whole catalog for search (full-catalog fast path, then
     /// category fallback with progress), like the iPhone build.
     func loadAllForSearch(update: @escaping ([CatalogItem], String) -> Void) async {
-        guard model.signedIn, model.providerReady else { return }
+        guard model.providerReady else { return }
         error = ""; items = []; loading = true
         defer { loading = false }
         do {

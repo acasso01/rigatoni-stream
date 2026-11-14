@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Root of the tvOS app: sign-in gate, then an X1-style left nav rail with
+// Root of the tvOS app: provider setup when nothing is saved, then an X1-style left nav rail with
 // the content area to its right. The rail replaces the old top tab bar.
 // The content tree is rebuilt when the theme changes (`.id(theme)`), which
 // keeps the static TVTheme color accessors in sync without touching every
@@ -62,7 +62,7 @@ struct TVRootView: View {
             Group {
                 if model.starting {
                     ProgressView("Opening Ant Streams…")
-                } else if model.signedIn {
+                } else if !model.needsProviderSetup {
                     HStack(spacing: 0) {
                         navRail
                             .focusSection()
@@ -106,7 +106,7 @@ struct TVRootView: View {
                     // TVTheme.xxx static resolves to the new theme.
                     .id(appearance)
                 } else {
-                    TVLoginView()
+                    TVProviderSetupView()
                 }
             }
             .foregroundStyle(TVTheme.text)
