@@ -1,3 +1,5 @@
+> **Native iOS/tvOS update:** use the [standalone provider setup and installation guide](NATIVE_STANDALONE.md). Native apps now use direct providers and local Keychain profiles; older account/gateway instructions below apply only to legacy builds.
+
 # Ant Streams
 
 Interactive IPTV PWA design preview. No live streams, provider accounts, or copyrighted content are included.

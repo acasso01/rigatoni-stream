@@ -2,15 +2,13 @@ import SwiftUI
 
 @main
 struct RigatoniStreamTVApp: App {
-    // Shared with the iPhone build: AppModel/AccountAPI live in
+    // Shared with the iPhone build: AppModel live in
     // ../ios/RigatoniStream/Core.swift and are compiled into this target.
     @StateObject private var model = AppModel()
     @AppStorage("rigatoni-appearance") private var appearance = "dark"
 
     init() {
-        if UserDefaults.standard.string(forKey: "rigatoni-appearance") == "netflix" {
-            UserDefaults.standard.set("dark", forKey: "rigatoni-appearance")
-        }
+        AppAppearance.migrateStoredSelection()
     }
     var body: some Scene {
         WindowGroup {
