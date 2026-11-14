@@ -5,7 +5,7 @@ import Foundation
 // credentials or stream URLs — playback URLs are rebuilt from the provider
 // at play time (direct URLs via Provider, gateway via opaque tickets).
 struct TVWatchedRecord: Codable, Identifiable {
-    var id: String { kind + ":" + itemID }
+    var id: String { SavedRecord.makeID(kind: kind, itemID: itemID, providerID: providerID) }
     /// "live" | "movie" | "series"
     let kind: String
     let itemID: String
@@ -13,6 +13,8 @@ struct TVWatchedRecord: Codable, Identifiable {
     let ext: String
     let categoryID: String
     let watchedAt: Date
+    /// Owning provider in combined-library mode. Nil for older records.
+    var providerID: UUID? = nil
 }
 
 @MainActor
@@ -31,7 +33,8 @@ enum TVLastWatched {
             name: item.name,
             ext: item.fileExtension,
             categoryID: item.categoryID,
-            watchedAt: Date()
+            watchedAt: Date(),
+            providerID: item.providerID
         )
         var items = items(model: model).filter { $0.id != entry.id }
         items.insert(entry, at: 0)

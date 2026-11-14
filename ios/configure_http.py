@@ -3,6 +3,7 @@
 
 Providers are configured at runtime, so per-domain ATS exceptions cannot cover them.
 No server hostname, provider credential or account token is embedded in the build.
+Enable user-entered HTTP providers in a generated native app. No provider data is read.
 """
 import argparse
 import os
@@ -14,6 +15,8 @@ def configure(plist_path):
     path = Path(plist_path)
     with path.open("rb") as handle:
         values = plistlib.load(handle)
+    # Unknown user-entered hosts require broad ATS access. HTTPS trust remains enforced.
+    # Do not add finer-grained ATS keys: those override this key on modern Apple OSes.
     # Remove obsolete per-host exceptions. Domains listed in NSExceptionDomains
     # otherwise override the global allowance, including when the exception is empty.
     values["NSAppTransportSecurity"] = {"NSAllowsArbitraryLoads": True}
