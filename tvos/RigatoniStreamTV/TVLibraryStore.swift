@@ -4,8 +4,8 @@ import SwiftUI
 // tvOS catalog store. Mirrors the loading semantics of the iPhone build's
 // LibraryView (same shared types: Provider, LibraryKind, CatalogItem,
 // CatalogCategory, CatalogLoader, CatalogIndex, BoundedTransfer), but drives
-// tvOS grids instead of iOS pickers. Provider credentials and the encrypted
-// vault flow through the shared AppModel/AccountAPI only.
+// tvOS grids instead of iOS pickers. Provider credentials flow through the
+// shared AppModel: device Keychain, or the account vault when signed in.
 @MainActor
 final class TVLibraryStore: ObservableObject {
     let kind: LibraryKind

@@ -3,8 +3,13 @@
 # Ant Streams for Apple TV
 
 Native SwiftUI interface with VLCKit playback, Live TV, Movies, search,
-local provider profiles stored in Keychain. Pins and buffer preferences are
-local to each device; they do not sync from your iPhone.
+local provider profiles stored in Keychain. No Ant Streams account is required:
+enter the IPTV server URL, username, password, and an optional name. That login
+is stored in the Apple TV Keychain for this device only and is never written to
+preferences, logs, or caches. Pins, favorites, history, and buffer choices stay
+on this Apple TV; they do not sync from your iPhone. Optional **Sign in to
+sync** in Settings still uses the encrypted provider vault. The HTTPS gateway
+needs that sign-in and does not block a direct provider.
 
 ## Prepare on your Mac
 
@@ -19,9 +24,12 @@ bash setup.sh
 ```
 
 Setup applies `NSAllowsArbitraryLoads` to the generated app so user-entered HTTP
-provider hosts work; no hostname prompt and no per-host exception. HTTPS trust
-remains enforced. Do not put credentials in source files, shell commands or
-preferences.
+provider hosts work; no hostname prompt, no per-host exception, and no
+Raspberry Pi gateway needed for native playback. Setup enables direct HTTP and
+HTTPS connections to user-configured IPTV services. Provider credentials and
+stream paths transmitted over HTTP are unencrypted; use HTTPS whenever
+available. The account backend remains HTTPS and HTTPS trust remains enforced.
+Do not put credentials in source files, shell commands or preferences.
 
 Setup opens `RigatoniStreamTV.xcworkspace`, including the player dependency.
 Use the workspace rather than the `.xcodeproj`.
@@ -41,7 +49,12 @@ Use the workspace rather than the `.xcodeproj`.
    Keep the Apple TV app's bundle identifier distinct from the iPhone app.
 5. Choose **RigatoniStreamTV** as the scheme and your paired Apple TV as the
    run destination. Press **Command-R** to build, install and launch.
-6. Open Settings to select or add your local provider.
+6. On first launch the provider setup screen opens with focus on **Server URL**
+   (the same focus target Settings uses). Enter the provider and start watching.
+   No account is required. After a provider is saved, move to Settings and press
+   right: focus still lands on **Server URL**. **Sign in to sync** is optional.
+   If you are already signed in, the saved vault provider loads as before.
+   You can also select or add a local provider later in Settings.
 
 Apple pairing instructions:
 https://developer.apple.com/documentation/xcode/managing-your-simulated-and-physical-devices-in-device-hub
@@ -68,16 +81,16 @@ codec, Apple TV model and connection. No transcoding is performed.
 
 `.github/workflows/tvos-build.yml` compiles simulator and physical Apple TV
 variants without signing. It does not install on your Apple TV or prove real
-provider playback; those checks happen on the paired device. Shared vault and
-catalog logic remains covered by the existing iOS test workflow.
+provider playback; those checks happen on the paired device. Shared provider
+Keychain, vault, and catalog logic remains covered by the existing iOS test workflow.
 
 
-TV Shows uses direct provider access and supports season/episode browsing. Live TV and Guide both open the All Channels guide with category chips, star pins, channel logos, now/next listings and a preview with sound. With playback controls hidden, left/right switches channels; with controls visible, left/right navigates the buttons. Last watched is scoped to the signed-in account and provider; movie entries open details with Continue/Restart, and episodes restore their own playback position. History stores IDs, titles and timestamps, never credentials or artwork/stream URLs.
+TV Shows uses direct provider access and supports season/episode browsing. Live TV and Guide both open the All Channels guide with category chips, star pins, channel logos, now/next listings and a preview with sound, and Live TV keeps full-height categories with long-press pinning. With playback controls hidden, left/right switches channels; with controls visible, left/right navigates the buttons. Last watched is scoped to the signed-in account or the on-device provider; movie entries open details with Continue/Restart, and episodes restore their own playback position. History stores IDs, titles and timestamps, never credentials or artwork/stream URLs.
 
-The Ant Streams update keeps the original bundle identifiers, Keychain service and preference keys so installed apps retain settings. From the repository root, run `cd ios && bundle exec ruby update_project.rb` for iPhone or `cd tvos && bundle exec ruby update_project.rb` for Apple TV, then build and run the corresponding workspace.
+The Ant Streams update keeps the original bundle identifiers, session Keychain service, and signed-in preference keys so installed apps retain account settings. Provider logins entered without an account use a separate this-device Keychain item. From the repository root, run `cd ios && bundle exec ruby update_project.rb` for iPhone or `cd tvos && bundle exec ruby update_project.rb` for Apple TV so existing projects pick up `LocalProviders.swift`, then build and run the corresponding workspace.
 
 
-The interface update includes Dark, iOS Light, Ghost and Nebula themes. Apple TV has a left navigation rail with Guide and Saved, plus movie/show hero banners. The guide uses provider short-EPG data with at most four concurrent requests and a bounded, account/provider-scoped memory cache; gateway/no-EPG providers retain playable Live rows. Saved favorites persist IDs and metadata only, respect hidden movie/live categories and channels, and open movie details with Continue/Restart. New source files are added to existing Xcode projects by `bundle exec ruby update_project.rb`; signing and local HTTP exceptions are preserved.
+The interface update includes Dark, iOS Light, Ghost and Nebula themes. Apple TV has a left navigation rail with Guide and Saved, plus movie/show hero banners. The guide uses provider short-EPG data with at most four concurrent requests and a bounded, account/provider-scoped memory cache; gateway/no-EPG providers retain playable Live rows. Saved favorites persist IDs and metadata only, respect hidden movie/live categories and channels, and open movie details with Continue/Restart. New source files are added to existing Xcode projects by `bundle exec ruby update_project.rb`; signing is preserved while direct HTTP IPTV access is enabled.
 
 ## Refresh an existing installation (0.2.3, build 5)
 
@@ -134,3 +147,15 @@ Ghost uses #0A0A0B / #141416 surfaces and white accents. Nebula uses #060609 /
 #0E0E14 surfaces with a #A78BFA to #22D3EE accent gradient. Midnight has been
 removed from both native theme pickers; existing Midnight selections migrate to
 Nebula without changing provider profiles or preferences unrelated to appearance.
+
+## Direct provider playback
+
+Apple TV shares the same provider and catalog code as iPhone. Both builds now permit user-entered HTTP IPTV hosts without a gateway. The tvOS `Info.plist` includes `NSAppTransportSecurity` → `NSAllowsArbitraryLoads = YES`. Apple requires an explanation for this broad ATS exception at review because provider hostnames are chosen by the user and many third-party providers only offer HTTP. This exception weakens app-wide ATS enforcement; prefer HTTPS provider URLs whenever possible.
+
+For an existing Apple TV project, pull the branch and run `cd tvos && bundle exec ruby update_project.rb` before building; increment the build number separately for TestFlight. Apple TV playback must be tested on physical hardware before release.
+
+## Guide refresh and vertical categories
+
+Guide now has a focusable vertical category sidebar next to the existing timeline, matching Live TV's vertical category navigation. Guide and Settings → Live TV Guide offer **Refresh EPG**, with shared progress, last fully successful manual refresh time, and error feedback. It forces fresh short-guide requests for displayed/recently requested channels without changing favorites, visibility preferences, playback, or timeline calculations. Refresh status is memory-only for the session. Direct providers are supported; the current gateway API does not expose guide data.
+
+Check on Apple TV: navigate between the sidebar, refresh button and timeline with the Siri Remote; switch categories; play a channel; refresh with the provider online/offline; confirm hidden categories/channels and favorites are unchanged.
