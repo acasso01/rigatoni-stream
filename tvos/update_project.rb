@@ -1,4 +1,4 @@
-# Add new sources and branding to an existing project without resetting signing or private ATS.
+# Update Apple TV sources and network access without resetting signing or build versions.
 require 'xcodeproj'
 Dir.chdir(__dir__)
 project = Xcodeproj::Project.open('RigatoniStreamTV.xcodeproj')
@@ -22,16 +22,13 @@ target.resources_build_phase.add_file_reference(asset) unless target.resources_b
 target.build_configurations.each do |config|
   config.build_settings['ASSETCATALOG_COMPILER_APPICON_NAME'] = 'AppIcon'
   config.build_settings['INFOPLIST_KEY_CFBundleDisplayName'] = 'Ant Streams'
-  config.build_settings['MARKETING_VERSION'] = '0.2.0'
-  config.build_settings['CURRENT_PROJECT_VERSION'] = '2'
   path = config.build_settings['INFOPLIST_FILE']
   abort 'Expected a local generated Info.plist' unless path && !path.include?('$')
   info = Xcodeproj::Plist.read_from_path(path)
   info['CFBundleDisplayName'] = 'Ant Streams'
   info['CFBundleName'] = 'Ant Streams'
-  info['CFBundleShortVersionString'] = '0.2.0'
-  info['CFBundleVersion'] = '2'
+  info['NSAppTransportSecurity'] = { 'NSAllowsArbitraryLoads' => true }
   Xcodeproj::Plist.write_to_path(info, path)
 end
 project.save
-puts 'Updated Ant Streams sources and logo; preserved signing and private HTTP configuration.'
+puts 'Updated Ant Streams TV sources and direct HTTP provider support; preserved signing and build versions.'

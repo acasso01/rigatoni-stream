@@ -2,30 +2,37 @@ import plistlib
 import tempfile
 import unittest
 from pathlib import Path
-from configure_http import configure, provider_host
+from configure_http import configure
 
 
 class HTTPConfigurationTests(unittest.TestCase):
-    def test_exception_is_exact_and_never_global(self):
+    def test_arbitrary_http_is_enabled_without_a_provider_hostname(self):
         with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / 'Info.plist'
-            path.write_bytes(plistlib.dumps({'CFBundleDisplayName': 'Rigatoni Stream'}))
-            configure(path, 'PROVIDER.EXAMPLE.INVALID')
+            path = Path(folder) / "Info.plist"
+            path.write_bytes(plistlib.dumps({"CFBundleDisplayName": "Ant Streams"}))
+            configure(path)
             values = plistlib.loads(path.read_bytes())
-            self.assertEqual(values['NSAppTransportSecurity'], {'NSExceptionDomains': {
-                'provider.example.invalid': {'NSExceptionAllowsInsecureHTTPLoads': True, 'NSIncludesSubdomains': False}}})
-            self.assertEqual(values['CFBundleDisplayName'], 'Rigatoni Stream')
-            configure(path, '')
-            self.assertNotIn('NSAppTransportSecurity', plistlib.loads(path.read_bytes()))
+            self.assertEqual(values["NSAppTransportSecurity"], {"NSAllowsArbitraryLoads": True})
+            self.assertEqual(values["CFBundleDisplayName"], "Ant Streams")
 
-    def test_rejects_credentials_wildcards_ip_and_account_hosts(self):
-        for host in ['http://provider.example.invalid', 'user:password@provider.example.invalid',
-                     '*.example.invalid', 'provider.example.invalid:8080', '127.0.0.1',
-                     'bad..example.invalid', 'project.supabase.co', 'homepi.test.ts.net']:
-            with self.subTest(host=host):
-                with self.assertRaises(ValueError):
-                    provider_host(host)
+    def test_removes_obsolete_host_exceptions_and_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "Info.plist"
+            path.write_bytes(plistlib.dumps({
+                "UIBackgroundModes": ["audio"],
+                "NSAppTransportSecurity": {"NSExceptionDomains": {
+                    "old-provider.example.invalid": {
+                        "NSExceptionAllowsInsecureHTTPLoads": True,
+                        "NSIncludesSubdomains": False
+                    }
+                }}
+            }))
+            configure(path)
+            configure(path)
+            values = plistlib.loads(path.read_bytes())
+            self.assertEqual(values["NSAppTransportSecurity"], {"NSAllowsArbitraryLoads": True})
+            self.assertEqual(values["UIBackgroundModes"], ["audio"])
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()
