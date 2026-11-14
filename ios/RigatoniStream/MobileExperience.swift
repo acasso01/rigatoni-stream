@@ -51,13 +51,13 @@ struct MobileRootView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             HStack(spacing: 0) {
-                ForEach([MobileSection.home, .live, .movies, .search]) { entry in
+                ForEach([MobileSection.home, .live, .movies, .shows, .search]) { entry in
                     Button { section = entry } label: {
                         navLabel(entry.title, symbol: entry.symbol, selected: section == entry)
                     }.accessibilityAddTraits(section == entry ? .isSelected : [])
                 }
                 Button { more = true } label: {
-                    navLabel("More", symbol: "ellipsis.circle", selected: [.guide, .shows, .saved, .settings].contains(section))
+                    navLabel("More", symbol: "ellipsis.circle", selected: [.guide, .saved, .settings].contains(section))
                 }
             }
             .buttonStyle(.plain).padding(.top, 10).padding(.bottom, 6)
@@ -124,12 +124,13 @@ enum MobileRecords {
     }
     static func record(_ item: CatalogItem, kind: String? = nil) -> SavedRecord {
         SavedRecord(kind: kind ?? (item.kind == .live ? "live" : "movie"), itemID: item.id,
-                    name: item.name, ext: item.fileExtension, categoryID: item.categoryID, addedAt: Date())
+                    name: item.name, ext: item.fileExtension, categoryID: item.categoryID, addedAt: Date(),
+                    providerID: item.providerID)
     }
     static func visible(_ record: SavedRecord, model: AppModel) -> Bool {
         record.kind == "series" || record.kind == "episode" || model.preferences.visible(
             CatalogItem(id: record.itemID, name: record.name, kind: record.kind == "live" ? .live : .movies,
-                        fileExtension: record.ext, poster: nil, categoryID: record.categoryID))
+                        fileExtension: record.ext, poster: nil, categoryID: record.categoryID, providerID: record.providerID))
     }
     static func watched(_ item: CatalogItem, episode: Bool, model: AppModel) {
         guard let key = key(model, history: true) else { return }
@@ -162,8 +163,7 @@ struct MobileHomeView: View {
     @State private var error = ""
     @State private var retry = 0
     private var pinned: [CatalogCategory] {
-        guard let id = model.libraryAccountID, let host = try? model.provider.baseURL().host else { return [] }
-        let pins = UserDefaults.standard.stringArray(forKey: CategoryPins.key(accountID: id, host: host)) ?? []
+        let pins = PinnedCategories.read(key: model.pinKey)
         return CategoryPins.ordered(categories.filter { pins.contains($0.id) && model.preferences.categoryVisible($0.id, kind: .live) }, pins: pins)
     }
     var body: some View {
@@ -180,7 +180,7 @@ struct MobileHomeView: View {
                         }
                     }
                     if !model.providerReady {
-                        Button("Add your provider to start watching") { model.settingsVisible = true }.buttonStyle(.borderedProminent)
+                        Button("Add your provider to start watching") { model.settingsVisible = true }.buttonStyle(.borderedProminent).foregroundStyle(StreamTheme.onAccent)
                     } else {
                         MobileSavedContent(history: true)
                         Text("Pinned live categories").font(.title2.bold())
@@ -217,7 +217,7 @@ struct MobilePinnedShelf: View {
             }
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: 12) {
-                    ForEach(items.prefix(20)) { item in
+                    ForEach(items.prefix(20), id: \.scopedID) { item in
                         Button { playing = item } label: {
                             VStack(alignment: .leading) {
                                 ProviderPoster(url: item.poster, kind: .live).frame(width: 160, height: 90)
@@ -241,63 +241,138 @@ struct MobilePinnedShelf: View {
     }
 }
 
+
+// Starred (pinned) live channels now live in Core.swift (shared with tvOS).
 struct MobileGuideView: View {
     @EnvironmentObject private var model: AppModel
     @State private var categories: [CatalogCategory] = []
-    @State private var selected = ""
+    @State private var selected = "all"
     @State private var items: [CatalogItem] = []
+    @State private var pinned: Set<String> = []
+    @State private var pinnedCatIDs: [String] = []
     @State private var loading = false
     @State private var error = ""
     @State private var playing: CatalogItem?
     @State private var page = 0
     @State private var retry = 0
+    @State private var nowTick = Date()
+    /// "All" stays first; pinned categories follow in pin order, then the rest.
+    private var orderedCats: [CatalogCategory] {
+        PinnedCategories.ordered(categories, pins: pinnedCatIDs)
+    }
+    private var selectedName: String {
+        if selected == "all" { return "All channels" }
+        return categories.first { $0.id == selected }?.name ?? "Guide"
+    }
+    // Pinned channels always float to the top, in every category view.
+    private var ordered: [CatalogItem] {
+        items.filter { pinned.contains($0.scopedID) } + items.filter { !pinned.contains($0.scopedID) }
+    }
+    // Current half-hour window, e.g. "Now – 11:00p" with "11:30p" next.
+    private var slot: (end: String, next: String) {
+        let cal = Calendar.current
+        let comps = cal.dateComponents([.year, .month, .day, .hour, .minute], from: nowTick)
+        var startComps = comps
+        startComps.minute = (comps.minute ?? 0) < 30 ? 0 : 30
+        startComps.second = 0
+        let start = cal.date(from: startComps) ?? nowTick
+        let end = cal.date(byAdding: .minute, value: 30, to: start) ?? nowTick
+        let next = cal.date(byAdding: .minute, value: 30, to: end) ?? nowTick
+        let formatter = DateFormatter()
+        formatter.dateFormat = "h:mma"; formatter.amSymbol = "a"; formatter.pmSymbol = "p"
+        return (formatter.string(from: end), formatter.string(from: next))
+    }
     var body: some View {
         NavigationStack {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
-                    StreamHeading(title: "Guide", subtitle: "On now and coming up.")
+                    StreamHeading(title: selectedName, subtitle: "On now and coming up.")
                     if !model.providerReady {
                         Button("Add your provider") { model.settingsVisible = true }
                     }
-                    GuideCategoryPicker(categories: categories, selected: $selected)
+                    HStack {
+                        Text("Now – \(slot.end)").font(.subheadline).foregroundStyle(.secondary)
+                        Spacer()
+                        Text(slot.next).font(.subheadline).foregroundStyle(.secondary)
+                    }.padding(.horizontal, 4)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack {
+                            guidePill(id: "all", name: "All")
+                            ForEach(orderedCats) { category in
+                                guidePill(id: category.id, name: category.name)
+                            }
+                        }
+                    }
                     EPGRefreshControl(channels: Array(items.dropFirst(page * 40).prefix(40)))
                     if loading { ProgressView("Loading guide…") }
                     if !error.isEmpty { Text(error); Button("Retry") { retry += 1 } }
-                    if !loading && items.isEmpty && error.isEmpty && model.providerReady { Text("No visible channels in this category.").foregroundStyle(.secondary) }
-                    ForEach(Array(items.dropFirst(page * 40).prefix(40))) { item in
-                        MobileGuideRow(item: item) { playing = item }
+                    if !loading && ordered.isEmpty && error.isEmpty && model.providerReady { Text("No visible channels in this category.").foregroundStyle(.secondary) }
+                    ForEach(Array(ordered.dropFirst(page * 40).prefix(40)), id: \.scopedID) { item in
+                        MobileGuideRow(item: item, pinned: pinned.contains(item.scopedID), togglePin: { togglePin(item.scopedID) }) { playing = item }
                     }
-                    if items.count > 40 {
+                    if ordered.count > 40 {
                         HStack {
                             Button("Previous") { page -= 1 }.disabled(page == 0)
                             Spacer(); Text("Page \(page + 1)").font(.caption); Spacer()
-                            Button("Next") { page += 1 }.disabled((page + 1) * 40 >= items.count)
+                            Button("Next") { page += 1 }.disabled((page + 1) * 40 >= ordered.count)
                         }
                     }
                 }.padding(18)
             }.background { StreamBackdrop() }
                 .navigationTitle("Guide").navigationBarTitleDisplayMode(.inline)
                 .task(id: "\(model.libraryRevision)-\(retry)") {
-                    categories = []; items = []; selected = ""; error = ""
+                    categories = []; items = []; selected = "all"; error = ""
                     guard model.providerReady else { return }
+                    pinned = PinnedChannels.read(key: model.preferenceKey)
+                    pinnedCatIDs = PinnedCategories.read(key: model.pinKey)
                     do {
                         let loaded = try await model.catalog.categories(kind: .live, model: model)
                         try Task.checkCancellation()
                         categories = loaded.filter { model.preferences.categoryVisible($0.id, kind: .live) }
-                        selected = categories.first?.id ?? ""
                     } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
                 }
                 .task(id: "\(selected)-\(model.libraryRevision)-\(retry)") {
                     items = []; page = 0
-                    guard !selected.isEmpty, model.providerReady else { return }
+                    guard model.providerReady else { return }
                     loading = true; defer { loading = false }
                     do {
-                        let loaded = try await model.catalog.items(kind: .live, category: selected, model: model)
+                        let loaded: [CatalogItem]
+                        if selected == "all" {
+                            loaded = try await model.catalog.items(kind: .live, category: nil, model: model)
+                        } else {
+                            loaded = try await model.catalog.items(kind: .live, category: selected, model: model)
+                        }
                         try Task.checkCancellation(); items = loaded.filter(model.preferences.visible); error = ""
                     } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
                 }
+                .task {
+                    while !Task.isCancelled {
+                        do { try await Task.sleep(for: .seconds(60)) } catch { return }
+                        nowTick = Date()
+                    }
+                }
                 .fullScreenCover(item: $playing) { CatalogDestination(item: $0, channels: items) }
         }
+    }
+    private func guidePill(id: String, name: String) -> some View {
+        Button { selected = id } label: {
+            Text((id != "all" && pinnedCatIDs.contains(id) ? "★ " : "") + name).font(.subheadline.bold()).lineLimit(1).fixedSize()
+                .padding(.horizontal, 16).padding(.vertical, 12)
+                .background(selected == id ? AnyShapeStyle(StreamTheme.accentFill) : AnyShapeStyle(StreamTheme.panel), in: Capsule())
+                .foregroundStyle(selected == id ? StreamTheme.onAccent : StreamTheme.text)
+        }.buttonStyle(.plain)
+        .contextMenu {
+            if id != "all" {
+                Button(pinnedCatIDs.contains(id) ? "Unpin category" : "Pin category to front") {
+                    pinnedCatIDs = PinnedCategories.toggled(id, in: pinnedCatIDs)
+                    PinnedCategories.write(pinnedCatIDs, key: model.pinKey)
+                }
+            }
+        }
+    }
+    private func togglePin(_ id: String) {
+        if pinned.contains(id) { pinned.remove(id) } else { pinned.insert(id) }
+        PinnedChannels.write(pinned, key: model.preferenceKey)
     }
 }
 
@@ -305,45 +380,53 @@ struct MobileGuideRow: View {
     @ObservedObject private var epgCache = EPGCache.shared
     @EnvironmentObject private var model: AppModel
     let item: CatalogItem
+    let pinned: Bool
+    let togglePin: () -> Void
     let play: () -> Void
     @State private var programs: [EPGProgram] = []
     @State private var loading = true
+    private var nowNext: EPGNowNext { EPGParser.nowNext(programs) }
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Button(action: play) {
-                HStack(spacing: 12) {
-                    ProviderPoster(url: item.poster, kind: .live).frame(width: 58, height: 40).clipShape(RoundedRectangle(cornerRadius: 8))
-                    Text(item.name).font(.headline).lineLimit(2)
-                    Spacer(); Image(systemName: "play.circle.fill").font(.title2)
-                }.foregroundStyle(StreamTheme.text)
-            }.buttonStyle(.plain).contextMenu { MobileSaveButton(record: MobileRecords.record(item)) }
-            if loading { ProgressView().controlSize(.small) }
-            else if programs.isEmpty { Text("Live · Program information unavailable").font(.caption).foregroundStyle(.secondary) }
-            else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(alignment: .top, spacing: 12) {
-                        ForEach(programs) { program in
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(program.start <= Date() && program.end > Date() ? "ON NOW" : program.timeRange)
-                                    .font(.caption2.bold()).foregroundStyle(StreamTheme.accent)
-                                Text(program.title).font(.subheadline.weight(.medium)).lineLimit(3)
-                            }.frame(width: 200, alignment: .leading).padding(12)
-                                .background(StreamTheme.background, in: RoundedRectangle(cornerRadius: 10))
-                        }
+        HStack(spacing: 12) {
+            Button(action: togglePin) {
+                Image(systemName: pinned ? "star.fill" : "star")
+                    .font(.title3)
+                    .foregroundStyle(pinned ? StreamTheme.accent : StreamTheme.muted)
+                    .frame(width: 44, height: 44)
+            }.buttonStyle(.plain).accessibilityLabel(pinned ? "Unpin channel" : "Pin channel")
+            HStack(spacing: 12) {
+                VStack(spacing: 2) {
+                    ProviderPoster(url: item.poster, kind: .live).frame(width: 64, height: 40).clipShape(RoundedRectangle(cornerRadius: 8))
+                    if !item.number.isEmpty {
+                        Text(item.number).font(.caption2).foregroundStyle(.secondary)
+                    }
+                }.frame(width: 64)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(nowNext.now?.title ?? (loading ? "Loading…" : item.name))
+                        .font(.headline).lineLimit(1)
+                    if let next = nowNext.next {
+                        Text(next.title).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                    } else if !loading {
+                        Text("Live").font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
+                Spacer()
             }
-        }.padding(14).background(StreamTheme.panel, in: RoundedRectangle(cornerRadius: 16))
-            .task(id: "\(model.libraryRevision)-\(item.id)-\(epgCache.revision)") {
-                programs = []; loading = true
-                guard !model.provider.requiresGateway, let scope = model.preferenceKey else { loading = false; return }
-                while !Task.isCancelled {
-                    let loaded = await EPGCache.shared.programs(streamID: item.id, provider: model.provider, scope: scope + "-\(model.libraryRevision)")
-                    guard !Task.isCancelled else { return }
-                    programs = Array(loaded.filter { $0.end > Date() }.prefix(6)); loading = false
-                    do { try await Task.sleep(for: .seconds(60)) } catch { return }
-                }
+            .contentShape(Rectangle())
+            .onTapGesture(perform: play)
+        }
+        .padding(10)
+        .background(StreamTheme.card, in: RoundedRectangle(cornerRadius: 16))
+        .contextMenu { MobileSaveButton(record: MobileRecords.record(item)) }
+        .task(id: "\(model.libraryRevision)-\(item.scopedID)-\(epgCache.revision)") {
+            programs = []; loading = true
+            while !Task.isCancelled {
+                let loaded = await EPGCache.shared.programs(streamID: item.id, provider: model.provider(for: item), scope: model.epgScope(for: item))
+                guard !Task.isCancelled else { return }
+                programs = Array(loaded.filter { $0.end > Date() }.prefix(6)); loading = false
+                do { try await Task.sleep(for: .seconds(60)) } catch { return }
             }
+        }
     }
 }
 
@@ -383,7 +466,7 @@ struct MobileSavedContent: View {
                     HStack(spacing: 14) {
                         Image(systemName: record.kind == "live" ? "tv" : record.kind == "movie" ? "film" : "play.tv")
                             .font(.title2).frame(width: 56, height: 64)
-                            .background(StreamTheme.panel, in: RoundedRectangle(cornerRadius: 12))
+                            .background(StreamTheme.card, in: RoundedRectangle(cornerRadius: 12))
                         VStack(alignment: .leading, spacing: 5) {
                             Text(record.name).font(.headline).lineLimit(2)
                             if let progress = model.preferences.progress[(record.kind == "episode" ? "series-" : "") + record.itemID], record.kind != "live" {
@@ -406,7 +489,7 @@ struct MobileSavedContent: View {
         .onChange(of: model.libraryRevision) { _, _ in reload() }
         .fullScreenCover(item: $playing, onDismiss: reload) { item in
             if episode {
-                PlayerView(item: item, provider: model.provider, startSeconds: model.preferences.progress["series-" + item.id]?.seconds ?? 0, progressID: "series-" + item.id)
+                DirectPlayerView(item: item, provider: model.provider(for: item), startSeconds: model.preferences.progress["series-" + item.id]?.seconds ?? 0, progressID: "series-" + item.id)
             } else { CatalogDestination(item: item) }
         }
         .sheet(item: $show) { request in
@@ -425,22 +508,20 @@ struct MobileSavedContent: View {
         guard model.providerReady else { notice = "Save your provider in Settings first."; return }
         let scope = model.preferenceKey
         if record.kind == "series" {
-            guard !model.provider.requiresGateway else { notice = "TV Shows needs direct provider access."; return }
-            show = MobileShowRequest(series: SeriesItem(id: record.itemID, name: record.name, poster: nil), store: SeriesStore(model: model)); return
+            let seriesItem = SeriesItem(id: record.itemID, name: record.name, poster: nil, providerID: record.providerID)
+            let seriesStore = SeriesStore(model: model)
+            guard seriesStore.provider(for: seriesItem).kind == .xtream else { notice = "TV Shows requires an Xtream Codes provider."; return }
+            show = MobileShowRequest(series: seriesItem, store: seriesStore); return
         }
         var item = CatalogItem(id: record.itemID, name: record.name, kind: record.kind == "live" ? .live : .movies,
-                               fileExtension: record.ext, poster: nil, categoryID: record.categoryID)
+                               fileExtension: record.ext, poster: nil, categoryID: record.categoryID, providerID: record.providerID)
         do {
+            let owner = model.provider(for: item)
             if record.kind == "episode" {
-                guard !model.provider.requiresGateway else { throw AppFailure("This episode requires direct provider access.") }
-                item.playbackURL = try SeriesStore.seriesStreamURL(provider: model.provider, episodeID: record.itemID, ext: record.ext)
-            } else if model.provider.requiresGateway {
-                guard !record.categoryID.isEmpty else { throw AppFailure("Open this title's category to refresh its playback link.") }
-                let items = try await model.catalog.items(kind: item.kind, category: record.categoryID, model: model)
-                guard scope == model.preferenceKey else { return }
-                guard let fresh = items.first(where: { $0.id == record.itemID }), model.preferences.visible(fresh) else { throw AppFailure("This title is no longer available.") }
-                item = fresh
-            }
+                guard owner.kind == .xtream else { throw AppFailure("This episode requires an Xtream Codes provider.") }
+                item.playbackURL = try SeriesStore.seriesStreamURL(provider: owner, episodeID: record.itemID, ext: record.ext)
+            } else { item = try await model.resolve(item) }
+            guard scope == model.preferenceKey else { return }
             episode = record.kind == "episode"; playing = item
         } catch { if scope == model.preferenceKey { notice = error.localizedDescription } }
     }

@@ -298,6 +298,21 @@ final class CoreTests: XCTestCase {
             XCTAssertThrowsError(try AccountAPI.gatewayOrigin(gateway))
         }
     }
+
+    func testStandaloneHTTPPolicyInInstalledBuild() throws {
+        for scheme in ["http", "https"] {
+            for port in [80, 8080, 8000, 25461] {
+                let provider = Provider(server: "\(scheme)://arbitrary.example.invalid:\(port)", username: "dummy", password: "dummy")
+                let url = try provider.apiURL(action: "get_live_streams")
+                XCTAssertEqual(url.scheme, scheme)
+                XCTAssertEqual(url.port, port)
+                XCTAssertTrue(TransportPolicy.permits(url))
+            }
+        }
+        XCTAssertFalse(TransportPolicy.permits(URL(string: "file:///tmp/test")!))
+        XCTAssertFalse(TransportPolicy.permits(URL(string: "http://user:pass@example.invalid")!))
+        XCTAssertFalse(TransportPolicy.permits(URL(string: "http://example.invalid")!, settings: [:]))
+    }
     func testDirectHTTPPolicyPermitsArbitraryUserConfiguredHosts() {
         let settings: [String: Any] = ["NSAllowsArbitraryLoads": true]
         for address in [
