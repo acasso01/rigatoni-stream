@@ -12,3 +12,6 @@ tests.log
 device-build.log
 Private/
 __pycache__/
+
+# Generated local mock streams and ephemeral test TLS key
+fixtures/media/
