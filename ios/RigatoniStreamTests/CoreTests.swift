@@ -186,6 +186,40 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(MovieInformation.parse(["movie_data": ["releasedate": "2020"]]).release, "2020")
     }
 
+    func testLocalProviderRecordNormalizesNameServerAndGateway() throws {
+        XCTAssertThrowsError(try LocalProvider.make(
+            id: "device-provider", name: "Home",
+            provider: Provider(server: "https://provider.example.invalid", username: "dummy-user", password: ""),
+            gateway: ""
+        ))
+        let named = try LocalProvider.make(
+            id: "device-provider", name: "  Home  ",
+            provider: Provider(server: "https://provider.example.invalid/", username: "dummy-user", password: "dummy-provider-password"),
+            gateway: "https://homepi.test.ts.net:8443/"
+        )
+        XCTAssertEqual(named.name, "Home")
+        XCTAssertEqual(named.server, "https://provider.example.invalid")
+        XCTAssertEqual(named.gateway, "https://homepi.test.ts.net:8443")
+        XCTAssertEqual(named.displayName, "Home")
+        XCTAssertFalse(named.displayName.contains("dummy-provider-password"))
+        let unnamed = try LocalProvider.make(
+            id: "device-provider", name: "   ",
+            provider: Provider(server: "https://provider.example.invalid", username: "dummy-user", password: "dummy-provider-password"),
+            gateway: ""
+        )
+        XCTAssertEqual(unnamed.name, "")
+        XCTAssertEqual(unnamed.displayName, "provider.example.invalid")
+        XCTAssertThrowsError(try LocalProvider.make(
+            id: "device-provider", name: "",
+            provider: Provider(server: "https://provider.example.invalid", username: "dummy-user", password: "dummy-provider-password"),
+            gateway: "http://unsafe.example.invalid"
+        ))
+        let scope = CategoryPins.key(accountID: "device-provider", host: "provider.example.invalid") + "-library-v1"
+        XCTAssertFalse(scope.contains("dummy-provider-password"))
+        XCTAssertFalse(scope.contains("dummy-user"))
+        XCTAssertFalse(scope.contains("provider.example.invalid"))
+    }
+
     func testCategoryPinsKeepOrderAndRemovePins() {
         let categories = [CatalogCategory(id: "1", name: "News"), CatalogCategory(id: "2", name: "Sports"), CatalogCategory(id: "3", name: "Movies")]
         let pins = CategoryPins.toggled("2", in: [])

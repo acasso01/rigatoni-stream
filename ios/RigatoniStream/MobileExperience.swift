@@ -162,7 +162,7 @@ struct MobileHomeView: View {
     @State private var error = ""
     @State private var retry = 0
     private var pinned: [CatalogCategory] {
-        guard let id = model.account.session?.user.id, let host = try? model.provider.baseURL().host else { return [] }
+        guard let id = model.libraryAccountID, let host = try? model.provider.baseURL().host else { return [] }
         let pins = UserDefaults.standard.stringArray(forKey: CategoryPins.key(accountID: id, host: host)) ?? []
         return CategoryPins.ordered(categories.filter { pins.contains($0.id) && model.preferences.categoryVisible($0.id, kind: .live) }, pins: pins)
     }

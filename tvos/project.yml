@@ -18,14 +18,15 @@ targets:
       # tvOS-only UI lives in tvos/RigatoniStreamTV/.
       - RigatoniStreamTV
       # Shared, additive-only reuse: these files live in ios/ and are NOT copied.
-      # They compile into the tvOS target unchanged (same Supabase account,
-      # encrypted provider-vault, catalog and poster code as the iPhone build).
+      # They compile into the tvOS target unchanged (catalog and poster code
+      # shared with the iPhone build, plus the on-device provider Keychain).
       - path: ../ios/RigatoniStream/Core.swift
       - path: ../ios/RigatoniStream/Library.swift
       - path: ../ios/RigatoniStream/Discovery.swift
       - path: ../ios/RigatoniStream/Series.swift
       - path: ../ios/RigatoniStream/EPG.swift
       - path: ../ios/RigatoniStream/Saved.swift
+      - path: ../ios/RigatoniStream/LocalProviders.swift
     info:
       path: Generated/Info.plist
       properties:

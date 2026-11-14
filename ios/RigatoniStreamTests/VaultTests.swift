@@ -62,6 +62,7 @@ final class VaultTests: XCTestCase {
         let reloaded = try await api.loadSettings()
         XCTAssertEqual(reloaded.0, provider)
         XCTAssertEqual(reloaded.1, "https://homepi.test.ts.net:8443")
+        XCTAssertTrue(reloaded.name.isEmpty)
         let keychain = try SessionKeychain.read()
         let tokens = try JSONEncoder().encode(keychain!)
         XCTAssertFalse(String(decoding: tokens, as: UTF8.self).contains("dummy-provider-password"))
@@ -70,5 +71,106 @@ final class VaultTests: XCTestCase {
         XCTAssertTrue(deleted.0.password.isEmpty)
         XCTAssertTrue(deleted.1.isEmpty)
         XCTAssertEqual(calls, 9)
+    }
+
+    @MainActor func testLocalProviderKeychainWithoutAccount() async throws {
+        ProviderKeychain.clear()
+        defer { ProviderKeychain.clear(); SessionKeychain.clear() }
+        let model = AppModel()
+        model.provider = Provider(server: "https://provider.example.invalid", username: "dummy-user", password: "")
+        await model.saveSettings()
+        XCTAssertTrue(try ProviderKeychain.read().providers.isEmpty)
+        XCTAssertFalse(model.signedIn)
+
+        model.provider = Provider(server: "http://provider.example.invalid", username: "dummy-user", password: "dummy-provider-password")
+        model.providerName = "Living room"
+        model.gateway = "https://homepi.test.ts.net:8443/"
+        await model.saveSettings()
+        XCTAssertTrue(model.providerReady)
+        XCTAssertFalse(model.signedIn)
+        XCTAssertTrue(model.notice.contains("this device"))
+        if model.provider.requiresGateway {
+            XCTAssertTrue(model.notice.contains("Sign in"))
+        } else {
+            XCTAssertTrue(model.notice.contains("No account required"))
+        }
+        var store = try ProviderKeychain.read()
+        XCTAssertEqual(store.providers.count, 1)
+        XCTAssertEqual(store.providers[0].name, "Living room")
+        XCTAssertEqual(store.providers[0].password, "dummy-provider-password")
+        XCTAssertEqual(store.providers[0].gateway, "https://homepi.test.ts.net:8443")
+        XCTAssertEqual(store.activeID, model.activeLocalID)
+        try assertProviderKeychainIsDeviceOnly()
+        assertDefaultsOmit("dummy-provider-password")
+
+        model.provider.username = "dummy-user-edited"
+        await model.saveSettings()
+        store = try ProviderKeychain.read()
+        XCTAssertEqual(store.providers.count, 1)
+        XCTAssertEqual(store.providers[0].username, "dummy-user-edited")
+        try assertProviderKeychainIsDeviceOnly()
+
+        let added = await model.addLocalProvider(
+            name: "Cabin",
+            provider: Provider(server: "https://other.example.invalid", username: "other-user", password: "other-dummy-password"),
+            gateway: ""
+        )
+        XCTAssertTrue(added)
+        store = try ProviderKeychain.read()
+        XCTAssertEqual(store.providers.count, 2)
+        XCTAssertEqual(store.activeID, model.activeLocalID)
+        XCTAssertEqual(model.provider.username, "other-user")
+        XCTAssertFalse(model.provider.requiresGateway)
+        let key = try XCTUnwrap(model.preferenceKey)
+        XCTAssertFalse(key.contains("other-dummy-password"))
+        XCTAssertFalse(key.contains("dummy-provider-password"))
+        XCTAssertFalse(key.contains("other.example.invalid"))
+        XCTAssertNil(model.account.session)
+        do {
+            _ = try await model.gatewayRows(kind: .live, category: nil)
+            XCTFail("Gateway playback should require an account")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("Sign in"))
+            XCTAssertTrue(error.localizedDescription.localizedCaseInsensitiveContains("direct"))
+        }
+        // The HTTPS provider does not use the gateway, so this call is only to
+        // prove the guard text. Switch back to the HTTP provider first.
+        let httpID = try XCTUnwrap(store.providers.first { $0.server.hasPrefix("http://") }?.id)
+        model.useLocalProvider(httpID)
+        XCTAssertTrue(model.providerReady)
+        do {
+            _ = try await model.gatewayRows(kind: .live, category: nil)
+            XCTFail("Gateway playback should require an account")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("Sign in"))
+            XCTAssertTrue(error.localizedDescription.localizedCaseInsensitiveContains("direct"))
+        }
+
+        await model.removeLocalProvider(httpID)
+        store = try ProviderKeychain.read()
+        XCTAssertEqual(store.providers.count, 1)
+        XCTAssertEqual(store.providers[0].name, "Cabin")
+        await model.signOut()
+        XCTAssertFalse(model.signedIn)
+        XCTAssertTrue(model.providerReady)
+        XCTAssertEqual(try ProviderKeychain.read().providers.count, 1)
+        XCTAssertNil(try SessionKeychain.read())
+        assertDefaultsOmit("dummy-provider-password")
+        assertDefaultsOmit("other-dummy-password")
+    }
+
+    private func assertProviderKeychainIsDeviceOnly() throws {
+        let attrs = try XCTUnwrap(ProviderKeychain.attributes())
+        XCTAssertEqual(attrs[kSecAttrAccessible as String] as? String, kSecAttrAccessibleWhenUnlockedThisDeviceOnly as String)
+        XCTAssertEqual(attrs[kSecAttrService as String] as? String, ProviderKeychain.service)
+        if let itemClass = attrs[kSecClass as String] as? String {
+            XCTAssertEqual(itemClass, kSecClassGenericPassword as String)
+        }
+    }
+
+    private func assertDefaultsOmit(_ secret: String) {
+        let prefs = UserDefaults.standard.dictionaryRepresentation()
+        XCTAssertFalse(prefs.keys.contains { $0.contains(secret) })
+        XCTAssertFalse(prefs.values.contains { String(describing: $0).contains(secret) })
     }
 }

@@ -1,20 +1,20 @@
 # Ant Streams Privacy Policy
 
-**Last updated: November 9, 2026**
+**Last updated: November 14, 2026**
 
 Ant Streams is a media player for iPhone, iPad, and Apple TV. It does not provide, host, or include TV channels, movies, or other streaming content. You add your own provider details and are responsible for having the right to access the content you play.
 
-## Guest use on iPhone and iPad
+## Use without an account
 
-The iOS app can be used without an Ant Streams account. In guest use, provider details stay in memory for the current app session and are sent only to the provider you choose when browsing or playing content. They are not saved to the account vault. Favorites, viewing progress, and preferences may be stored locally under a hashed provider namespace. Optional account sign-in enables saving and restoring provider settings and use of the account gateway. The web and Apple TV versions may require sign-in.
+The iPhone, iPad, and Apple TV apps can be used without an Ant Streams account. Enter the IPTV provider server URL, username, password, and an optional name. Those provider credentials are stored in the device Keychain for that device only. They are not written to preferences, logs, or disk caches, and they are not sent to the account service unless you choose Sign in to sync. They are sent to the provider you choose when the app requests a catalog or plays media. Favorites, viewing progress, and history stay on the device under a hashed namespace. Optional account sign-in syncs provider settings with the encrypted account vault and is required for the HTTPS gateway. Direct providers play without an account. The website still uses the account vault.
 
 ## Information the app handles
 
 Ant Streams handles the information needed to provide its features:
 
 - **Account information:** If you create or use an Ant Streams account, your email address and account credentials are sent to the app's account service, powered by Supabase. The service issues sign-in tokens that the app stores in the device Keychain.
-- **Provider information:** The server address, username, password, and optional gateway details you enter are used to connect to the provider you choose. Provider credentials are sent to that provider when the app requests its catalog or plays media. The app also saves provider settings in its account vault so they can be restored when you sign in.
-- **Playback and personalization information:** The app may save preferences, hidden categories, favorites, and playback progress on your device. Some library preferences are associated with your account and provider host and synchronized through the account service.
+- **Provider information:** The server address, username, password, optional name, and optional gateway details you enter are used to connect to the provider you choose. Provider credentials are sent to that provider when the app requests its catalog or plays media. On iPhone, iPad, and Apple TV they are saved in the device Keychain. If you sign in, the app also saves them in the account vault so they can be restored on another sign-in.
+- **Playback and personalization information:** The app may save preferences, hidden categories, favorites, and playback progress on your device. Those lists are scoped to the signed-in account or to the provider saved on that device. They do not include provider passwords or stream URLs.
 - **Network information:** When connecting to the account service, your provider, or media servers, those services may receive technical information such as your IP address and standard connection data. Their handling of that information is governed by their own privacy policies.
 
 Ant Streams does not include advertising or analytics in the reviewed app source. This policy does not cover information handled by Apple, your streaming provider, or other services you choose to use.
@@ -25,7 +25,7 @@ Information is used to authenticate your account, save and restore your settings
 
 ## Storage and security
 
-Account sign-in tokens are stored in the iOS Keychain. The app uses its account service to save provider settings and selected library preferences. Other preferences are stored locally on your device. No internet transmission can be guaranteed completely secure; use providers and networks you trust.
+Account sign-in tokens, when you sign in, are stored in the device Keychain. Provider logins entered without an account are stored in a separate Keychain item that stays on that device. The account service stores a provider only after you sign in and save. Other preferences, favorites, and history are stored locally on your device. No internet transmission can be guaranteed completely secure; use providers and networks you trust.
 
 ## Your choices and deletion
 

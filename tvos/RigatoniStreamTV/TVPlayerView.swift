@@ -178,7 +178,10 @@ struct TVPlayerView: View {
                 TVVideoSurface(player: player)
                     .ignoresSafeArea()
             } else {
-                Text("Invalid provider settings.").foregroundStyle(.white)
+                Text(provider.requiresGateway ? GatewayAccess.signInMessage : "Invalid provider settings.")
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .padding()
             }
 
             if controlsVisible {

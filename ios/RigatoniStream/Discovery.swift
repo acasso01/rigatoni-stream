@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Account-scoped, memory-only catalogs shared by browsing and global search.
+// Memory-only catalogs shared by browsing and global search. Scoped to the account or the on-device provider.
 @MainActor
 final class SessionCatalog: ObservableObject {
     @Published private(set) var searchable: [LibraryKind: [CatalogItem]] = [:]
@@ -199,7 +199,7 @@ struct MoviesHomeView: View {
                 featured = nil; categories = []; error = ""; categoryCount = 6
                 featuredLoading = true
                 defer { featuredLoading = false }
-                guard model.signedIn, model.providerReady else { return }
+                guard model.providerReady else { return }
                 do {
                     let loaded = try await catalog.categories(kind: .movies, model: model)
                     try Task.checkCancellation()
@@ -322,7 +322,7 @@ struct GlobalSearchView: View {
             .navigationTitle("Search")
             .searchable(text: $query, prompt: "Movies and Live TV")
             .task(id: "\(hasQuery)-\(model.libraryRevision)-\(retry)") {
-                guard hasQuery, model.signedIn, model.providerReady else { return }
+                guard hasQuery, model.providerReady else { return }
                 notices = []
                 // Two media types at most, never one network request per keystroke.
                 async let movies: Void = load(.movies)
