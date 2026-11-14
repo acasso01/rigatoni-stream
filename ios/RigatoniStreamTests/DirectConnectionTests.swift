@@ -6,8 +6,9 @@ import AVFoundation
 @testable import RigatoniStream
 #endif
 
-// Run fixtures/start.sh and trust its one-day certificate in the simulator first.
-// CI requires these tests; local runs without the fixture service skip them.
+// Run fixtures/start.sh and trust its one-day CA in the simulator first.
+// CI skips this class: hosted simulators reject the fixture certificate.
+// Local runs without the fixture service skip these tests.
 final class DirectConnectionTests: XCTestCase {
     private func fixture() async throws {
         do { _ = try await BoundedTransfer(limit: 1024, timeout: 2).fetch(URL(string: "http://localhost:8765/health")!) }
