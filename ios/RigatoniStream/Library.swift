@@ -61,8 +61,17 @@ final class BoundedTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendab
             completionHandler(.cancel); finish(.failure(AppFailure("The server returned an unsupported response."))); return
         }
         guard (200..<300).contains(response.statusCode) else {
-            let message = [401,403].contains(response.statusCode) ? "Provider access was denied. Check your credentials or subscription." :
-                response.statusCode == 429 ? "The provider is rate limiting requests. Wait before retrying." : "Provider request failed (HTTP \(response.statusCode))."
+            let message: String
+            switch response.statusCode {
+            case 401, 403:
+                message = "Provider access was denied. Check your credentials or subscription."
+            case 429:
+                message = "The provider is rate limiting requests. Wait before retrying."
+            case 500...599:
+                message = "The provider server returned HTTP \(response.statusCode). Ant Streams connected directly; no gateway was used. Check the provider URL and port, or contact the provider."
+            default:
+                message = "Provider request failed (HTTP \(response.statusCode)). Ant Streams connected directly; no gateway was used."
+            }
             completionHandler(.cancel); finish(.failure(AppFailure(message))); return
         }
         guard response.expectedContentLength <= Int64(limit) else {

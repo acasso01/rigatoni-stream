@@ -38,7 +38,7 @@ struct LoginView: View {
                     Image("BrandLogo").resizable().scaledToFit().frame(width: 100, height: 100).accessibilityHidden(true)
                     Text("Ant Streams").font(.largeTitle.weight(.bold))
                     Text(createAccount ? "Create your account" : "Sign in to sync").font(.title.bold())
-                    Text("Optional. Syncs a provider with your Ant Streams account and unlocks the HTTPS gateway.").foregroundStyle(.secondary)
+                    Text("Optional. Syncs provider settings with your Ant Streams account. Provider playback always connects directly to your provider.").foregroundStyle(.secondary)
                     TextField("Email", text: $email).textContentType(.emailAddress).keyboardType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled()
                     HStack {
                         Group {
@@ -110,7 +110,7 @@ struct ProviderSetupView: View {
                     Button("Sign in to sync") { showAccount = true }
                     if model.busy { ProgressView() }
                     if !model.notice.isEmpty { Text(model.notice).font(.callout).foregroundStyle(.secondary).accessibilityAddTraits(.updatesFrequently) }
-                    Text("The provider login is saved in this device's Keychain only. Direct providers play immediately. The HTTPS gateway is optional, lives in Settings, and needs an Ant Streams sign-in.").font(.footnote).foregroundStyle(.secondary)
+                    Text("The provider login is saved in this device's Keychain only. Playback connects directly to the provider server. No Ant Streams account or gateway is required.").font(.footnote).foregroundStyle(.secondary)
                 }.textFieldStyle(.roundedBorder).padding(28).padding(.top, 35)
             }.background { StreamBackdrop() }
             .sheet(isPresented: $showAccount) { LoginView() }
@@ -206,9 +206,7 @@ struct SettingsView: View {
                     NavigationLink("Categories, order and names") { LibraryCustomizationView() }
                 }
                 Section("Provider") {
-                    Text(model.provider.requiresGateway
-                         ? (model.signedIn ? "Playback route: HTTPS gateway" : "Playback route: HTTPS gateway — sign in required. Direct providers still play.")
-                         : "Playback route: direct provider")
+                    Text("Playback route: direct to your provider")
                         .font(.footnote).foregroundStyle(.secondary)
                     TextField("Server URL", text: $model.provider.server).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                     TextField("Username", text: $model.provider.username).textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -218,12 +216,10 @@ struct SettingsView: View {
                         Button { visiblePassword.toggle() } label: { Image(systemName: visiblePassword ? "eye.slash" : "eye") }.accessibilityLabel("Show or hide provider password")
                     }
                     TextField("Name (optional)", text: $model.providerName)
-                    TextField("HTTPS gateway URL (optional)", text: $model.gateway).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    Text(model.signedIn
-                         ? "Configured HTTP providers and HTTPS providers play directly. Other HTTP providers use your saved HTTPS gateway."
-                         : "Direct providers play without an account. The HTTPS gateway needs an Ant Streams sign-in and does not block a direct provider.")
+                    TextField("Legacy HTTPS gateway URL (optional; not used for playback)", text: $model.gateway).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    Text("Provider requests and playback connect directly to the server above. A gateway or Ant Streams account is not required.")
                         .font(.footnote).foregroundStyle(.secondary)
-                    Button("Save provider & gateway") { Task { await model.saveSettings() } }.disabled(model.busy)
+                    Button("Save provider settings") { Task { await model.saveSettings() } }.disabled(model.busy)
                     Button("Reload saved settings") { Task {
                         model.busy = true; defer { model.busy = false }
                         do { try await model.reloadSettings() } catch { model.notice = error.localizedDescription }
@@ -278,10 +274,10 @@ struct SettingsView: View {
                 Section(model.signedIn ? "Account" : "Sign in to sync") {
                     if model.signedIn {
                         if let email = model.account.session?.user.email { Text("Signed in as \(email)") }
-                        Text("Provider settings sync to your Ant Streams account. The HTTPS gateway uses this sign-in.").font(.footnote).foregroundStyle(.secondary)
+                        Text("Your Ant Streams account syncs provider settings. Playback still connects directly to your provider.").font(.footnote).foregroundStyle(.secondary)
                         Button("Sign out", role: .destructive) { Task { await model.signOut() } }.disabled(model.busy)
                     } else {
-                        Text("Optional. Sign in to copy this provider to your Ant Streams account and to use the HTTPS gateway.").font(.footnote).foregroundStyle(.secondary)
+                        Text("Optional. Sign in to sync provider settings across your Ant Streams account. This does not change the direct playback route.").font(.footnote).foregroundStyle(.secondary)
                         Button("Sign in to sync") { showAccount = true }.disabled(model.busy)
                     }
                     Button(model.signedIn ? "Delete saved provider & gateway" : "Remove this provider", role: .destructive) { deleting = true }.disabled(model.busy)

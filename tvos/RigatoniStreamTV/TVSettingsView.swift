@@ -18,7 +18,7 @@ struct TVLoginView: View {
                     .font(.largeTitle.weight(.bold))
                 Text(createAccount ? "Create your account" : "Sign in to sync")
                     .font(.title.bold())
-                Text("Optional. Syncs a provider with your Ant Streams account and unlocks the HTTPS gateway.")
+                Text("Optional. Syncs provider settings with your Ant Streams account. Provider playback always connects directly to your provider.")
                     .foregroundStyle(TVTheme.muted)
 
                 TextField("Email", text: $email)
@@ -94,9 +94,11 @@ struct TVLoginView: View {
 // First launch, when no provider is saved and nobody is signed in.
 // Focus lands on Server URL, matching Settings.
 struct TVProviderSetupView: View {
+    private enum SetupField: Hashable { case server, username, password, reveal, name, start, sync }
+
     @EnvironmentObject private var model: AppModel
     @Namespace private var setupFocus
-    @FocusState private var serverFocused: Bool
+    @FocusState private var focusedField: SetupField?
     @State private var visiblePassword = false
     @State private var showAccount = false
 
@@ -117,31 +119,48 @@ struct TVProviderSetupView: View {
                         Text("Enter your IPTV provider. No Ant Streams account is required.")
                             .foregroundStyle(TVTheme.muted)
                         TextField("Server URL", text: $model.provider.server)
-                            .focused($serverFocused)
+                            .focused($focusedField, equals: .server)
                             .prefersDefaultFocus(in: setupFocus)
+                            .textInputAutocapitalization(.never)
+                            .submitLabel(.next)
+                            .onSubmit { focusedField = .username }
                         TextField("Username", text: $model.provider.username)
+                            .focused($focusedField, equals: .username)
+                            .textInputAutocapitalization(.never)
+                            .submitLabel(.next)
+                            .onSubmit { focusedField = .password }
                         HStack {
                             Group {
                                 if visiblePassword { TextField("Provider password", text: $model.provider.password) }
                                 else { SecureField("Provider password", text: $model.provider.password) }
                             }
-                            Button { visiblePassword.toggle() } label: {
+                            .focused($focusedField, equals: .password)
+                            .textInputAutocapitalization(.never)
+                            .submitLabel(.next)
+                            .onSubmit { focusedField = .name }
+                            Button { visiblePassword.toggle(); focusedField = .password } label: {
                                 Image(systemName: visiblePassword ? "eye.slash" : "eye")
                             }
+                            .focused($focusedField, equals: .reveal)
                             .accessibilityLabel("Show or hide provider password")
                         }
                         TextField("Name (optional)", text: $model.providerName)
+                            .focused($focusedField, equals: .name)
+                            .submitLabel(.next)
+                            .onSubmit { focusedField = .start }
                         Button("Start watching") { Task { await model.saveSettings() } }
+                            .focused($focusedField, equals: .start)
                             .buttonStyle(.card)
                             .tint(.white)
                             .disabled(model.busy || model.provider.server.isEmpty || model.provider.username.isEmpty || model.provider.password.isEmpty)
                         Button("Sign in to sync") { showAccount = true }
+                            .focused($focusedField, equals: .sync)
                             .buttonStyle(.card)
                         if model.busy { ProgressView() }
                         if !model.notice.isEmpty {
                             Text(model.notice).font(.callout).foregroundStyle(TVTheme.muted)
                         }
-                        Text("The provider login is saved in this device's Keychain only. Direct providers play immediately. The HTTPS gateway is in Settings and needs an Ant Streams sign-in.")
+                        Text("The provider login is saved in this device's Keychain only. Playback connects directly to the provider server. No Ant Streams account or gateway is required.")
                             .font(.footnote)
                             .foregroundStyle(TVTheme.muted)
                     }
@@ -149,13 +168,13 @@ struct TVProviderSetupView: View {
                     .padding(60)
                 }
                 .focusScope(setupFocus)
-                .defaultFocus($serverFocused, true)
+                .defaultFocus($focusedField, .server)
             }
         }
         .background { StreamBackdrop() }
-        .onAppear { serverFocused = true }
+        .onAppear { focusedField = .server }
         .onChange(of: showAccount) { _, showing in
-            if !showing { serverFocused = true }
+            if !showing { focusedField = .server }
         }
     }
 }
@@ -164,6 +183,8 @@ struct TVProviderSetupView: View {
 // session is active, in which case Save still writes the encrypted vault.
 // Right from the nav rail lands on Server URL.
 struct TVSettingsView: View {
+    private enum ProviderField: Hashable { case username, password, reveal, name, gateway, save, reload }
+
     @EnvironmentObject private var model: AppModel
     @AppStorage("rigatoni-appearance") private var appearance = "dark"
     @AppStorage("ant-library-mode") private var libraryModeRaw = LibraryMode.separate.rawValue
@@ -175,7 +196,7 @@ struct TVSettingsView: View {
     @AppStorage("ant-playback-engine") private var engine = "auto"
     @State private var providers = false
     @State private var customization = false
-    @FocusState private var entryFocused: Bool
+    @FocusState private var providerField: ProviderField?
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -198,33 +219,46 @@ struct TVSettingsView: View {
                 }.pickerStyle(.segmented)
                     }
                     settingsGroup(title: "Provider") {
-                        Text(model.provider.requiresGateway
-                             ? (model.signedIn ? "Playback route: HTTPS gateway" : "Playback route: HTTPS gateway — sign in required. Direct providers still play.")
-                             : "Playback route: direct provider")
+                        Text("Playback route: direct to your provider")
                             .font(.footnote).foregroundStyle(TVTheme.muted)
                         TVEntryControl(section: .settings) {
                             TextField("Server URL", text: $model.provider.server)
                                 .tvContentEntry()
                         }
                         TextField("Username", text: $model.provider.username)
+                            .focused($providerField, equals: .username)
+                            .textInputAutocapitalization(.never)
+                            .submitLabel(.next)
+                            .onSubmit { providerField = .password }
                         HStack {
                             Group {
                                 if visiblePassword { TextField("Provider password", text: $model.provider.password) }
                                 else { SecureField("Provider password", text: $model.provider.password) }
                             }
-                            Button { visiblePassword.toggle() } label: {
+                            .focused($providerField, equals: .password)
+                            .textInputAutocapitalization(.never)
+                            .submitLabel(.next)
+                            .onSubmit { providerField = .name }
+                            Button { visiblePassword.toggle(); providerField = .password } label: {
                                 Image(systemName: visiblePassword ? "eye.slash" : "eye")
                             }
+                            .focused($providerField, equals: .reveal)
                             .accessibilityLabel("Show or hide provider password")
                         }
                         TextField("Name (optional)", text: $model.providerName)
-                        TextField("HTTPS gateway URL (optional)", text: $model.gateway)
-                        Text(model.signedIn
-                             ? "Providers play directly when HTTPS or HTTP is available. Other playback can use your saved HTTPS gateway."
-                             : "Direct providers play without an account. The HTTPS gateway needs an Ant Streams sign-in and does not block a direct provider.")
+                            .focused($providerField, equals: .name)
+                            .submitLabel(.next)
+                            .onSubmit { providerField = .gateway }
+                        TextField("Legacy HTTPS gateway URL (optional; not used for playback)", text: $model.gateway)
+                            .focused($providerField, equals: .gateway)
+                            .textInputAutocapitalization(.never)
+                            .submitLabel(.next)
+                            .onSubmit { providerField = .save }
+                        Text("Provider requests and playback connect directly to the server above. A gateway or Ant Streams account is not required.")
                             .font(.footnote).foregroundStyle(TVTheme.muted)
                         HStack(spacing: 16) {
-                            Button("Save provider & gateway") { Task { await model.saveSettings() } }
+                            Button("Save provider settings") { Task { await model.saveSettings() } }
+                                .focused($providerField, equals: .save)
                                 .buttonStyle(.card).tint(.white).disabled(model.busy)
                             Button("Reload saved settings") {
                                 Task {
@@ -233,6 +267,7 @@ struct TVSettingsView: View {
                                     catch { model.notice = error.localizedDescription }
                                 }
                             }
+                            .focused($providerField, equals: .reload)
                             .buttonStyle(.card).disabled(model.busy)
                         }
                         Button("Add, edit or switch providers") { providers = true }.buttonStyle(TVCompactButtonStyle())
@@ -316,10 +351,10 @@ struct TVSettingsView: View {
 
                     settingsGroup(title: model.signedIn ? "Account" : "Sign in to sync") {
                         if model.signedIn {
-                            Text("Provider settings sync to your Ant Streams account. The HTTPS gateway uses this sign-in.")
+                            Text("Your Ant Streams account syncs provider settings. Playback still connects directly to your provider.")
                                 .font(.footnote).foregroundStyle(TVTheme.muted)
                         } else {
-                            Text("Optional. Sign in to copy this provider to your Ant Streams account and to use the HTTPS gateway. Direct providers work without an account.")
+                            Text("Optional. Sign in to sync provider settings across your Ant Streams account. This does not change the direct playback route.")
                                 .font(.footnote).foregroundStyle(TVTheme.muted)
                             NavigationLink("Sign in to sync") { TVLoginView() }
                                 .buttonStyle(.card)
@@ -369,10 +404,11 @@ struct TVSettingsView: View {
 }
 
 private struct TVAddProviderView: View {
+    private enum AddField: Hashable { case server, username, password, reveal, name, save }
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @Namespace private var addFocus
-    @FocusState private var serverFocused: Bool
+    @FocusState private var focusedField: AddField?
     @State private var name = ""
     @State private var server = ""
     @State private var username = ""
@@ -384,26 +420,42 @@ private struct TVAddProviderView: View {
             VStack(alignment: .leading, spacing: 20) {
                 Text("Add provider").font(.largeTitle.bold()).padding(.top, 40)
                 TextField("Server URL", text: $server)
-                    .focused($serverFocused)
+                    .focused($focusedField, equals: .server)
                     .prefersDefaultFocus(in: addFocus)
+                    .textInputAutocapitalization(.never)
+                    .submitLabel(.next)
+                    .onSubmit { focusedField = .username }
                 TextField("Username", text: $username)
+                    .focused($focusedField, equals: .username)
+                    .textInputAutocapitalization(.never)
+                    .submitLabel(.next)
+                    .onSubmit { focusedField = .password }
                 HStack {
                     Group {
                         if visiblePassword { TextField("Provider password", text: $password) }
                         else { SecureField("Provider password", text: $password) }
                     }
+                    .focused($focusedField, equals: .password)
+                    .textInputAutocapitalization(.never)
+                    .submitLabel(.next)
+                    .onSubmit { focusedField = .name }
                     Button { visiblePassword.toggle() } label: {
                         Image(systemName: visiblePassword ? "eye.slash" : "eye")
                     }
+                    .focused($focusedField, equals: .reveal)
                     .accessibilityLabel("Show or hide provider password")
                 }
                 TextField("Name (optional)", text: $name)
+                    .focused($focusedField, equals: .name)
+                    .submitLabel(.next)
+                    .onSubmit { focusedField = .save }
                 Button("Save provider") {
                     Task {
                         let saved = await model.addLocalProvider(name: name, provider: Provider(server: server, username: username, password: password), gateway: "")
                         if saved { password = ""; dismiss() }
                     }
                 }
+                .focused($focusedField, equals: .save)
                 .buttonStyle(.card).tint(.white)
                 .disabled(model.busy || server.isEmpty || username.isEmpty || password.isEmpty)
                 if !model.notice.isEmpty { Text(model.notice).foregroundStyle(TVTheme.muted) }
@@ -413,9 +465,9 @@ private struct TVAddProviderView: View {
             .padding(.bottom, 60)
         }
         .focusScope(addFocus)
-        .defaultFocus($serverFocused, true)
+        .defaultFocus($focusedField, .server)
         .background { StreamBackdrop() }
-        .onAppear { serverFocused = true }
+        .onAppear { focusedField = .server }
     }
 }
 

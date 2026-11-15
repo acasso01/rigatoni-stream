@@ -580,7 +580,7 @@ final class HomeShelfLoader: ObservableObject {
         catch { return [] }
         let allowed = model.preferences.presented(categories, section: .movies)
         var items: [CatalogItem] = []
-        if !model.provider.requiresGateway, let full = try? await model.catalog.items(kind: .movies, category: nil, model: model), !full.isEmpty {
+        if let full = try? await model.catalog.items(kind: .movies, category: nil, model: model), !full.isEmpty {
             items = full
         }
         if items.isEmpty {

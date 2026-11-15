@@ -49,6 +49,7 @@ struct TVRootView: View {
     @AppStorage("rigatoni-appearance") private var appearance = "dark"
     @State private var selection: TVSection = .home
     @FocusState private var focusedItem: TVSection?
+    @Namespace private var railFocus
     @Namespace private var contentFocus
     /// Not `@StateObject`: a request must not rebuild the rail.
     @State private var focusRouter = TVFocusRouter()
@@ -58,10 +59,6 @@ struct TVRootView: View {
     @State private var entryGrace = false
     @State private var entryToken = UUID()
     @State private var entryTask: Task<Void, Never>?
-    /// After a tab swap, ignore a focus reset onto the Home rail button.
-    @State private var restoringRail = false
-    @State private var restoreToken = UUID()
-    @State private var restoreTask: Task<Void, Never>?
 
     var body: some View {
         ZStack {
@@ -72,10 +69,9 @@ struct TVRootView: View {
                 } else if !model.needsProviderSetup {
                     HStack(spacing: 0) {
                         navRail
+                            .focusScope(railFocus)
+                            .prefersDefaultFocus(true, in: railFocus)
                             .focusSection()
-                            .onMoveCommand { direction in
-                                if direction == .right { enterContent() }
-                            }
                         content
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .focusSection()
@@ -87,27 +83,25 @@ struct TVRootView: View {
                                 if !entryGrace { returnToRail() }
                             }
                     }
+                    .onAppear {
+                        if focusedItem == nil { focusedItem = selection }
+                    }
                     .onChange(of: focusedItem) { _, item in
                         // Nil means focus left the rail for a content control.
                         // That must not select Home.
                         guard let item else { return }
                         if entryGrace { return }
                         if contentOwnsFocus {
-                            // Left (or a failed move) re-entered the rail.
-                            // Park on the open tab instead of whichever
-                            // button is geometrically nearest — often Home.
+                            // Left re-entered the rail. Keep the open tab
+                            // selected instead of accepting the geometrically
+                            // nearest button, which can be an unrelated tab.
                             contentOwnsFocus = false
                             focusRouter.cancel()
                             if item != selection { focusedItem = selection }
-                            return
                         }
-                        if restoringRail, item == .home, selection != .home {
-                            focusedItem = selection
-                            return
-                        }
-                        guard item != selection else { return }
-                        selection = item
-                        beginRestoreWindow()
+                        // Up/Down only move the rail highlight. The content
+                        // pane changes when the user selects the item or moves
+                        // right into it.
                     }
                     // Rebuild the whole tree on theme change so every
                     // TVTheme.xxx static resolves to the new theme.
@@ -157,6 +151,14 @@ struct TVRootView: View {
                 }
                 .buttonStyle(TVCompactButtonStyle())
                 .focused($focusedItem, equals: section)
+                .onMoveCommand { direction in
+                    switch direction {
+                    case .up: moveRailFocus(by: -1)
+                    case .down: moveRailFocus(by: 1)
+                    case .right: enterContent(section)
+                    default: break
+                    }
+                }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 4)
             }
@@ -168,19 +170,13 @@ struct TVRootView: View {
         .background(TVTheme.panel)
     }
 
-    /// Right (or a click) moves into the highlighted tab. The tab is already
-    /// selected by rail focus, so this does not swap the content view out
-    /// from under the focus engine, and it never falls back to Home when the
-    /// rail binding clears mid-move.
+    /// Right (or a click) opens the highlighted tab and moves focus into it.
+    /// Up/Down can browse the rail without replacing the current content.
     private func enterContent(_ preferred: TVSection? = nil) {
-        let highlighted = focusedItem ?? selection
-        // A content swap can dump focus onto the Home rail button for a
-        // frame. The committed tab is `selection` during that window.
-        let section = preferred ?? (restoringRail && highlighted == .home && selection != .home ? selection : highlighted)
+        let section = preferred ?? focusedItem ?? selection
         if selection != section { selection = section }
         contentOwnsFocus = true
         entryGrace = true
-        restoringRail = false
         let token = UUID()
         entryToken = token
         focusRouter.request(section)
@@ -202,22 +198,19 @@ struct TVRootView: View {
     private func returnToRail() {
         entryToken = UUID()
         entryGrace = false
-        restoringRail = false
         contentOwnsFocus = false
         focusRouter.cancel()
         focusedItem = selection
     }
 
-    private func beginRestoreWindow() {
-        restoringRail = true
-        restoreTask?.cancel()
-        let token = UUID()
-        restoreToken = token
-        restoreTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(200))
-            guard !Task.isCancelled, restoreToken == token else { return }
-            restoringRail = false
-        }
+    /// Keep vertical Siri Remote navigation inside the sidebar. The focus
+    /// engine otherwise lets a ScrollView in the content pane consume Up/Down.
+    private func moveRailFocus(by offset: Int) {
+        let sections = TVSection.allCases
+        let current = focusedItem ?? selection
+        guard let index = sections.firstIndex(of: current) else { return }
+        let next = min(max(index + offset, 0), sections.count - 1)
+        focusedItem = sections[next]
     }
 
     // MARK: - Content

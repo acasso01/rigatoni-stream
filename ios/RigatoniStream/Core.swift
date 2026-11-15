@@ -29,10 +29,10 @@ struct Provider: Codable, Equatable {
     var name = ""
     var kind: ProviderKind = .xtream
     var epgURL = ""
-    var requiresGateway: Bool {
-        guard let url = try? baseURL() else { return false }
-        return usesHTTP && !TransportPolicy.permits(url)
-    }
+    /// Native playback and catalog requests always use the user's provider
+    /// directly. The HTTPS gateway is an optional account feature, never a
+    /// prerequisite for an HTTP provider.
+    var requiresGateway: Bool { false }
     var usesHTTP: Bool { (try? baseURL().scheme?.lowercased()) == "http" }
     func baseURL() throws -> URL {
         let url = try Self.validURL(server)
@@ -511,7 +511,7 @@ final class AccountAPI {
                 activateDeviceProvider()
             }
             resetGateway(); libraryRevision += 1
-            if vaultReady { notice = "Provider and gateway loaded from your account." }
+            if vaultReady { notice = "Provider settings loaded from your account." }
             else if providerReady { notice = "No provider in your account. Using the provider saved on this device." }
             else { notice = "Save your provider to start watching." }
             settingsVisible = !providerReady
@@ -534,7 +534,7 @@ final class AccountAPI {
                     applyLocal(record)
                 }
                 resetGateway(); libraryRevision += 1
-                notice = "Settings saved securely. No provider connection required."
+                notice = "Settings saved securely. Playback connects directly to your provider."
             } else {
                 let record = try LocalProvider.make(id: activeLocalID ?? UUID().uuidString, name: providerName, provider: provider, gateway: gateway)
                 try storeLocal(record, makeActive: true)
@@ -552,7 +552,7 @@ final class AccountAPI {
                 provider = Provider(); providerName = ""; gateway = ""
                 activeLocalID = nil
                 resetGateway(); libraryRevision += 1
-                notice = "Saved provider and gateway deleted."
+                notice = "Saved provider deleted."
             } else if let id = activeLocalID {
                 await removeLocalProvider(id)
             } else {
@@ -635,9 +635,7 @@ final class AccountAPI {
     }
 
     private func localSaveNotice(for provider: Provider) -> String {
-        provider.requiresGateway
-            ? "Provider saved on this device. \(GatewayAccess.signInMessage)"
-            : "Provider saved on this device. No account required."
+        "Provider saved on this device. No account required."
     }
 
     /// Device-local provider: the multi-profile vault wins when it has a
@@ -773,7 +771,7 @@ extension AppModel {
         guard account.session != nil else { throw AppFailure(GatewayAccess.signInMessage) }
         if let gatewayConnection { return gatewayConnection }
         if let gatewayConnectTask { return try await gatewayConnectTask.value }
-        guard let origin = URL(string: try AccountAPI.gatewayOrigin(gateway)), !gateway.isEmpty else { throw AppFailure("This HTTP provider needs your saved HTTPS gateway. Open settings and save the gateway URL.") }
+        guard let origin = URL(string: try AccountAPI.gatewayOrigin(gateway)), !gateway.isEmpty else { throw AppFailure("No gateway is configured. Direct provider playback does not require one.") }
         let next = Task { try await self.gatewayRequest(origin.appendingPathComponent("api/connect"), method: "POST") }
         gatewayConnectTask = next
         defer { gatewayConnectTask = nil }

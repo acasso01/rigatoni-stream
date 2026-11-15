@@ -190,7 +190,7 @@ struct TVPlayerView: View {
                                isLive: currentItem.kind == .live, startSeconds: startSeconds)
                     .ignoresSafeArea()
             } else {
-                Text(provider.requiresGateway ? GatewayAccess.signInMessage : "Invalid provider settings.")
+                Text("Could not open this provider stream. Check the provider address and try again.")
                     .foregroundStyle(.white)
                     .multilineTextAlignment(.center)
                     .padding()

@@ -100,7 +100,7 @@ enum EPGParser {
         else { waiters.removeFirst().resume() }
     }
     func programs(streamID: String, provider: Provider, scope: String, forceRefresh: Bool = false) async -> [EPGProgram] {
-        guard !scope.isEmpty, !provider.requiresGateway, streamID.allSatisfy(\.isNumber), !streamID.isEmpty else { return [] }
+        guard !scope.isEmpty, streamID.allSatisfy(\.isNumber), !streamID.isEmpty else { return [] }
         if known.count < limit { known.insert(streamID) }
         let key = scope + ":" + streamID
         if !forceRefresh, let entry = entries[key], Date().timeIntervalSince(entry.fetched) < 300 { return entry.programs }
@@ -134,7 +134,7 @@ enum EPGParser {
         EPGParser.nowNext(await programs(streamID: streamID, provider: provider, scope: scope))
     }
     func refresh(model: AppModel, channels: [CatalogItem]) async {
-        guard !refreshing, model.providerReady, !model.provider.requiresGateway,
+        guard !refreshing, model.providerReady,
               let scope = model.preferenceKey else { return }
         refreshing = true; refreshError = ""
         defer { refreshing = false }
@@ -196,8 +196,7 @@ struct EPGRefreshControl: View {
         VStack(alignment: .leading, spacing: 8) {
             Button { Task { await cache.refresh(model: model, channels: channels) } } label: {
                 Label(cache.refreshing ? "Refreshing guide…" : "Refresh EPG", systemImage: "arrow.clockwise")
-            }.disabled(cache.refreshing || !model.providerReady || model.provider.requiresGateway)
-            if model.provider.requiresGateway { Text("Guide refresh requires a direct provider.").font(.caption) }
+            }.disabled(cache.refreshing || !model.providerReady)
             if let date = cache.lastRefresh {
                 Text("Last successful refresh: \(date.formatted(date: .abbreviated, time: .shortened))").font(.caption)
             } else { Text("Guide has not been manually refreshed.").font(.caption) }

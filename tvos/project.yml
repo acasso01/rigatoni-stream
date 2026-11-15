@@ -35,8 +35,6 @@ targets:
     info:
       path: Generated/Info.plist
       properties:
-        NSAppTransportSecurity:
-          NSAllowsArbitraryLoads: true
         CFBundleDisplayName: Ant Streams
         # IPTV provider hosts are entered by users; direct HTTP is supported.
         NSAppTransportSecurity:
@@ -52,7 +50,7 @@ targets:
         INFOPLIST_KEY_NSHumanReadableCopyright: 'Ant Streams; VLCKit licensed under LGPL 2.1'
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         MARKETING_VERSION: '0.2.3'
-        CURRENT_PROJECT_VERSION: '5'
+        CURRENT_PROJECT_VERSION: '6'
   RigatoniStreamTVTests:
     type: bundle.unit-test
     platform: tvOS
