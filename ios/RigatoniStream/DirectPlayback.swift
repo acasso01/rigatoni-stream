@@ -46,8 +46,9 @@ enum PlaybackRouting {
         failed = false; notice = ""; stalledSince = Date()
         observation = nil
         if let failureObserver { NotificationCenter.default.removeObserver(failureObserver) }
-        let headers = ["User-Agent": ProviderHTTP.userAgent]
-        let asset = AVURLAsset(url: url, options: [AVURLAssetHTTPHeaderFieldsKey: headers])
+        // AVURLAssetHTTPHeaderFieldsKey is not in the current SDK. The user-agent
+        // key is a String so HLS and MP4 requests use the same player agent.
+        let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPUserAgentKey": ProviderHTTP.userAgent])
         let item = AVPlayerItem(asset: asset)
         observation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             Task { @MainActor in
