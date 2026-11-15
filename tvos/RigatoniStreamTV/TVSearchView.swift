@@ -11,6 +11,8 @@ struct TVSearchView: View {
     @State private var playing: CatalogItem?
     @State private var seriesStore: SeriesStore?
     @State private var allSeries: [SeriesItem] = []
+    @State private var seriesLoading = false
+    @State private var seriesNotice = ""
     @State private var limit = 60
     @State private var retry = 0
     // Detail screens push on a NavigationStack so the player's cover is a
@@ -22,7 +24,12 @@ struct TVSearchView: View {
     // The search field mounts synchronously, so focusing it on appear is
     // deterministic. Selecting it opens the tvOS keyboard.
     @FocusState private var fieldFocused: Bool
-    private var hasQuery: Bool { query.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 }
+    private var normalizedQuery: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var hasQuery: Bool { normalizedQuery.count >= 2 }
+    private var seriesMatches: [SeriesItem] {
+        guard !normalizedQuery.isEmpty else { return [] }
+        return allSeries.filter { $0.name.localizedStandardContains(normalizedQuery) }
+    }
 
     var body: some View {
         NavigationStack {
@@ -54,6 +61,18 @@ struct TVSearchView: View {
                     }
                     ForEach(notices, id: \.self) { Text($0).font(.callout).foregroundStyle(.secondary) }
                     if !notices.isEmpty { Button("Retry unavailable catalogs") { retry += 1 } }
+                    if filter == "all" || filter == "series" {
+                        if seriesLoading { ProgressView("Loading TV shows…") }
+                        if !seriesNotice.isEmpty {
+                            Text("TV show search: \(seriesNotice)")
+                                .font(.callout).foregroundStyle(.secondary)
+                            Button("Retry TV show search") { retry += 1 }
+                        }
+                        if filter == "series", !seriesLoading, seriesNotice.isEmpty, seriesMatches.isEmpty {
+                            Text("No TV shows match “\(normalizedQuery)”. Check the selected Xtream Codes provider and try again.")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 32)], alignment: .leading, spacing: 36) {
                         ForEach(Array(results.prefix(limit))) { hit in
                             Button { openResult(hit.item) } label: {
@@ -69,7 +88,6 @@ struct TVSearchView: View {
                     }.padding(.vertical, 20)
                     if results.count > limit { Button("More results") { limit += 60 } }
                     if filter == "all" || filter == "series" {
-                        let seriesMatches = allSeries.filter { $0.name.localizedCaseInsensitiveContains(query) }
                         if !seriesMatches.isEmpty {
                             Text("TV Shows").font(.title2.bold()).padding(.top, 12)
                             LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 32)], alignment: .leading, spacing: 36) {
@@ -88,7 +106,7 @@ struct TVSearchView: View {
                             }.padding(.vertical, 20)
                         }
                     }
-                    if catalog.progress.isEmpty && results.isEmpty {
+                    if filter != "series", catalog.progress.isEmpty, results.isEmpty, seriesMatches.isEmpty, !seriesLoading {
                         Text("No matching titles in the loaded catalogs.").foregroundStyle(.secondary)
                     }
                 }
@@ -125,7 +143,7 @@ struct TVSearchView: View {
             guard hasQuery else { results = []; return }
             do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
             let snapshot = LibraryKind.allCases.flatMap { catalog.searchable[$0] ?? [] }.filter(model.preferences.visible)
-            let term = query; let choice = filter
+            let term = normalizedQuery; let choice = filter
             let worker = Task.detached(priority: .userInitiated) { UnifiedSearch.matches(snapshot, query: term, filter: choice) }
             let found = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
             guard !Task.isCancelled else { return }; results = found
@@ -143,9 +161,13 @@ struct TVSearchView: View {
     private func loadSeries() async {
         if seriesStore == nil { seriesStore = SeriesStore(model: model) }
         guard let store = seriesStore else { return }
+        seriesLoading = true
+        seriesNotice = ""
+        defer { seriesLoading = false }
         let items = await store.loadAllSeries()
         guard !Task.isCancelled else { return }
         allSeries = items
+        seriesNotice = store.error
     }
 
     private func openResult(_ item: CatalogItem) {

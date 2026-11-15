@@ -218,6 +218,10 @@ struct TVRootView: View {
     /// assignment is repeated on the next turn so it wins that search.
     /// Right still calls enterContent, which opens the highlighted tab.
     private func moveRailFocus(by offset: Int) {
+        // A held/repeated remote command can arrive before the previous
+        // focus correction settles. Ignore that duplicate instead of
+        // advancing the rail twice for one press.
+        guard !correctingRail else { return }
         railGeneration += 1
         let generation = railGeneration
         let sections = TVSection.allCases
@@ -229,7 +233,7 @@ struct TVRootView: View {
         Task { @MainActor in
             guard generation == railGeneration else { return }
             focusedItem = next
-            try? await Task.sleep(for: .milliseconds(50))
+            try? await Task.sleep(for: .milliseconds(140))
             guard generation == railGeneration else { return }
             focusedItem = next
             correctingRail = false

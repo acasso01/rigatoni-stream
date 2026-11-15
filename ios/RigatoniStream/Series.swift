@@ -159,33 +159,58 @@ final class SeriesStore: ObservableObject {
     /// Loads every series for search: one full-catalog request when the
     /// provider supports it, otherwise per-category. Deduped by series id.
     func loadAllSeries() async -> [SeriesItem] {
-        guard unavailableReason == nil else { return [] }
+        error = ""
+        if let unavailableReason {
+            error = unavailableReason
+            return []
+        }
         if model.libraryMode == .combined {
             var seen = Set<String>()
             var all: [SeriesItem] = []
+            var lastError: Error?
             for profile in model.combinedProfiles.filter({ $0.provider.kind == .xtream }) {
                 do { try Task.checkCancellation() } catch { break }
-                let rows = (try? await fetchJSON(action: "get_series", provider: profile.provider) as? [[String: Any]]) ?? []
-                for item in Self.parseSeries(rows, providerID: profile.id) where seen.insert(item.scopedID).inserted {
-                    all.append(item)
+                do {
+                    guard let rows = try await fetchJSON(action: "get_series", provider: profile.provider) as? [[String: Any]] else {
+                        throw AppFailure("The provider returned an invalid TV show list.")
+                    }
+                    for item in Self.parseSeries(rows, providerID: profile.id) where seen.insert(item.scopedID).inserted {
+                        all.append(item)
+                    }
+                } catch {
+                    lastError = error
                 }
             }
+            if all.isEmpty, let lastError { error = lastError.localizedDescription }
             return all
         }
-        if let rows = try? await fetchJSON(action: "get_series") as? [[String: Any]], !rows.isEmpty {
-            return Self.parseSeries(rows)
+        do {
+            if let rows = try await fetchJSON(action: "get_series") as? [[String: Any]], !rows.isEmpty {
+                return Self.parseSeries(rows)
+            }
+        } catch {
+            // Some providers reject an unscoped series request; use their
+            // categories below and report an error only if that fallback fails.
         }
         await loadCategories()
         guard error.isEmpty else { return [] }
         var seen = Set<String>()
         var all: [SeriesItem] = []
+        var lastError: Error?
         for category in categories {
             do { try Task.checkCancellation() } catch { break }
-            guard let rows = try? await fetchJSON(action: "get_series", extra: ["category_id": category.id]) as? [[String: Any]] else { continue }
-            for item in Self.parseSeries(rows) where seen.insert(item.id).inserted {
-                all.append(item)
+            do {
+                guard let rows = try await fetchJSON(action: "get_series", extra: ["category_id": category.id]) as? [[String: Any]] else {
+                    throw AppFailure("The provider returned an invalid TV show list.")
+                }
+                for item in Self.parseSeries(rows) where seen.insert(item.id).inserted {
+                    all.append(item)
+                }
+            } catch {
+                lastError = error
             }
         }
+        if all.isEmpty, let lastError { error = lastError.localizedDescription }
         return all
     }
 
