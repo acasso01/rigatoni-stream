@@ -21,7 +21,10 @@ enum PlaybackRouting {
     private var stalledSince: Date?
     private var resume = 0.0
     private(set) var seconds = 0.0
+    private(set) var lastError = ""
     var record: ((Double, Double) -> Void)?
+    private let fixtureLoader = FixtureAssetLoader()
+    private let fixtureQueue = DispatchQueue(label: "ant-streams-fixture-asset")
     func open(_ url: URL, live: Bool, start: Double) {
         stop(); self.url = url; self.live = live; resume = start; seconds = start; retries = 0
         #if os(iOS)
@@ -45,7 +48,12 @@ enum PlaybackRouting {
         failed = false; notice = ""; stalledSince = Date()
         observation = nil
         if let failureObserver { NotificationCenter.default.removeObserver(failureObserver) }
-        let item = AVPlayerItem(url: url)
+        let item: AVPlayerItem
+        if let asset = Self.fixtureAsset(for: url, loader: fixtureLoader, queue: fixtureQueue) {
+            item = AVPlayerItem(asset: asset)
+        } else {
+            item = AVPlayerItem(url: url)
+        }
         observation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             Task { @MainActor in
                 guard let self, self.player.currentItem === item else { return }
@@ -69,7 +77,9 @@ enum PlaybackRouting {
     private func fail() {
         guard !failed else { return }
         if live, retries < 2 { retries += 1; load(); return }
-        failed = true; notice = "The Apple player could not play this stream. Try VLC compatibility playback."
+        failed = true
+        lastError = player.currentItem?.error?.localizedDescription ?? ""
+        notice = "The Apple player could not play this stream. Try VLC compatibility playback."
         player.pause()
     }
     private func checkStall() {
@@ -85,6 +95,74 @@ enum PlaybackRouting {
         observation = nil; watchdog?.invalidate(); watchdog = nil
         if let failureObserver { NotificationCenter.default.removeObserver(failureObserver) }; failureObserver = nil
         player.replaceCurrentItem(with: nil)
+    }
+
+    /// AVPlayer does not use the simulator roots that URLSession trusts.
+    /// The local fixture is loaded through URLSession only when CI or a
+    /// local fixture run sets ANT_REQUIRE_FIXTURES.
+    private static func fixtureAsset(for url: URL, loader: FixtureAssetLoader, queue: DispatchQueue) -> AVURLAsset? {
+        guard ProcessInfo.processInfo.environment["ANT_REQUIRE_FIXTURES"] == "1",
+              let host = url.host?.lowercased(),
+              host == "localhost" || host == "127.0.0.1" || host == "::1",
+              var parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let scheme = parts.scheme?.lowercased(),
+              scheme == "https" else { return nil }
+        parts.scheme = "fixture-" + scheme
+        guard let rewritten = parts.url else { return nil }
+        let asset = AVURLAsset(url: rewritten)
+        asset.resourceLoader.setDelegate(loader, queue: queue)
+        return asset
+    }
+}
+
+/// Serves a localhost fixture URL to AVPlayer using URLSession, which trusts
+/// the simulator's installed test CA.
+final class FixtureAssetLoader: NSObject, AVAssetResourceLoaderDelegate, @unchecked Sendable {
+    private let session: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 20
+        return URLSession(configuration: config)
+    }()
+
+    func resourceLoader(_ resourceLoader: AVAssetResourceLoader, shouldWaitForLoadingOfRequestedResource loadingRequest: AVAssetResourceLoadingRequest) -> Bool {
+        guard let original = loadingRequest.request.url,
+              var parts = URLComponents(url: original, resolvingAgainstBaseURL: false),
+              let scheme = parts.scheme, scheme.hasPrefix("fixture-") else { return false }
+        parts.scheme = String(scheme.dropFirst("fixture-".count))
+        guard let url = parts.url else { return false }
+        var request = URLRequest(url: url)
+        if let data = loadingRequest.dataRequest, data.requestedOffset > 0 || !data.requestsAllDataToEndOfResource {
+            let end = data.requestsAllDataToEndOfResource ? "" : String(data.requestedOffset + Int64(data.requestedLength) - 1)
+            request.setValue("bytes=\(data.requestedOffset)-\(end)", forHTTPHeaderField: "Range")
+        }
+        session.dataTask(with: request) { data, response, error in
+            if let error { loadingRequest.finishLoading(with: error); return }
+            guard let data, let http = response as? HTTPURLResponse else {
+                loadingRequest.finishLoading(with: URLError(.badServerResponse)); return
+            }
+            if let info = loadingRequest.contentInformationRequest {
+                info.isByteRangeAccessSupported = true
+                info.contentType = Self.uti(for: url)
+                if let total = http.value(forHTTPHeaderField: "Content-Range")?.split(separator: "/").last, let length = Int64(total) {
+                    info.contentLength = length
+                } else if http.expectedContentLength > 0 {
+                    info.contentLength = http.expectedContentLength
+                } else {
+                    info.contentLength = Int64(data.count)
+                }
+            }
+            loadingRequest.dataRequest?.respond(with: data)
+            loadingRequest.finishLoading()
+        }.resume()
+        return true
+    }
+
+    private static func uti(for url: URL) -> String {
+        switch url.pathExtension.lowercased() {
+        case "m3u8": return "public.m3u-playlist"
+        case "ts": return "public.mpeg-2-transport-stream"
+        default: return "public.mpeg-4"
+        }
     }
 }
 

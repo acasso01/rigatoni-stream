@@ -60,8 +60,8 @@ final class DirectConnectionTests: XCTestCase {
             while Date() < deadline && !player.failed && player.player.currentTime().seconds < 2 {
                 try await Task.sleep(for: .milliseconds(200))
             }
-            XCTAssertFalse(player.failed)
-            XCTAssertGreaterThan(player.player.currentTime().seconds, 1)
+            XCTAssertFalse(player.failed, "\(address) \(player.lastError)")
+            XCTAssertGreaterThan(player.player.currentTime().seconds, 1, address)
             XCTAssertGreaterThan(player.player.currentItem?.presentationSize.width ?? 0, 0)
             player.stop()
         }
