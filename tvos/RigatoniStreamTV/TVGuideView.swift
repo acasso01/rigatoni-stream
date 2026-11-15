@@ -20,6 +20,9 @@ struct TVGuideView: View {
     @State private var nowTick = Date()
     @State private var playing: CatalogItem?
     @FocusState private var catFocus: String?
+    @FocusState private var channelFocus: String?
+    @Namespace private var channelColumn
+    @Environment(\.tvRailAction) private var railAction
     @State private var epgReload = 0
     @State private var epgReloading = false
     @StateObject private var previewPlayer = TVPreviewPlayer()
@@ -152,14 +155,19 @@ struct TVGuideView: View {
                                 .font(.system(size: 24))
                                 .padding(48)
                         } else {
+                            let pageItems = Array(ordered.dropFirst(page * pageSize).prefix(pageSize))
                             ScrollView {
                                 LazyVStack(spacing: 12) {
-                                    ForEach(Array(ordered.dropFirst(page * pageSize).prefix(pageSize)), id: \.scopedID) { channel in
+                                    ForEach(Array(pageItems.enumerated()), id: \.element.scopedID) { index, channel in
                                         TVGuideRow(channel: channel,
                                                   refreshToken: epgReload,
                                                   isPinned: pinned.contains(channel.scopedID),
                                                   togglePin: { togglePin(channel.scopedID) },
-                                                  onHover: { focused in updatePreview(channel, focused: focused) }) { playChannel(channel) }
+                                                  onHover: { focused in updatePreview(channel, focused: focused) },
+                                                  channelFocus: $channelFocus,
+                                                  neighborUp: index > 0 ? pageItems[index - 1].scopedID : nil,
+                                                  neighborDown: index + 1 < pageItems.count ? pageItems[index + 1].scopedID : nil,
+                                                  onLeaveLeft: { catFocus = "cat-\(selectedCategory)" }) { playChannel(channel) }
                                     }
                                 }
                                 .padding(.vertical, 12)
@@ -179,6 +187,8 @@ struct TVGuideView: View {
                         }
                     }
                     .frame(maxWidth: .infinity)
+                    .focusSection()
+                    .focusScope(channelColumn)
                 }
                 .padding(.horizontal, 40)
                 .frame(maxHeight: .infinity)
@@ -270,16 +280,19 @@ struct TVGuideView: View {
     // MARK: - Category list (vertical, scrolls down like the concept)
 
     private func categoryList(_ store: TVLibraryStore) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let ids = ["all"] + orderedCats(model.preferences.browseCategories(store.categories, section: .live)).map(\.id)
+        return VStack(alignment: .leading, spacing: 12) {
             Text("Categories")
                 .font(.system(size: 22, weight: .semibold))
                 .foregroundStyle(TVTheme.muted)
                 .padding(.horizontal, 4)
             ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: 12) {
-                    categoryRow(id: "all", name: "All")
-                    ForEach(orderedCats(model.preferences.browseCategories(store.categories, section: .live))) { category in
-                        categoryRow(id: category.id, name: category.name)
+                    ForEach(Array(ids.enumerated()), id: \.element) { index, id in
+                        let name = id == "all" ? "All" : (model.preferences.browseCategories(store.categories, section: .live).first { $0.id == id }?.name ?? "Category")
+                        categoryRow(id: id, name: name,
+                                    up: ids[max(0, index - 1)],
+                                    down: ids[min(ids.count - 1, index + 1)])
                     }
                 }
                 .padding(.vertical, 4)
@@ -296,7 +309,7 @@ struct TVGuideView: View {
         }
     }
 
-    private func categoryRow(id: String, name: String) -> some View {
+    private func categoryRow(id: String, name: String, up: String, down: String) -> some View {
         Button { selectedCategory = id } label: {
             HStack {
                 Text((id != "all" && pinnedCatIDs.contains(id) ? "★ " : "") + name)
@@ -309,6 +322,18 @@ struct TVGuideView: View {
         }
         .buttonStyle(TVCompactButtonStyle())
         .focused($catFocus, equals: "cat-\(id)")
+        .onMoveCommand { direction in
+            switch direction {
+            case .up: TVColumnFocus.keep($catFocus, "cat-\(up)")
+            case .down: TVColumnFocus.keep($catFocus, "cat-\(down)")
+            case .right:
+                if let first = ordered.dropFirst(page * pageSize).first {
+                    TVColumnFocus.keep($channelFocus, first.scopedID)
+                }
+            case .left: railAction.returnToRail()
+            default: break
+            }
+        }
         .background(selectedCategory == id ? AnyShapeStyle(TVTheme.accentFill) : AnyShapeStyle(TVTheme.card))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .foregroundStyle(selectedCategory == id ? TVTheme.onAccent : TVTheme.text)
@@ -345,6 +370,10 @@ private struct TVGuideRow: View {
     let isPinned: Bool
     let togglePin: () -> Void
     let onHover: (Bool) -> Void
+    var channelFocus: FocusState<String?>.Binding
+    var neighborUp: String?
+    var neighborDown: String?
+    var onLeaveLeft: () -> Void
     @FocusState private var focusedControl: String?
     let play: () -> Void
     @State private var programs: [EPGProgram] = []
@@ -362,14 +391,34 @@ private struct TVGuideRow: View {
             .buttonStyle(TVCompactButtonStyle())
             .accessibilityLabel(isPinned ? "Unpin channel" : "Pin channel")
             .focused($focusedControl, equals: "pin")
+            .onMoveCommand { direction in
+                switch direction {
+                case .up: if let neighborUp { TVColumnFocus.keep(channelFocus, neighborUp) }
+                case .down: if let neighborDown { TVColumnFocus.keep(channelFocus, neighborDown) }
+                case .right: TVColumnFocus.keep(channelFocus, channel.scopedID)
+                case .left: onLeaveLeft()
+                default: break
+                }
+            }
 
             Button(action: play) {
                 TVGuideRowLabel(channel: channel, nowNext: nowNext, loading: loading)
             }
             .buttonStyle(TVCompactButtonStyle())
-            .focused($focusedControl, equals: "play")
+            .focused(channelFocus, equals: channel.scopedID)
+            .onMoveCommand { direction in
+                switch direction {
+                case .up: if let neighborUp { TVColumnFocus.keep(channelFocus, neighborUp) }
+                case .down: if let neighborDown { TVColumnFocus.keep(channelFocus, neighborDown) }
+                case .left:
+                    channelFocus.wrappedValue = nil
+                    focusedControl = "pin"
+                default: break
+                }
+            }
         }
-        .onChange(of: focusedControl) { _, control in onHover(control != nil) }
+        .onChange(of: focusedControl) { _, control in onHover(control != nil || channelFocus.wrappedValue == channel.scopedID) }
+        .onChange(of: channelFocus.wrappedValue) { _, value in onHover(value == channel.scopedID || focusedControl != nil) }
         .onDisappear { onHover(false) }
         .task(id: "\(model.libraryRevision)-\(channel.scopedID)-\(refreshToken)") {
             programs = []; loading = true
@@ -514,7 +563,7 @@ extension TVGuideView {
 // debounced task; focus loss and fullscreen playback stop this player.
 @MainActor
 final class TVPreviewPlayer: ObservableObject {
-    let engine = VLCMediaPlayer(options: ["--quiet", "--no-video-title-show", "--no-audio"])
+    let engine = VLCMediaPlayer(options: ProviderHTTP.playerArguments(extra: ["--no-audio"]))
     @Published var playing = false
     @Published var failed = false
     private var timer: Timer?
@@ -526,7 +575,7 @@ final class TVPreviewPlayer: ObservableObject {
         playing = false
         engine.stop()
         guard let media = VLCMedia(url: url) else { failed = true; return }
-        media.addOptions(["network-caching": 1500])
+        media.addOptions(ProviderHTTP.mediaOptions(cache: 1500))
         engine.media = media
         engine.play()
         timer?.invalidate()

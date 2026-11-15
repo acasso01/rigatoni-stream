@@ -134,6 +134,7 @@ private struct TVMultiPane: View {
     @EnvironmentObject private var model: AppModel
     @StateObject private var player = TVNativePlayer()
     @Environment(\.isFocused) private var focused
+    @FocusState private var held: Bool
 
     private var url: URL? {
         guard let item else { return nil }
@@ -204,10 +205,22 @@ private struct TVMultiPane: View {
                         lineWidth: isActive ? 5 : 2)
         )
         .focusable()
+        .focused($held)
+        .focusSection()
         .onTapGesture { onSelect() }
         .onMoveCommand { direction in
-            if direction == .up { onStep(-1) }
-            else if direction == .down { onStep(1) }
+            switch direction {
+            case .up:
+                onStep(-1)
+                held = true
+                Task { @MainActor in held = true }
+            case .down:
+                onStep(1)
+                held = true
+                Task { @MainActor in held = true }
+            default:
+                break
+            }
         }
         .onPlayPauseCommand { player.toggle() }
         .contextMenu {

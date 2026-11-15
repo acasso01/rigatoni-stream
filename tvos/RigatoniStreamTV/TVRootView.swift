@@ -59,6 +59,9 @@ struct TVRootView: View {
     @State private var entryGrace = false
     @State private var entryToken = UUID()
     @State private var entryTask: Task<Void, Never>?
+    /// Up/Down must not be treated as "focus left the rail" while we put it back.
+    @State private var correctingRail = false
+    @State private var railGeneration = 0
 
     var body: some View {
         ZStack {
@@ -70,13 +73,13 @@ struct TVRootView: View {
                     HStack(spacing: 0) {
                         navRail
                             .focusScope(railFocus)
-                            .prefersDefaultFocus(true, in: railFocus)
                             .focusSection()
                         content
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .focusSection()
                             .focusScope(contentFocus)
                             .environment(\.tvContentFocusScope, contentFocus)
+                            .environment(\.tvRailAction, TVRailAction(returnToRail: { returnToRail() }))
                             .onExitCommand {
                                 // Menu while entry is still resolving is the
                                 // failed right-move, not a request to leave.
@@ -87,6 +90,10 @@ struct TVRootView: View {
                         if focusedItem == nil { focusedItem = selection }
                     }
                     .onChange(of: focusedItem) { _, item in
+                        // A vertical correction is putting focus back on the
+                        // next rail item. Nil here is the engine stepping
+                        // right, not the user entering the tab.
+                        if correctingRail { return }
                         // Nil means focus left the rail for a content control.
                         // That must not select Home.
                         guard let item else { return }
@@ -151,6 +158,7 @@ struct TVRootView: View {
                 }
                 .buttonStyle(TVCompactButtonStyle())
                 .focused($focusedItem, equals: section)
+                .prefersDefaultFocus(selected, in: railFocus)
                 .onMoveCommand { direction in
                     switch direction {
                     case .up: moveRailFocus(by: -1)
@@ -173,6 +181,8 @@ struct TVRootView: View {
     /// Right (or a click) opens the highlighted tab and moves focus into it.
     /// Up/Down can browse the rail without replacing the current content.
     private func enterContent(_ preferred: TVSection? = nil) {
+        railGeneration += 1
+        correctingRail = false
         let section = preferred ?? focusedItem ?? selection
         if selection != section { selection = section }
         contentOwnsFocus = true
@@ -204,13 +214,26 @@ struct TVRootView: View {
     }
 
     /// Keep vertical Siri Remote navigation inside the sidebar. The focus
-    /// engine otherwise lets a ScrollView in the content pane consume Up/Down.
+    /// engine otherwise treats the content pane as the Down target. The
+    /// assignment is repeated on the next turn so it wins that search.
+    /// Right still calls enterContent, which opens the highlighted tab.
     private func moveRailFocus(by offset: Int) {
+        railGeneration += 1
+        let generation = railGeneration
         let sections = TVSection.allCases
         let current = focusedItem ?? selection
         guard let index = sections.firstIndex(of: current) else { return }
-        let next = min(max(index + offset, 0), sections.count - 1)
-        focusedItem = sections[next]
+        let next = sections[min(max(index + offset, 0), sections.count - 1)]
+        correctingRail = true
+        focusedItem = next
+        Task { @MainActor in
+            guard generation == railGeneration else { return }
+            focusedItem = next
+            try? await Task.sleep(for: .milliseconds(50))
+            guard generation == railGeneration else { return }
+            focusedItem = next
+            correctingRail = false
+        }
     }
 
     // MARK: - Content

@@ -72,6 +72,14 @@ struct TVCompactButtonStyle: ButtonStyle {
     }
 }
 
+struct TVRailAction {
+    var returnToRail: () -> Void = {}
+}
+
+private struct TVRailActionKey: EnvironmentKey {
+    static let defaultValue = TVRailAction()
+}
+
 private struct TVContentFocusKey: EnvironmentKey {
     static let defaultValue: Namespace.ID? = nil
 }
@@ -79,6 +87,24 @@ extension EnvironmentValues {
     var tvContentFocusScope: Namespace.ID? {
         get { self[TVContentFocusKey.self] }
         set { self[TVContentFocusKey.self] = newValue }
+    }
+    var tvRailAction: TVRailAction {
+        get { self[TVRailActionKey.self] }
+        set { self[TVRailActionKey.self] = newValue }
+    }
+}
+
+/// The focus engine's geometric search treats a tall view on the right as the
+/// Down target. Re-apply the vertical target after that search runs.
+enum TVColumnFocus {
+    @MainActor
+    static func keep<ID: Hashable>(_ binding: FocusState<ID?>.Binding, _ next: ID) {
+        binding.wrappedValue = next
+        Task { @MainActor in
+            binding.wrappedValue = next
+            try? await Task.sleep(for: .milliseconds(50))
+            binding.wrappedValue = next
+        }
     }
 }
 private struct TVContentEntry: ViewModifier {

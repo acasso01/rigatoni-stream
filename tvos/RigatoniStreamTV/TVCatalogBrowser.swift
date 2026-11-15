@@ -18,6 +18,8 @@ struct TVCatalogBrowser: View {
     @State private var playing: CatalogItem?
     @State private var visibleCount = 60
     @FocusState private var focusedCard: String?
+    @FocusState private var categoryFocus: String?
+    @Environment(\.tvRailAction) private var railAction
     // Movies open their detail on the NavigationStack (single modal level
     // for the player's cover). Live channels play straight from the cover.
     @State private var detailItem: CatalogItem?
@@ -49,7 +51,10 @@ struct TVCatalogBrowser: View {
     @ViewBuilder
     private func content(_ store: TVLibraryStore) -> some View {
         HStack(alignment: .top, spacing: 24) {
-            categorySidebar(store).frame(width: kind == .live ? 420 : 285).frame(maxHeight: .infinity)
+            categorySidebar(store)
+                .frame(width: kind == .live ? 420 : 285)
+                .frame(maxHeight: .infinity)
+                .focusSection()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 26) {
                     Text(selectedName.isEmpty ? kind.title : selectedName).font(.title2.bold())
@@ -71,6 +76,7 @@ struct TVCatalogBrowser: View {
                     } else { itemGrid(store) }
                 }.padding(.vertical, 12).padding(.horizontal, 12)
             }
+            .focusSection()
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 12)
         .background { StreamBackdrop() }
@@ -120,26 +126,10 @@ struct TVCatalogBrowser: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: kind == .live ? 8 : 12) {
                     if kind == .movies {
-                        Button("All titles") { selectedCategory = "all" }.buttonStyle(.bordered)
+                        categoryButton(store, id: "all", title: "All titles", index: -1)
                     }
                     ForEach(Array(orderedCategories.enumerated()), id: \.element.id) { index, category in
-                        let row = Button { selectedCategory = category.id } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: pinnedIDs.contains(category.id) ? "pin.fill" : kind.symbol)
-                                    .foregroundStyle(.secondary)
-                                Text(category.name).font(.system(size: kind == .live ? 22 : 20, weight: .medium)).lineLimit(1)
-                                Spacer(minLength: 0)
-                                if selectedCategory == category.id { Image(systemName: "checkmark") }
-                            }.padding(.horizontal, 20).frame(maxWidth: .infinity, minHeight: kind == .live ? 68 : 60, alignment: .leading)
-                        }.buttonStyle(TVCatalogRowStyle(selected: selectedCategory == category.id))
-                        .contextMenu {
-                            if allowPins {
-                                Button(pinnedIDs.contains(category.id) ? "Unpin category" : "Pin category") {
-                                    pinnedIDs = CategoryPins.toggled(category.id, in: pinnedIDs)
-                                    if let key = store.pinKey { UserDefaults.standard.set(pinnedIDs, forKey: key) }
-                                }
-                            }
-                        }
+                        let row = categoryButton(store, id: category.id, title: category.name, index: index, pinned: pinnedIDs.contains(category.id))
                         if kind == .live && index == 0 {
                             TVEntryControl(section: .live) { row }
                         } else {
@@ -158,6 +148,43 @@ struct TVCatalogBrowser: View {
         }
         .frame(maxHeight: .infinity, alignment: .topLeading)
         .background(TVTheme.panel, in: RoundedRectangle(cornerRadius: 18))
+    }
+
+    private func categoryButton(_ store: TVLibraryStore, id: String, title: String, index: Int, pinned: Bool = false) -> some View {
+        let ids = orderedCategories.map(\.id)
+        let above = index <= 0 ? (kind == .movies ? "all" : id) : ids[index - 1]
+        let below = index + 1 < ids.count ? ids[index + 1] : id
+        return Button { selectedCategory = id } label: {
+            HStack(spacing: 12) {
+                if id != "all" {
+                    Image(systemName: pinned ? "pin.fill" : kind.symbol)
+                        .foregroundStyle(.secondary)
+                }
+                Text(title).font(.system(size: kind == .live ? 22 : 20, weight: .medium)).lineLimit(1)
+                Spacer(minLength: 0)
+                if selectedCategory == id { Image(systemName: "checkmark") }
+            }.padding(.horizontal, 20).frame(maxWidth: .infinity, minHeight: kind == .live ? 68 : 60, alignment: .leading)
+        }
+        .buttonStyle(TVCatalogRowStyle(selected: selectedCategory == id))
+        .focused($categoryFocus, equals: id)
+        .onMoveCommand { direction in
+            switch direction {
+            case .up: TVColumnFocus.keep($categoryFocus, above)
+            case .down: TVColumnFocus.keep($categoryFocus, below)
+            case .right:
+                if let first = store.items.first { TVColumnFocus.keep($focusedCard, first.id) }
+            case .left: railAction.returnToRail()
+            default: break
+            }
+        }
+        .contextMenu {
+            if allowPins && id != "all" {
+                Button(pinned ? "Unpin category" : "Pin category") {
+                    pinnedIDs = CategoryPins.toggled(id, in: pinnedIDs)
+                    if let key = store.pinKey { UserDefaults.standard.set(pinnedIDs, forKey: key) }
+                }
+            }
+        }
     }
 
     @ViewBuilder
