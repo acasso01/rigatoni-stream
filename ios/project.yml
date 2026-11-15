@@ -27,11 +27,14 @@ targets:
         SWIFT_OBJC_BRIDGING_HEADER: RigatoniStream/RigatoniStream-Bridging-Header.h
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         MARKETING_VERSION: '0.2.3'
-        CURRENT_PROJECT_VERSION: '6'
+        CURRENT_PROJECT_VERSION: '7'
     info:
       path: Generated/Info.plist
       properties:
         # User-entered HTTP IPTV provider hostnames are not known at build time.
+        # Keep this as the only ATS key. NSAllowsArbitraryLoadsForMedia or
+        # NSExceptionDomains would make NSAllowsArbitraryLoads ignored and
+        # block player_api.php again.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
         UIBackgroundModes: [audio]

@@ -45,7 +45,9 @@ enum PlaybackRouting {
         failed = false; notice = ""; stalledSince = Date()
         observation = nil
         if let failureObserver { NotificationCenter.default.removeObserver(failureObserver) }
-        let item = AVPlayerItem(url: url)
+        let headers = ["User-Agent": ProviderHTTP.userAgent]
+        let asset = AVURLAsset(url: url, options: [AVURLAssetHTTPHeaderFieldsKey: headers])
+        let item = AVPlayerItem(asset: asset)
         observation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             Task { @MainActor in
                 guard let self, self.player.currentItem === item else { return }
@@ -69,7 +71,8 @@ enum PlaybackRouting {
     private func fail() {
         guard !failed else { return }
         if live, retries < 2 { retries += 1; load(); return }
-        failed = true; notice = "The Apple player could not play this stream. Try VLC compatibility playback."
+        let host = url.map(ProviderHTTP.endpoint) ?? "the provider"
+        failed = true; notice = "The Apple player could not play this stream from \(host). Try VLC compatibility playback."
         player.pause()
     }
     private func checkStall() {

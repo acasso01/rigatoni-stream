@@ -8,7 +8,7 @@ import VLCKit
 // commands, no AVAudioSession tweaks — tvOS manages audio focus itself.
 @MainActor
 final class TVNativePlayer: ObservableObject {
-    let engine = VLCMediaPlayer(options: ["--quiet", "--no-video-title-show"])
+    let engine = VLCMediaPlayer(options: ProviderHTTP.playerArguments())
     @Published var state = "Connecting…"
     @Published var playing = false
     @Published var seekable = false
@@ -41,10 +41,10 @@ final class TVNativePlayer: ObservableObject {
         playing = false; seekable = false; position = 0; elapsed = "0:00"
         resolution = ""; state = "Connecting…"
         guard let media = VLCMedia(url: url) else {
-            state = "The stream URL could not be opened."
+            state = "The stream URL could not be opened on \(ProviderHTTP.endpoint(url))."
             return
         }
-        media.addOptions(["network-caching": cache])
+        media.addOptions(ProviderHTTP.mediaOptions(cache: cache))
         engine.media = media; openedAt = Date(); engine.play()
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
@@ -73,7 +73,9 @@ final class TVNativePlayer: ObservableObject {
         switch engine.state {
         case .playing: state = "Playing"
         case .paused: state = "Paused"
-        case .error: state = "The stream could not play. Try another title or check the provider connection."
+        case .error:
+            let host = self.url.map(ProviderHTTP.endpoint) ?? "the provider"
+            state = "The stream could not play from \(host). Ant Streams opened that host directly; no gateway was used."
         case .stopped: state = "Playback stopped"
         default: state = Date().timeIntervalSince(openedAt) > 30
             ? "Still waiting for video. Retry or try another title." : "Connecting…"

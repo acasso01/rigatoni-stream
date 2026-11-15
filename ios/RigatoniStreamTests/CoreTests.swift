@@ -329,11 +329,58 @@ final class CoreTests: XCTestCase {
     func testConfiguredProvidersBypassGatewayInActualBuild() throws {
         let settings = Bundle.main.object(forInfoDictionaryKey: "NSAppTransportSecurity") as? [String: Any]
         XCTAssertEqual(settings?["NSAllowsArbitraryLoads"] as? Bool, true, "The built Info.plist must permit user-configured HTTP IPTV hosts.")
+        // These keys make NSAllowsArbitraryLoads ignored for player_api.php on iOS 10+.
+        XCTAssertNil(settings?["NSAllowsArbitraryLoadsForMedia"])
+        XCTAssertNil(settings?["NSAllowsArbitraryLoadsInWebContent"])
+        XCTAssertNil(settings?["NSExceptionDomains"])
         for host in ["provider.example.invalid", "another.example.invalid"] {
             let provider = Provider(server: "http://\(host)", username: "dummy", password: "dummy")
             XCTAssertTrue(provider.usesHTTP)
             XCTAssertFalse(provider.requiresGateway)
         }
+    }
+
+    func testDirectHTTPKeepsSchemePortAndPlayerUserAgent() throws {
+        let bare = try Provider.validURL("provider.example.invalid:25461")
+        XCTAssertEqual(bare.scheme, "http")
+        XCTAssertEqual(bare.port, 25461)
+        let saved = try LocalProvider.make(
+            id: "panel", name: "Panel",
+            provider: Provider(server: "http://provider.example.invalid:25461/", username: "dummy-user", password: "dummy-provider-password"),
+            gateway: ""
+        )
+        XCTAssertEqual(saved.server, "http://provider.example.invalid:25461")
+        let provider = Provider(server: saved.server, username: saved.username, password: saved.password)
+        let api = try provider.apiURL(action: "get_live_categories")
+        XCTAssertEqual(api.scheme, "http")
+        XCTAssertEqual(api.host, "provider.example.invalid")
+        XCTAssertEqual(api.port, 25461)
+        let stream = try provider.streamURL(item: CatalogItem(id: "9", name: "News", kind: .live, fileExtension: "ts", poster: nil))
+        XCTAssertEqual(stream.scheme, "http")
+        XCTAssertEqual(stream.port, 25461)
+        XCTAssertTrue(stream.absoluteString.hasPrefix("http://"))
+        let secure = try Provider.validURL("https://provider.example.invalid:8443/panel/")
+        XCTAssertEqual(secure.scheme, "https")
+        XCTAssertEqual(ProviderHTTP.canonicalServer(secure), "https://provider.example.invalid:8443/panel")
+        let request = ProviderHTTP.request(url: api)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), ProviderHTTP.userAgent)
+        XCTAssertTrue(ProviderHTTP.userAgent.contains("VLC"))
+        XCTAssertEqual(request.url?.scheme, "http")
+        XCTAssertEqual(request.url?.port, 25461)
+        let custom = ProviderHTTP.request(url: api, headers: ["User-Agent": "CustomPlayer"])
+        XCTAssertEqual(custom.value(forHTTPHeaderField: "User-Agent"), "CustomPlayer")
+        let redirected = ProviderHTTP.redirected(custom, userAgent: "CustomPlayer")
+        XCTAssertEqual(redirected.value(forHTTPHeaderField: "User-Agent"), "CustomPlayer")
+        XCTAssertEqual(redirected.url?.port, 25461)
+        let blocked = ProviderHTTP.httpFailure(status: 513, url: URL(string: "http://provider.example.invalid:25461/player_api.php?username=secret&password=secret")!)
+        XCTAssertTrue(blocked.contains("513"))
+        XCTAssertTrue(blocked.contains("provider.example.invalid:25461"))
+        XCTAssertTrue(blocked.localizedCaseInsensitiveContains("directly"))
+        XCTAssertFalse(blocked.contains("secret"))
+        XCTAssertFalse(blocked.contains("player_api"))
+        let denied = ProviderHTTP.transportFailure(NSError(domain: NSURLErrorDomain, code: NSURLErrorAppTransportSecurityRequiresSecureConnection), url: api)
+        XCTAssertTrue(denied.contains("provider.example.invalid:25461"))
+        XCTAssertTrue(denied.contains("\(NSURLErrorAppTransportSecurityRequiresSecureConnection)"))
     }
 
     func testPictureModesPreserveAspectAndCoverScreen() {

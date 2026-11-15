@@ -23,7 +23,7 @@ struct LocalProvider: Codable, Equatable, Identifiable {
     static func make(id: String, name: String, provider: Provider, gateway: String) throws -> LocalProvider {
         let base = try provider.baseURL()
         let origin = try AccountAPI.gatewayOrigin(gateway)
-        let server = base.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let server = ProviderHTTP.canonicalServer(base)
         let label = name.trimmingCharacters(in: .whitespacesAndNewlines)
         return LocalProvider(
             id: id,

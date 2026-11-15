@@ -9,11 +9,98 @@ enum TransportPolicy {
         if url.scheme?.lowercased() == "https" { return true }
         guard url.scheme?.lowercased() == "http" else { return false }
         // User-entered provider hosts cannot be enumerated at build time.
+        // NSAllowsArbitraryLoads covers URLSession and AVFoundation. Finer ATS
+        // keys (NSAllowsArbitraryLoadsForMedia, NSExceptionDomains) make this
+        // key ignored on iOS 10+ and would block player_api.php again.
         if settings?["NSAllowsArbitraryLoads"] as? Bool == true { return true }
         guard let host = url.host?.lowercased(),
               let exceptions = settings?["NSExceptionDomains"] as? [String: Any],
               let rule = exceptions[host] as? [String: Any] else { return false }
         return rule["NSExceptionAllowsInsecureHTTPLoads"] as? Bool == true && rule["NSIncludesSubdomains"] as? Bool != true
+    }
+}
+
+/// Direct provider transport. Catalog, XMLTV and playback talk to the host
+/// the user typed. Nothing here is routed through Supabase or the gateway.
+enum ProviderHTTP {
+    /// Xtream panels often answer URLSession's CFNetwork user agent with
+    /// HTTP 513 (line blocked). The same panel accepts VLC's agent.
+    static let userAgent = "VLC/3.0.20 LibVLC/3.0.20"
+
+    static func endpoint(_ url: URL) -> String {
+        let host = url.host ?? "the provider"
+        if let port = url.port { return "\(host):\(port)" }
+        return host
+    }
+
+    static func request(url: URL, headers: [String: String] = [:], method: String = "GET") -> URLRequest {
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        headers.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+        if request.value(forHTTPHeaderField: "User-Agent") == nil {
+            request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        }
+        if request.value(forHTTPHeaderField: "Accept") == nil {
+            request.setValue("*/*", forHTTPHeaderField: "Accept")
+        }
+        return request
+    }
+
+    /// Redirects must keep the player user agent. Some panels 513 a request
+    /// whose agent changes mid-redirect, and they must keep the original port.
+    static func redirected(_ request: URLRequest, userAgent chosen: String) -> URLRequest {
+        var next = request
+        next.setValue(chosen, forHTTPHeaderField: "User-Agent")
+        return next
+    }
+
+    static func playerArguments(extra: [String] = []) -> [String] {
+        ["--quiet", "--no-video-title-show", "--http-user-agent=\(userAgent)"] + extra
+    }
+
+    static func mediaOptions(cache: Int) -> [String: Any] {
+        ["network-caching": cache, "http-user-agent": userAgent]
+    }
+
+    static func httpFailure(status: Int, url: URL) -> String {
+        let host = endpoint(url)
+        let direct = "Ant Streams connected directly to \(host); no gateway was used."
+        switch status {
+        case 401, 403:
+            return "Provider access was denied (HTTP \(status) from \(host)). Check your credentials or subscription. \(direct)"
+        case 512, 513:
+            return "The provider blocked this connection (HTTP \(status) from \(host)). \(direct) Check the username, password, port, and that this line is not already playing somewhere else."
+        case 429:
+            return "The provider is rate limiting requests (HTTP \(status) from \(host)). Wait before retrying. \(direct)"
+        case 500...599:
+            return "The provider server returned HTTP \(status) from \(host). \(direct) Check the provider URL and port, or contact the provider."
+        default:
+            return "Provider request failed (HTTP \(status) from \(host)). \(direct)"
+        }
+    }
+
+    static func transportFailure(_ error: Error, url: URL) -> String {
+        let host = endpoint(url)
+        let ns = error as NSError
+        if ns.domain == NSURLErrorDomain && ns.code == NSURLErrorAppTransportSecurityRequiresSecureConnection {
+            return "HTTP to \(host) was blocked by this app build (error \(ns.code)). Direct HTTP needs NSAllowsArbitraryLoads in the built Info.plist. No gateway was used."
+        }
+        let scheme = url.scheme ?? "http"
+        return "Could not reach \(host) over \(scheme) (error \(ns.code)). Ant Streams connects directly; no gateway was used."
+    }
+
+    /// Scheme, host, port and path as entered. Does not rewrite http to https
+    /// and does not drop a non-standard port when the trailing slash is removed.
+    static func canonicalServer(_ url: URL) -> String {
+        var parts = URLComponents()
+        parts.scheme = url.scheme?.lowercased()
+        parts.host = url.host
+        parts.port = url.port
+        let path = url.path
+        if !path.isEmpty && path != "/" {
+            parts.path = path.hasSuffix("/") ? String(path.dropLast()) : path
+        }
+        return parts.string ?? url.absoluteString
     }
 }
 
@@ -41,7 +128,14 @@ struct Provider: Codable, Equatable {
         return url
     }
     static func validURL(_ value: String) throws -> URL {
-        guard let url = URL(string: value.trimmingCharacters(in: .whitespacesAndNewlines)),
+        var raw = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Providers are plain HTTP. A host:port without a scheme stays http
+        // and keeps its port; an https URL the user typed is left alone.
+        if raw.hasPrefix("//") { raw = "http:" + raw }
+        else if !raw.isEmpty && raw.range(of: "^[A-Za-z][A-Za-z0-9+.-]*://", options: .regularExpression) == nil {
+            raw = "http://" + raw
+        }
+        guard let url = URL(string: raw),
               ["http", "https"].contains(url.scheme?.lowercased() ?? ""), let host = url.host, !host.isEmpty,
               url.user == nil, url.password == nil, url.fragment == nil,
               url.port.map({ (1...65535).contains($0) }) ?? true else {
@@ -332,7 +426,7 @@ final class AccountAPI {
     func save(provider: Provider, gateway: String, name: String = "") async throws {
         let url = try provider.baseURL()
         let origin = try Self.gatewayOrigin(gateway)
-        var body: [String: Any] = ["server_url": url.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")), "username": provider.username, "password": provider.password]
+        var body: [String: Any] = ["server_url": ProviderHTTP.canonicalServer(url), "username": provider.username, "password": provider.password]
         let label = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if !label.isEmpty { body["label"] = String(label.prefix(60)) }
         let data = try await send(path: "functions/v1/provider-vault", method: "POST", body: body)

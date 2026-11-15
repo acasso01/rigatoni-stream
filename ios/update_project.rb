@@ -25,10 +25,10 @@ target.build_configurations.each do |config|
   info['CFBundleDisplayName'] = 'Ant Streams'
   info['CFBundleName'] = 'Ant Streams'
   info['CFBundleShortVersionString'] = '0.2.3'
-  info['CFBundleVersion'] = '6'
+  info['CFBundleVersion'] = '7'
   config.build_settings['INFOPLIST_KEY_CFBundleDisplayName'] = 'Ant Streams'
   config.build_settings['MARKETING_VERSION'] = '0.2.3'
-  config.build_settings['CURRENT_PROJECT_VERSION'] = '6'
+  config.build_settings['CURRENT_PROJECT_VERSION'] = '7'
   info['UIBackgroundModes'] = ((info['UIBackgroundModes'] || []) + ['audio']).uniq
   Xcodeproj::Plist.write_to_path(info, path)
 end

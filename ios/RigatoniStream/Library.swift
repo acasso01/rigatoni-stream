@@ -14,6 +14,8 @@ final class BoundedTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendab
     private var task: URLSessionDataTask?
     private var finished = false
     private var finalURL: URL?
+    private var requestedURL: URL?
+    private var chosenUserAgent = ProviderHTTP.userAgent
     var resolvedURL: URL? { lock.lock(); defer { lock.unlock() }; return finalURL }
     init(limit: Int, timeout: TimeInterval = 30) { self.limit = limit; self.timeout = timeout }
     func fetch(_ url: URL, headers: [String: String] = [:], method: String = "GET") async throws -> Data {
@@ -23,14 +25,19 @@ final class BoundedTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendab
                 lock.lock()
                 if finished { lock.unlock(); next.resume(throwing: CancellationError()); return }
                 continuation = next
+                requestedURL = url
                 let config = URLSessionConfiguration.ephemeral
                 config.urlCache = nil; config.httpCookieStorage = nil
+                config.httpShouldSetCookies = false
                 config.requestCachePolicy = .reloadIgnoringLocalCacheData
                 config.timeoutIntervalForRequest = timeout; config.timeoutIntervalForResource = timeout * 2
+                // Redirects inherit this agent. The per-request header below
+                // covers the first hop, including a non-standard port.
+                config.httpAdditionalHeaders = ["User-Agent": ProviderHTTP.userAgent]
                 let connection = URLSession(configuration: config, delegate: self, delegateQueue: nil)
                 session = connection
-                var request = URLRequest(url: url); request.httpMethod = method
-                headers.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }; request.setValue("*/*", forHTTPHeaderField: "Accept")
+                let request = ProviderHTTP.request(url: url, headers: headers, method: method)
+                chosenUserAgent = request.value(forHTTPHeaderField: "User-Agent") ?? ProviderHTTP.userAgent
                 let nextTask = connection.dataTask(with: request); task = nextTask
                 lock.unlock(); nextTask.resume()
             }
@@ -47,9 +54,12 @@ final class BoundedTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendab
     }
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
         guard let url = request.url, TransportPolicy.permits(url) else {
-            completionHandler(nil); finish(.failure(AppFailure("The provider redirected to a URL blocked by this app build's network settings. Check the provider URL and rebuild if needed."))); return
+            let whereTo = request.url.map(ProviderHTTP.endpoint) ?? "another host"
+            finish(.failure(AppFailure("The provider redirected to \(whereTo), which this app build cannot open. Check the provider URL and port. No gateway was used.")))
+            completionHandler(nil); return
         }
-        var next = request
+        lock.lock(); let agent = chosenUserAgent; lock.unlock()
+        var next = ProviderHTTP.redirected(request, userAgent: agent)
         if response.url?.host != request.url?.host || response.url?.scheme != request.url?.scheme || response.url?.port != request.url?.port {
             next.setValue(nil, forHTTPHeaderField: "Authorization")
             next.setValue(nil, forHTTPHeaderField: "Cookie")
@@ -61,18 +71,13 @@ final class BoundedTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendab
             completionHandler(.cancel); finish(.failure(AppFailure("The server returned an unsupported response."))); return
         }
         guard (200..<300).contains(response.statusCode) else {
-            let message: String
-            switch response.statusCode {
-            case 401, 403:
-                message = "Provider access was denied. Check your credentials or subscription."
-            case 429:
-                message = "The provider is rate limiting requests. Wait before retrying."
-            case 500...599:
-                message = "The provider server returned HTTP \(response.statusCode). Ant Streams connected directly; no gateway was used. Check the provider URL and port, or contact the provider."
-            default:
-                message = "Provider request failed (HTTP \(response.statusCode)). Ant Streams connected directly; no gateway was used."
-            }
-            completionHandler(.cancel); finish(.failure(AppFailure(message))); return
+            lock.lock(); let fallback = requestedURL; lock.unlock()
+            let url = response.url ?? dataTask.originalRequest?.url ?? fallback
+            let message = url.map { ProviderHTTP.httpFailure(status: response.statusCode, url: $0) }
+                ?? "Provider request failed (HTTP \(response.statusCode)). Ant Streams connected directly; no gateway was used."
+            // Record the status before cancelling. A synchronous completion
+            // callback would otherwise replace it with a generic -999.
+            finish(.failure(AppFailure(message))); completionHandler(.cancel); return
         }
         guard response.expectedContentLength <= Int64(limit) else {
             completionHandler(.cancel); finish(.failure(AppFailure("Provider response is too large. Try a smaller category."))); return
@@ -87,8 +92,19 @@ final class BoundedTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendab
         buffer.append(data); lock.unlock()
     }
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        if error != nil { finish(.failure(AppFailure("Provider unreachable. Check your settings or try again."))) }
-        else { lock.lock(); let data = buffer; lock.unlock(); finish(.success(data)) }
+        if let error {
+            let ns = error as NSError
+            if ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled {
+                finish(.failure(CancellationError()))
+            } else {
+                lock.lock(); let fallback = requestedURL; lock.unlock()
+                if let url = task.originalRequest?.url ?? fallback {
+                    finish(.failure(AppFailure(ProviderHTTP.transportFailure(error, url: url))))
+                } else {
+                    finish(.failure(AppFailure("Provider unreachable. Ant Streams connects directly; no gateway was used.")))
+                }
+            }
+        } else { lock.lock(); let data = buffer; lock.unlock(); finish(.success(data)) }
     }
 }
 
