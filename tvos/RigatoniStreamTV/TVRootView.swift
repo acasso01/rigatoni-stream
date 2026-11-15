@@ -59,9 +59,6 @@ struct TVRootView: View {
     @State private var entryGrace = false
     @State private var entryToken = UUID()
     @State private var entryTask: Task<Void, Never>?
-    /// Up/Down must not be treated as "focus left the rail" while we put it back.
-    @State private var correctingRail = false
-    @State private var railGeneration = 0
 
     var body: some View {
         ZStack {
@@ -90,10 +87,6 @@ struct TVRootView: View {
                         if focusedItem == nil { focusedItem = selection }
                     }
                     .onChange(of: focusedItem) { _, item in
-                        // A vertical correction is putting focus back on the
-                        // next rail item. Nil here is the engine stepping
-                        // right, not the user entering the tab.
-                        if correctingRail { return }
                         // Nil means focus left the rail for a content control.
                         // That must not select Home.
                         guard let item else { return }
@@ -148,7 +141,8 @@ struct TVRootView: View {
                         Spacer()
                     }
                     .padding(.horizontal, 18)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(height: 62, alignment: .leading)
                     .background {
                         if selected { TVTheme.accentFill }
                         else { focused ? TVTheme.focusCard : Color.clear }
@@ -160,12 +154,10 @@ struct TVRootView: View {
                 .focused($focusedItem, equals: section)
                 .prefersDefaultFocus(selected, in: railFocus)
                 .onMoveCommand { direction in
-                    switch direction {
-                    case .up: moveRailFocus(by: -1)
-                    case .down: moveRailFocus(by: 1)
-                    case .right: enterContent(section)
-                    default: break
-                    }
+                    // Let tvOS perform vertical focus movement once. Reassigning
+                    // @FocusState here races the focus engine and can turn one
+                    // remote press into multiple rail steps.
+                    if direction == .right { enterContent(section) }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 4)
@@ -181,8 +173,6 @@ struct TVRootView: View {
     /// Right (or a click) opens the highlighted tab and moves focus into it.
     /// Up/Down can browse the rail without replacing the current content.
     private func enterContent(_ preferred: TVSection? = nil) {
-        railGeneration += 1
-        correctingRail = false
         let section = preferred ?? focusedItem ?? selection
         if selection != section { selection = section }
         contentOwnsFocus = true
@@ -211,33 +201,6 @@ struct TVRootView: View {
         contentOwnsFocus = false
         focusRouter.cancel()
         focusedItem = selection
-    }
-
-    /// Keep vertical Siri Remote navigation inside the sidebar. The focus
-    /// engine otherwise treats the content pane as the Down target. The
-    /// assignment is repeated on the next turn so it wins that search.
-    /// Right still calls enterContent, which opens the highlighted tab.
-    private func moveRailFocus(by offset: Int) {
-        // A held/repeated remote command can arrive before the previous
-        // focus correction settles. Ignore that duplicate instead of
-        // advancing the rail twice for one press.
-        guard !correctingRail else { return }
-        railGeneration += 1
-        let generation = railGeneration
-        let sections = TVSection.allCases
-        let current = focusedItem ?? selection
-        guard let index = sections.firstIndex(of: current) else { return }
-        let next = sections[min(max(index + offset, 0), sections.count - 1)]
-        correctingRail = true
-        focusedItem = next
-        Task { @MainActor in
-            guard generation == railGeneration else { return }
-            focusedItem = next
-            try? await Task.sleep(for: .milliseconds(140))
-            guard generation == railGeneration else { return }
-            focusedItem = next
-            correctingRail = false
-        }
     }
 
     // MARK: - Content
