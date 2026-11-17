@@ -332,6 +332,20 @@ p{line-height:1.6}
   border:1px solid var(--border); border-radius:12px; margin-bottom:12px;
 }
 
+/* ---------- Series detail ---------- */
+.detail-head{display:flex; gap:18px; margin:24px 0 8px; align-items:flex-start}
+.detail-head img{width:180px; max-width:40vw; border-radius:var(--radius); border:1px solid var(--border-soft); background:linear-gradient(145deg,var(--tile-a),var(--tile-b))}
+.detail-head .fallback{width:180px; max-width:40vw; height:240px; display:grid; place-items:center; font-size:40px; color:var(--faint); font-weight:900; border:1px solid var(--border-soft); border-radius:var(--radius); background:linear-gradient(145deg,var(--tile-a),var(--tile-b))}
+.detail-meta{flex:1; min-width:0}
+.detail-meta h2{font-size:24px; letter-spacing:-.5px; margin:0 0 6px}
+.detail-meta p{margin:8px 0; font-size:14px}
+.episode-list{display:grid; gap:8px; margin:16px 0}
+.episode-row{display:flex; align-items:center; gap:14px; width:100%; text-align:left; background:var(--panel); border:1px solid var(--border-soft); border-radius:12px; padding:10px 14px; color:var(--text)}
+.episode-row:hover{border-color:var(--accent-line)}
+.episode-row img{width:86px; height:48px; object-fit:cover; border-radius:8px; flex-shrink:0}
+.episode-fallback{width:86px; height:48px; display:grid; place-items:center; flex-shrink:0; border-radius:8px; background:var(--wash); color:var(--faint); font-weight:900}
+.episode-title{font-size:14px; font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+
 /* ---------- Watch overlay (always a dark video surface) ---------- */
 #watch{position:fixed; inset:0; z-index:30; background:#050505; display:flex; flex-direction:column}
 #watchbar{padding:14px 20px; display:flex; align-items:center; gap:12px; color:#fff}

@@ -13,7 +13,7 @@ for(const address of ['8.8.8.8','1.1.1.1','2606:4700:4700::1111'])assert.equal(p
 await assert.rejects(()=>checkedTarget('http://provider.example.invalid',async()=>[{address:'8.8.8.8',family:4},{address:'127.0.0.1',family:4}]),/unsafe_target/);
 await assert.rejects(()=>checkedTarget('file:///etc/passwd'),/unsafe_target/);
 await assert.rejects(()=>checkedTarget('http://user:pass@8.8.8.8'),/unsafe_target/);
-let clock=Date.now(),largeCatalog=false,largeMovies=false;const requests=[];
+let clock=Date.now(),largeCatalog=false,largeMovies=false,largeSeries=false;const requests=[];
 const fakeResponse=(body,headers={})=>Object.assign(Readable.from([Buffer.from(body)]),{statusCode:200,headers});
 const fakeUpstream=async(input,options={})=>{
  const url=new URL(input);requests.push({url,options});
@@ -27,6 +27,16 @@ const fakeUpstream=async(input,options={})=>{
   return{url,response:Object.assign(Readable.from(catalog()),{statusCode:200,headers:{}})};
  }
  if(url.pathname==='/player_api.php'&&url.searchParams.get('action')==='get_vod_streams')return{url,response:fakeResponse(JSON.stringify([{stream_id:7,name:'Dummy movie',category_id:9,container_extension:'mp4',stream_icon:'http://provider.example.invalid/poster?username=dummy-user&password=dummy-password',unused:'discard'}]))};
+ if(url.pathname==='/player_api.php'&&url.searchParams.get('action')==='get_series_categories')return{url,response:fakeResponse(JSON.stringify([{category_id:9,category_name:'Test Series'},{category_id:10,category_name:'Other Series'},{category_id:11,category_name:'More Series'}]))};
+ if(largeSeries&&url.pathname==='/player_api.php'&&url.searchParams.get('action')==='get_series'&&!url.searchParams.has('category_id')){
+  async function* catalog(){yield Buffer.from('[');for(let i=1;i<=50001;i++)yield Buffer.from((i>1?',':'')+JSON.stringify({series_id:i,name:'Series '+i,category_id:9}));yield Buffer.from(']');}
+  return{url,response:Object.assign(Readable.from(catalog()),{statusCode:200,headers:{}})};
+ }
+ if(url.pathname==='/player_api.php'&&url.searchParams.get('action')==='get_series')return{url,response:fakeResponse(JSON.stringify([{series_id:5,name:'Dummy series',category_id:9,cover:'http://provider.example.invalid/poster?username=dummy-user&password=dummy-password',rating:'8.5',genre:'Drama',releaseDate:'2024-01-01',unused:'discard'}]))};
+ if(url.pathname==='/player_api.php'&&url.searchParams.get('action')==='get_series_info'){
+  if(url.searchParams.get('series_id')!=='5')return{url,response:fakeResponse(JSON.stringify({info:{},seasons:[],episodes:{}}))};
+  return{url,response:fakeResponse(JSON.stringify({info:{name:'Dummy series',cover:'http://provider.example.invalid/poster',plot:'A test plot.',cast:'Actor One',genre:'Drama',releaseDate:'2024-01-01',rating:'8.5'},seasons:[{season_number:1,episode_count:2,name:'Season 1'}],episodes:{'1':[{id:101,episode_num:1,title:'Pilot',container_extension:'mp4',season:1,info:{movie_image:'http://provider.example.invalid/ep-poster',plot:'Pilot plot.'}},{id:102,episode_num:2,title:'Second',container_extension:'mkv',season:1,info:{}}]}}))};
+ }
  if(url.pathname==='/player_api.php')return{url,response:fakeResponse(JSON.stringify(url.searchParams.get('action')==='get_live_streams'?[{name:'Dummy test channel',stream_id:7,category_id:1,stream_icon:'http://private.invalid/secret.png'}]:[{category_id:1,category_name:'Dummy'}]))};
  if(url.pathname.endsWith('.m3u8'))return{url,response:fakeResponse('#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="key.bin"\n#EXTINF:4,\nsegment.ts\n',{'content-type':'application/vnd.apple.mpegurl'})};
  return{url,response:fakeResponse('dummy-media-bytes',{'content-type':'video/mp2t','content-length':'17'})};
@@ -58,6 +68,16 @@ try{
  r=await fetch(root+movieData.streams[7],{headers:{Range:'bytes=0-10'}});assert.equal(r.status,200);await r.text();assert.equal(requests.at(-1).options.range,'bytes=0-10');assert.equal(requests.at(-1).url.pathname,'/movie/dummy-user/dummy-password/7.mp4');
  r=await fetch(root+movieData.movies[0].stream_icon);assert.equal(r.status,200);await r.text();assert.equal(requests.at(-1).url.pathname,'/poster');
  r=await fetch(root+'/api/movies/invalid');assert.equal(r.status,401);
+ const seriesReplies=await Promise.all([fetch(root+data.series_path),fetch(root+data.series_path)]);for(const response of seriesReplies)assert.equal(response.status,200);const seriesData=await seriesReplies[0].json();await seriesReplies[1].json();
+ assert.equal(requests.filter(r=>r.url.searchParams.get('action')==='get_series').length,1);assert.equal(seriesData.series[0].kind,'series');assert.equal(seriesData.series[0].name,'Dummy series');assert.equal(seriesData.categories[0].category_name,'Test Series');assert.ok(!JSON.stringify(seriesData).includes('dummy-password'));assert.ok(!JSON.stringify(seriesData).includes('dummy-user'));assert.ok(!JSON.stringify(seriesData).includes('unused'));
+ r=await fetch(root+seriesData.series[0].stream_icon);assert.equal(r.status,200);await r.text();assert.equal(requests.at(-1).url.pathname,'/poster');
+ r=await fetch(root+data.series_path+'/info?series_id=5');assert.equal(r.status,200);const seriesInfo=await r.json();assert.equal(seriesInfo.info.name,'Dummy series');assert.equal(seriesInfo.episodes['1'].length,2);assert.equal(seriesInfo.episodes['1'][0].title,'Pilot');assert.ok(seriesInfo.streams['101']);assert.ok(!JSON.stringify(seriesInfo).includes('dummy-password'));
+ r=await fetch(root+seriesInfo.streams['101']);assert.equal(r.status,200);await r.text();assert.equal(requests.at(-1).url.pathname,'/series/dummy-user/dummy-password/101.mp4');
+ r=await fetch(root+data.series_path+'/info?series_id=bad');assert.equal(r.status,400);
+ r=await fetch(root+data.series_path+'/info?series_id=999');assert.equal(r.status,502);
+ r=await fetch(root+'/api/series/invalid');assert.equal(r.status,401);
+ r=await fetch(root+'/api/series/invalid/info?series_id=5');assert.equal(r.status,401);
+ console.log('PASS series catalog, seasons/episodes detail, opaque episode links, poster relay and id validation');
  r=await fetch(root+data.streams['7'].replace('/media/','/inspect/'));assert.equal(r.status,200);assert.equal((await r.json()).streams[0].width,1920);
  r=await fetch(root+data.streams['7']);assert.equal(r.status,200);const playlist=await r.text();assert.ok(!playlist.includes('http://'));assert.ok(!playlist.includes('dummy-password'));const paths=[...playlist.matchAll(/\/media\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+/g)].map(m=>m[0]);assert.equal(paths.length,2);
  for(const path of paths){r=await fetch(root+path);assert.equal(r.status,200);assert.equal(await r.text(),'dummy-media-bytes')}
@@ -79,6 +99,14 @@ try{
  assert.equal(requests.filter(r=>r.url.searchParams.get('category_id')==='9').length,2);
  for(const category of ['999','bad','9%26password=bad']){const count=requests.length;r=await fetch(root+large.movies_path+'?category_id='+category);assert.equal(r.status,400);assert.equal(requests.length,count)}
  r=await fetch(root+selected.streams[7]);assert.equal(r.status,200);await r.text();
+ largeSeries=true;
+ r=await fetch(root+large.series_path);assert.equal(r.status,200);const seriesOverview=await r.json();assert.equal(seriesOverview.browse_by_category,true);assert.equal(seriesOverview.series.length,0);assert.equal(seriesOverview.categories.length,3);
+ const bulkSeriesRequests=()=>requests.filter(r=>r.url.searchParams.get('action')==='get_series'&&!r.url.searchParams.has('category_id')).length;
+ const seriesBefore=bulkSeriesRequests();r=await fetch(root+large.series_path);assert.equal(r.status,200);await r.json();assert.equal(bulkSeriesRequests(),seriesBefore);
+ const seriesCategoriesReplies=await Promise.all([fetch(root+large.series_path+'?category_id=9'),fetch(root+large.series_path+'?category_id=9')]);const seriesSelected=await seriesCategoriesReplies[0].json();await seriesCategoriesReplies[1].json();assert.equal(seriesSelected.category_id,'9');assert.equal(seriesSelected.series[0].name,'Dummy series');assert.ok(!JSON.stringify(seriesSelected).includes('dummy-password'));assert.equal(requests.filter(r=>r.url.searchParams.get('category_id')==='9'&&r.url.searchParams.get('action')==='get_series').length,1);
+ for(const category of ['10','11','9']){r=await fetch(root+large.series_path+'?category_id='+category);assert.equal(r.status,200);assert.equal((await r.json()).category_id,category)}
+ for(const category of ['999','bad','9%26password=bad']){const count=requests.length;r=await fetch(root+large.series_path+'?category_id='+category);assert.equal(r.status,400);assert.equal(requests.length,count)}
+ console.log('PASS 50,001-series catalog automatically switches to categories; scoped provider requests, cache/coalescing, eviction and category validation preserve playable opaque links');
  console.log('PASS 50,001-movie catalog automatically switches to categories; scoped provider requests, cache/coalescing, eviction and category validation preserve playable opaque links');
  console.log('PASS catalog above 15 MiB and 20,000 channels, UTF-8/chunk boundaries, metadata projection, malformed JSON and bounded parser limits');
  console.log('PASS gateway auth, CORS, SSRF protections, vault retrieval, opaque stream links, HLS playlist/key/segment relay, ranges, expiry and no-store');

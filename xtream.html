@@ -8,20 +8,20 @@
 <div class="content"><div id="searchwrap" class="hide"><input class="searchbar" id="search" type="search" placeholder="Search channels…" autocomplete="off"><p id="count"></p></div><div id="rows"></div><p class="footnote">Ant Streams · Private development preview. Channel availability and playback depend on your provider.</p></div></div></main>
 <div id="watch" class="hide"><div id="watchbar"><button class="btn ghost" id="close">← Back</button><strong id="playing"></strong><button class="btn ghost" id="fullscreen">⛶</button></div><video id="video" controls playsinline autoplay></video><small id="playstatus">Loading stream…</small><button id="compatible" class="btn ghost hide" type="button" style="margin:0 20px 16px">Try compatible playback (same quality)</button><button id="alternate" class="btn ghost hide" type="button" style="margin:0 20px 16px">Try alternate player (same quality)</button></div>
 <script>
-const $=id=>document.getElementById(id);let gatewayStreams=null,credentials=null,channels=[],categories=[],movies=[],movieCategories=[],movieStreams=null,moviesPath=null,moviesLoaded=false,moviesLoading=null,movieError='',movieCategoryMode=false,movieCategory='',tab='home',categoryPage=0,searchTimer;const favorites=new Set(JSON.parse(localStorage.getItem('rigatoni-favorites')||'[]'));window.__rigatoniFavorites=favorites;const status=s=>$('status').textContent=s;
+const $=id=>document.getElementById(id);let gatewayStreams=null,credentials=null,channels=[],categories=[],movies=[],movieCategories=[],movieStreams=null,moviesPath=null,moviesLoaded=false,moviesLoading=null,movieError='',movieCategoryMode=false,movieCategory='',series=[],seriesCategories=[],seriesStreams=null,seriesPath=null,seriesLoaded=false,seriesLoading=null,seriesError='',seriesCategoryMode=false,seriesCategory='',seriesDetail=null,seriesDetailLoading=null,seriesDetailError='',seriesSeason='',tab='home',categoryPage=0,searchTimer;const favorites=new Set(JSON.parse(localStorage.getItem('rigatoni-favorites')||'[]'));window.__rigatoniFavorites=favorites;const status=s=>$('status').textContent=s;
 function endpoint(action){const u=new URL(credentials.base+'/player_api.php');u.searchParams.set('username',credentials.user);u.searchParams.set('password',credentials.pass);u.searchParams.set('action',action);return u}
-async function load(action){const local=location.protocol==='http:'&&location.port==='8090';const r=await fetch(local?'/api':endpoint(action),local?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({server:credentials.base,username:credentials.user,password:credentials.pass,action}),cache:'no-store'}:{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);return r.json()}
-async function doConnect(opts){opts=opts||{};try{if(opts.saveFirst!==false&&window.__rigatoniSaveSettings){status('Saving your provider and gateway…');await window.__rigatoniSaveSettings();}if(window.__rigatoniSignedIn&&window.__rigatoniGetProvider){const aid=localStorage.getItem('ant-active-provider');if(aid){try{const full=await window.__rigatoniGetProvider(aid);if(full&&full.saved){$('server').value=full.server_url;$('user').value=full.username;$('pass').value=full.password;}}catch{}}}const password=$('pass').value;const url=new URL($('server').value.trim());if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash)throw Error('Enter only the provider server URL.');if(location.protocol==='https:'&&url.protocol==='http:'&&!$('gateway').value.trim())throw Error('Playback requires the HTTPS gateway on GitHub Pages. You can still save this HTTP provider securely, or use the private Raspberry Pi test site.');credentials={base:url.href.replace(/\/+$/,''),user:$('user').value.trim(),pass:password};$('connect').disabled=true;status('Connecting to your channels…');gatewayStreams=null;movies=[];movieCategories=[];movieStreams=null;moviesPath=null;moviesLoaded=false;moviesLoading=null;movieError='';movieCategoryMode=false;movieCategory='';let cats,streams;if($('gateway').value.trim()){if(!window.__rigatoniGatewayConnect)throw Error('Sign in before using the gateway.');const result=await window.__rigatoniGatewayConnect();cats=result.categories;streams=result.channels;gatewayStreams=result.streams;moviesPath=result.movies_path||null;}else [cats,streams]=await Promise.all([load('get_live_categories'),load('get_live_streams')]);if(!Array.isArray(streams))throw Error('Unexpected channel response');categories=Array.isArray(cats)?cats:[];channels=streams;$('login').classList.add('hide');$('app').classList.remove('hide');$('account').textContent='Connected ✓';showTab('home')}catch(err){credentials=null;gatewayStreams=null;status('Connection failed: '+err.message)}finally{$('connect').disabled=false}}
+async function load(action,params){const local=location.protocol==='http:'&&location.port==='8090';const target=endpoint(action);if(params)for(const [k,v] of Object.entries(params))target.searchParams.set(k,String(v));const r=await fetch(local?'/api':target,local?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({server:credentials.base,username:credentials.user,password:credentials.pass,action,...(params||{})}),cache:'no-store'}:{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);return r.json()}
+async function doConnect(opts){opts=opts||{};try{if(opts.saveFirst!==false&&window.__rigatoniSaveSettings){status('Saving your provider and gateway…');await window.__rigatoniSaveSettings();}if(window.__rigatoniSignedIn&&window.__rigatoniGetProvider){const aid=localStorage.getItem('ant-active-provider');if(aid){try{const full=await window.__rigatoniGetProvider(aid);if(full&&full.saved){$('server').value=full.server_url;$('user').value=full.username;$('pass').value=full.password;}}catch{}}}const password=$('pass').value;const url=new URL($('server').value.trim());if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash)throw Error('Enter only the provider server URL.');if(location.protocol==='https:'&&url.protocol==='http:'&&!$('gateway').value.trim())throw Error('Playback requires the HTTPS gateway on GitHub Pages. You can still save this HTTP provider securely, or use the private Raspberry Pi test site.');credentials={base:url.href.replace(/\/+$/,''),user:$('user').value.trim(),pass:password};$('connect').disabled=true;status('Connecting to your channels…');gatewayStreams=null;movies=[];movieCategories=[];movieStreams=null;moviesPath=null;moviesLoaded=false;moviesLoading=null;movieError='';movieCategoryMode=false;movieCategory='';series=[];seriesCategories=[];seriesStreams=null;seriesPath=null;seriesLoaded=false;seriesLoading=null;seriesError='';seriesCategoryMode=false;seriesCategory='';seriesDetail=null;seriesDetailLoading=null;seriesDetailError='';seriesSeason='';let cats,streams;if($('gateway').value.trim()){if(!window.__rigatoniGatewayConnect)throw Error('Sign in before using the gateway.');const result=await window.__rigatoniGatewayConnect();cats=result.categories;streams=result.channels;gatewayStreams=result.streams;moviesPath=result.movies_path||null;seriesPath=result.series_path||null;}else [cats,streams]=await Promise.all([load('get_live_categories'),load('get_live_streams')]);if(!Array.isArray(streams))throw Error('Unexpected channel response');categories=Array.isArray(cats)?cats:[];channels=streams;$('login').classList.add('hide');$('app').classList.remove('hide');$('account').textContent='Connected ✓';showTab('home')}catch(err){credentials=null;gatewayStreams=null;status('Connection failed: '+err.message)}finally{$('connect').disabled=false}}
 $('form').onsubmit=e=>{e.preventDefault();doConnect({saveFirst:true})};
 window.__antConnect=doConnect;
-$('account').onclick=()=>{if(credentials){if(confirm('Disconnect from this provider?')){credentials=null;gatewayStreams=null;channels=[];categories=[];$('rows').replaceChildren();$('app').classList.add('hide');$('login').classList.remove('hide');$('account').textContent='Connect';stopVideo()}}else if(!window.__rigatoniSignedIn&&location.protocol==='https:')location.assign('./auth.html');else $('login').scrollIntoView()};
+$('account').onclick=()=>{if(credentials){if(confirm('Disconnect from this provider?')){credentials=null;gatewayStreams=null;channels=[];categories=[];movies=[];movieCategories=[];movieStreams=null;moviesPath=null;moviesLoaded=false;moviesLoading=null;movieError='';movieCategoryMode=false;movieCategory='';series=[];seriesCategories=[];seriesStreams=null;seriesPath=null;seriesLoaded=false;seriesLoading=null;seriesError='';seriesCategoryMode=false;seriesCategory='';seriesDetail=null;seriesDetailLoading=null;seriesDetailError='';seriesSeason='';$('rows').replaceChildren();$('app').classList.add('hide');$('login').classList.remove('hide');$('account').textContent='Connect';stopVideo()}}else if(!window.__rigatoniSignedIn&&location.protocol==='https:')location.assign('./auth.html');else $('login').scrollIntoView()};
 function updateTabPresentation(t){
- const copy={home:['Live TV, made yours.','Discover channels, save your favorites, and jump straight into what you love.','▶ Browse Live TV','Search channels…'],live:['Live TV, made yours.','Browse your provider’s live channels and catch what’s on now.','▶ Browse Live TV','Search channels…'],movies:['Movie night, made yours.','Explore your provider’s movies and find your next favorite.','▶ Browse Movies','Search movies…'],favorites:['Your list, your favorites.','Your saved channels and movies, ready when you are.','▶ Browse Live TV','Search your list…'],series:['Series, coming soon.','Live TV and Movies are available now. Series are coming next.','▶ Browse Live TV','Search series…']}[t];
+ const copy={home:['Live TV, made yours.','Discover channels, save your favorites, and jump straight into what you love.','▶ Browse Live TV','Search channels…'],live:['Live TV, made yours.','Browse your provider’s live channels and catch what’s on now.','▶ Browse Live TV','Search channels…'],movies:['Movie night, made yours.','Explore your provider’s movies and find your next favorite.','▶ Browse Movies','Search movies…'],favorites:['Your list, your favorites.','Your saved channels and movies, ready when you are.','▶ Browse Live TV','Search your list…'],series:['TV shows, made yours.','Browse your provider’s series — pick a show, then an episode.','▶ Browse Series','Search series…']}[t];
  $('heroTitle').textContent=copy[0];$('heroDescription').textContent=copy[1];$('browse').textContent=copy[2];$('search').placeholder=copy[3];$('search').value='';
 }
-function showTab(t){if(!credentials){status('Sign in and connect your provider to browse your library.');if(!window.__rigatoniSignedIn&&location.protocol==='https:')location.assign('./auth.html');else $('login').scrollIntoView();return}clearTimeout(searchTimer);categoryPage=0;tab=t;updateTabPresentation(t);document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===t));$('searchwrap').classList.toggle('hide',t==='home'||t==='series');render();window.scrollTo(0,0);if(t==='movies'&&!moviesLoaded)void loadMovies()}
-document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));$('browse').onclick=()=>showTab(tab==='movies'?'movies':'live');$('mylist').onclick=()=>showTab('favorites');$('search').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{categoryPage=0;render()},180)};
-function favoriteId(c){return(c.kind==='movie'?'movie:':'')+String(c.stream_id)}
+function showTab(t){if(!credentials){status('Sign in and connect your provider to browse your library.');if(!window.__rigatoniSignedIn&&location.protocol==='https:')location.assign('./auth.html');else $('login').scrollIntoView();return}clearTimeout(searchTimer);categoryPage=0;tab=t;updateTabPresentation(t);document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===t));$('searchwrap').classList.toggle('hide',t==='home');if(t!=='series'){seriesDetail=null;seriesDetailLoading=null;seriesDetailError=''}render();window.scrollTo(0,0);if(t==='movies'&&!moviesLoaded)void loadMovies();if(t==='series'&&!seriesLoaded)void loadSeries()}
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));$('browse').onclick=()=>showTab(tab==='movies'?'movies':tab==='series'?'series':'live');$('mylist').onclick=()=>showTab('favorites');$('search').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{categoryPage=0;render()},180)};
+function favoriteId(c){return(c.kind==='movie'?'movie:':c.kind==='series'?'series:':'')+String(c.stream_id)}
 async function loadMovies(){
  if(moviesLoading)return moviesLoading;
  if(!credentials){movieError='Connect your provider to browse movies.';render();return}
@@ -35,7 +35,114 @@ async function loadMovies(){
   finally{if(credentials===current){moviesLoading=null;if(tab==='movies')render()}}
  });return moviesLoading;
 }
-function makeTile(c){const b=document.createElement('div');b.className='tile';b.style.cursor='pointer';b.onclick=()=>play(c);if(c.stream_icon){const img=document.createElement('img');img.src=c.stream_icon;img.alt='';img.loading='lazy';img.onerror=()=>{img.remove();const d=document.createElement('div');d.className='fallback';d.textContent='▶';b.prepend(d)};b.append(img)}else{const d=document.createElement('div');d.className='fallback';d.textContent='▶';b.append(d)}const n=document.createElement('span');n.className='name';n.textContent=c.name||'Untitled';b.append(n);const f=document.createElement('button');f.className='fav'+(favorites.has(favoriteId(c))?' saved':'');f.textContent=favorites.has(favoriteId(c))?'♥':'♡';f.title='Toggle favorite';f.onclick=e=>{e.stopPropagation();const id=favoriteId(c);if(favorites.has(id))favorites.delete(id);else favorites.add(id);localStorage.setItem('rigatoni-favorites',JSON.stringify([...favorites]));if(window.__rigatoniFavChanged)window.__rigatoniFavChanged(id,favorites.has(id),c.name||'');render()};b.append(f);return b}
+async function loadSeries(){
+ if(seriesLoading)return seriesLoading;
+ if(!credentials){seriesError='Connect your provider to browse series.';render();return}
+ const current=credentials;
+ seriesLoading=Promise.resolve().then(async()=>{
+  try{
+   let result;
+   if(gatewayStreams){
+    if(!seriesPath)throw Error('Update the Pi gateway to enable Series.');
+    const fetchCatalog=async path=>{const r=await fetch(path,{cache:'no-store',signal:AbortSignal.timeout(60000)});if(!r.ok){const failure=await r.json().catch(()=>({}));const reasons={catalog_too_large:'The series catalog exceeds the gateway’s item limit.',response_too_large:'The series catalog exceeds the gateway’s response-size limit.',session_resource_limit:'The combined live TV, movie, series and poster catalog exceeds the gateway’s resource limit.',provider_connection_failed:'The provider rejected the series request or returned an invalid catalog.',upstream_timeout:'The provider timed out while loading series.',upstream_unavailable:'The gateway could not reach the provider’s series API.',unsafe_target:'The series provider address failed the gateway security check.',not_found:'The gateway series endpoint is unavailable. Update the Pi gateway and reconnect.'};throw Error(r.status===401?'Reconnect your provider to refresh the series session.':(reasons[failure.error]||'The gateway could not load the series catalog.')+' (Gateway HTTP '+r.status+')');}return r.json()};
+    const requestPath=new URL(seriesPath);if(seriesCategoryMode&&seriesCategory)requestPath.searchParams.set('category_id',seriesCategory);
+    result=await fetchCatalog(requestPath.href);
+    if(credentials!==current)return;
+    if(result.browse_by_category){if(!Array.isArray(result.categories))throw Error('Invalid series categories.');seriesCategoryMode=true;seriesCategories=result.categories.filter(c=>/^\d{1,20}$/.test(String(c.category_id)));if(!result.category_id&&seriesCategories.length){seriesCategory=String(seriesCategories[0].category_id);requestPath.searchParams.set('category_id',seriesCategory);result=await fetchCatalog(requestPath.href);if(result.category_id!==seriesCategory)throw Error('Update the Pi gateway to load series categories.');}else if(result.category_id)seriesCategory=String(result.category_id);}
+    const origin=new URL(seriesPath).origin;
+    for(const item of result.series||[]){item.kind='series';if(item.stream_icon){if(!/^\/media\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(item.stream_icon))throw Error('Invalid series poster path.');item.stream_icon=origin+item.stream_icon;}}
+    if(!Array.isArray(result.series)||!Array.isArray(result.categories))throw Error('Invalid series catalog.');
+   }else{
+    const [categories,series]=await Promise.all([load('get_series_categories'),load('get_series')]);
+    if(!Array.isArray(series))throw Error('Invalid series catalog.');
+    result={categories:Array.isArray(categories)?categories:[],series:series.map(c=>({...c,kind:'series',stream_id:String(c.series_id),stream_icon:c.cover||''}))};
+   }
+   if(credentials!==current)return;series=result.series;seriesCategories=result.categories;seriesStreams=null;seriesLoaded=true;seriesError='';
+  }catch(error){if(credentials===current)seriesError=error.message}
+  finally{if(credentials===current){seriesLoading=null;if(tab==='series')render()}}
+ });return seriesLoading;
+}
+function normalizeSeriesDetail(raw){
+ const infoRaw=(raw&&typeof raw.info==='object'&&raw.info)||{};
+ const seasonsRaw=Array.isArray(raw.seasons)?raw.seasons:[];
+ const episodesRaw=(raw&&typeof raw.episodes==='object'&&raw.episodes)||{};
+ const seasons=seasonsRaw.map(s=>({season_number:Number(s.season_number)||0,episode_count:Number(s.episode_count)||0,name:String(s.name||'')}));
+ const episodes={};
+ for(const [key,list] of Object.entries(episodesRaw)){
+  if(!Array.isArray(list))continue;
+  const num=/^\d+$/.test(key)?key:'0';
+  episodes[num]=(episodes[num]||[]).concat(list.filter(ep=>ep&&/^\d+$/.test(String(ep.id||''))).map(ep=>({id:String(ep.id),episode_num:Number(ep.episode_num)||0,title:String(ep.title||''),season:Number(ep.season)||Number(num)||0,container_extension:/^(mp4|m4v|mov|mkv|avi|webm|ts|m3u8)$/.test(ep.container_extension)?ep.container_extension:'mp4',stream_icon:String(ep.stream_icon||ep.info?.movie_image||''),plot:String(ep.plot||ep.info?.plot||'')})));
+ }
+ const info={name:String(infoRaw.name||''),plot:String(infoRaw.plot||''),cast:String(infoRaw.cast||''),director:String(infoRaw.director||''),genre:String(infoRaw.genre||''),releaseDate:String(infoRaw.releaseDate||''),rating:String(infoRaw.rating||''),youtube_trailer:String(infoRaw.youtube_trailer||''),episode_run_time:String(infoRaw.episode_run_time||''),stream_icon:String(infoRaw.stream_icon||infoRaw.cover||'')};
+ return{info,seasons,episodes};
+}
+async function loadSeriesInfo(item){
+ const current=credentials;const id=String(item.stream_id);
+ seriesDetail=null;seriesDetailError='';
+ seriesDetailLoading=(async()=>{
+  try{
+   let detail;
+   if(gatewayStreams){
+    if(!seriesPath)throw Error('Update the Pi gateway to enable Series.');
+    const url=new URL(seriesPath+'/info');url.searchParams.set('series_id',id);
+    const r=await fetch(url.href,{cache:'no-store',signal:AbortSignal.timeout(60000)});
+    if(!r.ok){const failure=await r.json().catch(()=>({}));throw Error(r.status===401?'Reconnect your provider to refresh the series session.':(failure.error==='invalid_series_id'?'This series is no longer available.':failure.error==='provider_connection_failed'?'The provider rejected the series request.':'The gateway could not load this series.')+' (Gateway HTTP '+r.status+')');}
+    detail=await r.json();
+    const origin=new URL(seriesPath).origin;
+    if(detail.info&&detail.info.stream_icon){if(!/^\/media\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(detail.info.stream_icon))throw Error('Invalid series poster path.');detail.info.stream_icon=origin+detail.info.stream_icon;}
+    seriesStreams={};
+    for(const [epId,path] of Object.entries(detail.streams||{})){if(typeof path!=='string'||!/^\/media\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(path))throw Error('Invalid episode stream path.');seriesStreams[epId]=origin+path;}
+    for(const list of Object.values(detail.episodes||{})){if(!Array.isArray(list))continue;for(const ep of list){if(ep.stream_icon){if(!/^\/media\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(ep.stream_icon))throw Error('Invalid episode poster path.');ep.stream_icon=origin+ep.stream_icon;}}}
+   }else{
+    detail=await load('get_series_info',{series_id:id});
+   }
+   if(credentials!==current)return;
+   const normalized=normalizeSeriesDetail(detail);
+   if(!normalized.info.name&&!Object.keys(normalized.episodes).length)throw Error('This series has no episode information.');
+   seriesDetail={...normalized,seriesId:id,seriesName:item.name||normalized.info.name||'Series'};
+   const seasonKeys=Object.keys(normalized.episodes).sort((a,b)=>Number(a)-Number(b));
+   seriesSeason=seasonKeys.includes('1')?'1':(seasonKeys[0]||'');
+   seriesDetailError='';
+  }catch(error){if(credentials===current){seriesDetail=null;seriesDetailError=error.message}}
+  finally{if(credentials===current){seriesDetailLoading=null;if(tab==='series')render()}}
+ })();
+ return seriesDetailLoading;
+}
+function showSeriesDetail(item){seriesDetailError='';render();return loadSeriesInfo(item)}
+function renderSeriesDetail(root){
+ const back=document.createElement('button');back.className='btn ghost';back.textContent='← All Series';back.onclick=()=>{seriesDetail=null;seriesDetailLoading=null;seriesDetailError='';render()};root.append(back);
+ if(seriesDetailLoading||(!seriesDetail&&!seriesDetailError)){const p=document.createElement('p');p.className='empty';p.textContent='Loading series details…';root.append(p);return}
+ if(seriesDetailError||!seriesDetail){const p=document.createElement('p');p.className='empty';p.textContent=seriesDetailError||'This series could not be loaded.';root.append(p);const retry=document.createElement('button');retry.className='btn ghost';retry.textContent='Retry';retry.onclick=()=>{seriesDetailError='';render()};root.append(retry);return}
+ const d=seriesDetail;
+ const head=document.createElement('div');head.className='detail-head';
+ if(d.info.stream_icon){const img=document.createElement('img');img.src=d.info.stream_icon;img.alt='';img.loading='lazy';head.append(img)}else{const f=document.createElement('div');f.className='fallback';f.textContent='▶';head.append(f)}
+ const meta=document.createElement('div');meta.className='detail-meta';
+ const h=document.createElement('h2');h.textContent=d.seriesName;meta.append(h);
+ const sub=document.createElement('p');sub.className='muted';sub.textContent=[d.info.rating?('★ '+d.info.rating):'',d.info.genre||'',d.info.releaseDate||''].filter(Boolean).join(' · ');meta.append(sub);
+ if(d.info.plot){const plot=document.createElement('p');plot.textContent=d.info.plot;meta.append(plot)}
+ if(d.info.cast){const cast=document.createElement('p');cast.className='muted';cast.textContent='Cast: '+d.info.cast;meta.append(cast)}
+ head.append(meta);root.append(head);
+ const seasons=Object.keys(d.episodes).sort((a,b)=>Number(a)-Number(b));
+ if(!seasons.length){const p=document.createElement('p');p.className='empty';p.textContent='No episodes listed for this series.';root.append(p);return}
+ if(seasons.length>1){
+  const label=document.createElement('label');label.textContent='Season';label.setAttribute('for','seriesSeason');root.append(label);
+  const select=document.createElement('select');select.setAttribute('id','seriesSeason');select.setAttribute('aria-label','Season');select.style.cssText='width:100%;padding:12px;background:var(--input);color:var(--text);border:1px solid var(--border);border-radius:12px;margin-bottom:12px';
+  for(const s of seasons){const option=document.createElement('option');option.value=s;option.textContent='Season '+s;select.append(option)}
+  select.value=seriesSeason||seasons[0];
+  select.onchange=()=>{seriesSeason=select.value;render()};root.append(select);
+ }else seriesSeason=seasons[0];
+ const list=d.episodes[seriesSeason]||[];
+ const wrap=document.createElement('div');wrap.className='episode-list';
+ for(const ep of list){
+  const b=document.createElement('button');b.className='episode-row';b.type='button';
+  if(ep.stream_icon){const img=document.createElement('img');img.src=ep.stream_icon;img.alt='';img.loading='lazy';b.append(img)}else{const f=document.createElement('span');f.className='episode-fallback';f.textContent='▶';b.append(f)}
+  const t=document.createElement('span');t.className='episode-title';t.textContent='E'+ep.episode_num+' · '+(ep.title||'Episode '+ep.episode_num);b.append(t);
+  b.onclick=()=>play({kind:'episode',stream_id:Number(ep.id),name:d.seriesName+' S'+seriesSeason+'E'+ep.episode_num+' — '+(ep.title||''),container_extension:ep.container_extension});
+  wrap.append(b);
+ }
+ root.append(wrap);
+}
+function makeTile(c){const b=document.createElement('div');b.className='tile';b.style.cursor='pointer';b.onclick=()=>{if(c.kind==='series')return showSeriesDetail(c);return play(c)};if(c.stream_icon){const img=document.createElement('img');img.src=c.stream_icon;img.alt='';img.loading='lazy';img.onerror=()=>{img.remove();const d=document.createElement('div');d.className='fallback';d.textContent='▶';b.prepend(d)};b.append(img)}else{const d=document.createElement('div');d.className='fallback';d.textContent='▶';b.append(d)}const n=document.createElement('span');n.className='name';n.textContent=c.name||'Untitled';b.append(n);const f=document.createElement('button');f.className='fav'+(favorites.has(favoriteId(c))?' saved':'');f.textContent=favorites.has(favoriteId(c))?'♥':'♡';f.title='Toggle favorite';f.onclick=e=>{e.stopPropagation();const id=favoriteId(c);if(favorites.has(id))favorites.delete(id);else favorites.add(id);localStorage.setItem('rigatoni-favorites',JSON.stringify([...favorites]));if(window.__rigatoniFavChanged)window.__rigatoniFavChanged(id,favorites.has(id),c.name||'');render()};b.append(f);return b}
 const CARDS_PER_ROW=24,CATEGORIES_PER_PAGE=6;
 function pager(previous,next,label){
   const controls=document.createElement('div');controls.className='actions';
@@ -48,7 +155,7 @@ function row(title,items){
   if(!items.length)return;
   const wrap=document.createElement('section'),head=document.createElement('div');head.className='rowhead';
   const h=document.createElement('h2');h.textContent=title;head.append(h);
-  const count=document.createElement('span');count.textContent=items.length+(items[0]?.kind==='movie'?' movies':' channels');head.append(count);wrap.append(head);
+  const count=document.createElement('span');count.textContent=items.length+(items[0]?.kind==='movie'?' movies':items[0]?.kind==='series'?' series':items[0]?.kind==='episode'?' episodes':' channels');head.append(count);wrap.append(head);
   const rail=document.createElement('div');rail.className='rail';wrap.append(rail);
   let page=0,controls;
   const draw=()=>{
@@ -65,7 +172,14 @@ function row(title,items){
 }
 function render(){
   const root=$('rows');root.replaceChildren();
-  if(tab==='series'){const p=document.createElement('p');p.className='empty';p.textContent='Series coming next — Live TV and Movies are available.';root.append(p);return}
+  if(tab==='series'&&(seriesDetail||seriesDetailLoading||seriesDetailError)){renderSeriesDetail(root);return}
+  if(tab==='series'&&seriesCategoryMode&&seriesCategories.length){
+    const label=document.createElement('label');label.textContent='Series category';label.setAttribute('for','seriesCategory');root.append(label);
+    const select=document.createElement('select');select.setAttribute('id','seriesCategory');select.setAttribute('aria-label','Series category');select.style.cssText='width:100%;padding:12px;background:var(--input);color:var(--text);border:1px solid var(--border);border-radius:12px;margin-bottom:12px';
+    for(const cat of seriesCategories){const option=document.createElement('option');option.value=String(cat.category_id);option.textContent=cat.category_name||'Series';select.append(option)}select.value=seriesCategory;select.disabled=!!seriesLoading;
+    select.onchange=()=>{seriesCategory=select.value;seriesLoaded=false;seriesError='';categoryPage=0;$('search').value='';void loadSeries();render()};root.append(select);
+    const note=document.createElement('p');note.className='empty';note.textContent='Your large series library loads one category at a time. Search filters the selected category.';root.append(note);
+  }
   if(tab==='movies'&&movieCategoryMode&&movieCategories.length){
     const label=document.createElement('label');label.textContent='Movie category';label.setAttribute('for','movieCategory');root.append(label);
     const select=document.createElement('select');select.setAttribute('id','movieCategory');select.setAttribute('aria-label','Movie category');select.style.cssText='width:100%;padding:12px;background:var(--input);color:var(--text);border:1px solid var(--border);border-radius:12px;margin-bottom:12px';
@@ -75,19 +189,21 @@ function render(){
   }
   const q=$('search').value.trim().toLowerCase();
   if(tab==='movies'&&!moviesLoaded){const p=document.createElement('p');p.className='empty';p.textContent=movieError||'Loading your provider’s movies…';root.append(p);if(movieError){const retry=document.createElement('button');retry.className='btn ghost';retry.textContent='Retry movies';retry.onclick=()=>{movieError='';render();void loadMovies()};root.append(retry)}return}
-  const catalog=tab==='movies'?movies:tab==='favorites'?[...channels,...movies]:channels;
+  if(tab==='series'&&!seriesLoaded){const p=document.createElement('p');p.className='empty';p.textContent=seriesError||'Loading your provider’s series…';root.append(p);if(seriesError){const retry=document.createElement('button');retry.className='btn ghost';retry.textContent='Retry series';retry.onclick=()=>{seriesError='';render();void loadSeries()};root.append(retry)}return}
+  const catalog=tab==='movies'?movies:tab==='series'?series:tab==='favorites'?[...channels,...movies,...series]:channels;
   const list=catalog.filter(c=>(!q||String(c.name||'').toLowerCase().includes(q))&&(tab!=='favorites'||favorites.has(favoriteId(c))));
-  $('count').textContent=list.length+(tab==='movies'?' matching movies':' matching titles');
-  if(!list.length){const p=document.createElement('p');p.className='empty';p.textContent=tab==='favorites'?'Tap ♡ on any channel to add it to My List.':tab==='movies'?'Your provider has no matching movies.':'No channels found.';root.append(p);return}
+  $('count').textContent=list.length+(tab==='movies'?' matching movies':tab==='series'?' matching series':' matching titles');
+  if(!list.length){const p=document.createElement('p');p.className='empty';p.textContent=tab==='favorites'?'Tap ♡ on any channel to add it to My List.':tab==='movies'?'Your provider has no matching movies.':tab==='series'?'Your provider has no matching series.':'No channels found.';root.append(p);return}
   if(tab==='favorites'){row('Your Favorites',list);return}
   if(q){row('Search Results',list);return}
   if(tab==='home')row('My List',channels.filter(c=>favorites.has(favoriteId(c))));
-  row(tab==='home'?'Explore Live TV':tab==='movies'?(movieCategoryMode?'Movies in this category':'All Movies'):'All Live Channels',list);
+  row(tab==='home'?'Explore Live TV':tab==='movies'?(movieCategoryMode?'Movies in this category':'All Movies'):tab==='series'?(seriesCategoryMode?'Series in this category':'All Series'):'All Live Channels',list);
   if(tab==='movies'&&movieCategoryMode)return;
+  if(tab==='series'&&seriesCategoryMode)return;
   // Group once, then mount only six category rails. Paging replaces cards instead of accumulating them.
   const groups=new Map();
   for(const c of list){const id=String(c.category_id);if(!groups.has(id))groups.set(id,[]);groups.get(id).push(c)}
-  const available=(tab==='movies'?movieCategories:categories).filter(c=>groups.has(String(c.category_id)));
+  const available=(tab==='movies'?movieCategories:tab==='series'?seriesCategories:categories).filter(c=>groups.has(String(c.category_id)));
   const pages=Math.ceil(available.length/CATEGORIES_PER_PAGE);categoryPage=Math.min(categoryPage,Math.max(0,pages-1));
   for(const cat of available.slice(categoryPage*CATEGORIES_PER_PAGE,(categoryPage+1)*CATEGORIES_PER_PAGE))row(cat.category_name||'Channels',groups.get(String(cat.category_id)));
   if(pages>1){
@@ -115,8 +231,8 @@ function stopVideo(preserveCompatibility=null){activeHls?.destroy();activeHls=nu
 $('close').onclick=stopVideo;$('fullscreen').onclick=()=>{const v=$('video');if(v.webkitEnterFullscreen)v.webkitEnterFullscreen();else if(v.requestFullscreen)v.requestFullscreen()};
 window.__rigatoniUseProvider=({base,user,pass})=>{$('server').value=base;$('user').value=user;$('pass').value=pass;status(location.protocol==='https:'&&new URL(base).protocol==='http:'?'Provider successfully loaded. Playback requires the HTTPS gateway on GitHub Pages. No HTTP connection was attempted. The private Raspberry Pi test site still works.':'Provider successfully loaded. Choose Connect & Watch when ready.');};
 window.__rigatoniProvider=()=>{const url=new URL($('server').value.trim());if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash)throw Error('Enter only the provider server URL.');const user=$('user').value.trim(),pass=$('pass').value||(credentials&&credentials.base===url.href.replace(/\/+$/,'')&&credentials.user===user?credentials.pass:'');if(!user||!pass)throw Error('Enter the provider username and password.');return{base:url.href.replace(/\/+$/,''),user,pass};};
-window.__rigatoniClearProvider=()=>{credentials=null;gatewayStreams=null;channels=[];categories=[];$('rows').replaceChildren();['server','user','pass','gateway'].forEach(id=>$(id).value='');movies=[];movieCategories=[];movieStreams=null;moviesPath=null;moviesLoaded=false;moviesLoading=null;movieError='';movieCategoryMode=false;movieCategory='';$('app').classList.add('hide');$('login').classList.remove('hide');$('account').textContent='Connect';stopVideo();status('Saved provider deleted. Enter a provider to save or connect.');};
-async function diagnosePlayback(url,attempt,reason,isMovie=false){
+window.__rigatoniClearProvider=()=>{credentials=null;gatewayStreams=null;channels=[];categories=[];$('rows').replaceChildren();['server','user','pass','gateway'].forEach(id=>$(id).value='');movies=[];movieCategories=[];movieStreams=null;moviesPath=null;moviesLoaded=false;moviesLoading=null;movieError='';movieCategoryMode=false;movieCategory='';series=[];seriesCategories=[];seriesStreams=null;seriesPath=null;seriesLoaded=false;seriesLoading=null;seriesError='';seriesCategoryMode=false;seriesCategory='';seriesDetail=null;seriesDetailLoading=null;seriesDetailError='';seriesSeason='';$('app').classList.add('hide');$('login').classList.remove('hide');$('account').textContent='Connect';stopVideo();status('Saved provider deleted. Enter a provider to save or connect.');};
+async function diagnosePlayback(url,attempt,reason,isMovie=false,mediaLabel='Movie'){
   if(attempt!==playbackAttempt)return;
   $('playstatus').textContent=reason+' Checking gateway…';
   const diagnostic=++playbackDiagnostic;playbackProbe?.abort();const controller=new AbortController();playbackProbe=controller;
@@ -154,17 +270,17 @@ async function diagnosePlayback(url,attempt,reason,isMovie=false){
 
       }else{
         await response.body?.cancel();
-        detail=isMovie?'The gateway reached the movie file.':'Gateway returned a non-HLS response. This channel may require a different stream format.';
+        detail=isMovie?'The gateway reached the '+mediaLabel.toLowerCase()+' file.':'Gateway returned a non-HLS response. This channel may require a different stream format.';
         if(isMovie&&new URL(url).pathname.startsWith('/media/')){
           clearTimeout(timeout);timeout=setTimeout(()=>controller.abort(),25000);
-          $('playstatus').textContent=reason+' Movie file reached. Checking its video and audio formats…';
+          $('playstatus').textContent=reason+' '+mediaLabel+' file reached. Checking its video and audio formats…';
           const inspect=new URL(url);inspect.pathname=inspect.pathname.replace('/media/','/inspect/');
           const check=await fetch(inspect.href,{cache:'no-store',signal:controller.signal});
           if(check.ok){
             const info=await check.json();const streams=Array.isArray(info.streams)?info.streams:[];
             const labels=streams.filter(s=>['video','audio'].includes(s.type)).map(s=>s.type==='video'?String(s.codec||'unknown').toUpperCase()+' '+(Number(s.width)||0)+'×'+(Number(s.height)||0):String(s.codec||'unknown').toUpperCase()+' audio');
-            detail='Movie formats: '+labels.join('; ')+(info.container?' · '+info.container:'')+'. Try compatible playback to repackage the movie for Safari without reducing video quality.';
-          }else{const info=await check.json().catch(()=>({}));const failures={media_probe_timeout:'The movie format check timed out.',media_probe_download:'The gateway could not read the movie data.',media_probe_invalid:'The provider returned invalid or incomplete movie data.',probe_busy:'Another format check is running; retry shortly.'};detail+=' '+(failures[info.error]||'The movie format check failed.')}
+            detail=mediaLabel+' formats: '+labels.join('; ')+(info.container?' · '+info.container:'')+'. Try compatible playback to repackage the '+mediaLabel.toLowerCase()+' for Safari without reducing video quality.';
+          }else{const info=await check.json().catch(()=>({}));const failures={media_probe_timeout:'The '+mediaLabel.toLowerCase()+' format check timed out.',media_probe_download:'The gateway could not read the '+mediaLabel.toLowerCase()+' data.',media_probe_invalid:'The provider returned invalid or incomplete '+mediaLabel.toLowerCase()+' data.',probe_busy:'Another format check is running; retry shortly.'};detail+=' '+(failures[info.error]||'The '+mediaLabel.toLowerCase()+' format check failed.')}
         }
       }
     }
@@ -175,17 +291,17 @@ async function diagnosePlayback(url,attempt,reason,isMovie=false){
 }
 async function play(c,compatible=false,alternate=false){
   if(!credentials)return;
-  const isMovie=c.kind==='movie',isHls=compatible||!isMovie||c.container_extension==='m3u8';
-  const path=(isMovie?movieStreams:gatewayStreams)?.[String(c.stream_id)];
-  if((isMovie?movieStreams:gatewayStreams)&&!path){$('playstatus').textContent='This channel has no gateway stream. Reconnect and try another channel.';return}
-  const u=path?new URL(compatible?path.replace('/media/','/compatible/')+'/index.m3u8':path):new URL(credentials.base+(isMovie?'/movie/':'/live/')+encodeURIComponent(credentials.user)+'/'+encodeURIComponent(credentials.pass)+'/'+encodeURIComponent(c.stream_id)+'.'+(isMovie?c.container_extension:'m3u8'));
-  stopVideo(compatible?u.href:null);$('compatible').textContent=isMovie?'Try compatible movie playback (original video quality)':'Try compatible playback (same quality)';if(compatible)activeCompatibility=u.href;const attempt=playbackAttempt;if(isMovie&&compatible){$('alternate').classList.remove('hide');$('alternate').onclick=()=>play(c,true,true)}
+  const isMovie=c.kind==='movie',isEpisode=c.kind==='episode',isFile=isMovie||isEpisode,isHls=compatible||!isFile||c.container_extension==='m3u8';
+  const path=(isMovie?movieStreams:isEpisode?seriesStreams:gatewayStreams)?.[String(c.stream_id)];
+  if((isMovie?movieStreams:isEpisode?seriesStreams:gatewayStreams)&&!path){$('playstatus').textContent='This channel has no gateway stream. Reconnect and try another channel.';return}
+  const u=path?new URL(compatible?path.replace('/media/','/compatible/')+'/index.m3u8':path):new URL(credentials.base+(isMovie?'/movie/':isEpisode?'/series/':'/live/')+encodeURIComponent(credentials.user)+'/'+encodeURIComponent(credentials.pass)+'/'+encodeURIComponent(c.stream_id)+'.'+(isFile?c.container_extension:'m3u8'));
+  stopVideo(compatible?u.href:null);$('compatible').textContent=isMovie?'Try compatible movie playback (original video quality)':isEpisode?'Try compatible episode playback (original video quality)':'Try compatible playback (same quality)';if(compatible)activeCompatibility=u.href;const attempt=playbackAttempt;if(isFile&&compatible){$('alternate').classList.remove('hide');$('alternate').onclick=()=>play(c,true,true)}
   $('playing').textContent=c.name||'Live TV';$('watch').classList.remove('hide');
   const v=$('video');let movieStarted=false,movieBuffering=false;
-  const report=reason=>{clearTimeout(playbackTimer);if(path&&isHls&&!alternate){$('alternate').classList.remove('hide');$('alternate').onclick=()=>play(c,compatible,true)}if(path&&!compatible){$('compatible').classList.remove('hide');$('compatible').onclick=()=>play(c,true)}if(path&&!alternate)void diagnosePlayback(u.href,attempt,reason,isMovie&&!compatible);else $('playstatus').textContent=reason+(isMovie&&!isHls?' This movie’s container or codecs may not be supported by this browser.':'');};
+  const report=reason=>{clearTimeout(playbackTimer);if(path&&isHls&&!alternate){$('alternate').classList.remove('hide');$('alternate').onclick=()=>play(c,compatible,true)}if(path&&!compatible){$('compatible').classList.remove('hide');$('compatible').onclick=()=>play(c,true)}if(path&&!alternate)void diagnosePlayback(u.href,attempt,reason,isFile&&!compatible,isEpisode?'Episode':'Movie');else $('playstatus').textContent=reason+(isFile&&!isHls?' This '+(isEpisode?'episode':'movie')+'’s container or codecs may not be supported by this browser.':'');};
   v.onerror=()=>{if(attempt!==playbackAttempt)return;const code=v.error?.code;const reasons={1:'Playback was interrupted.',2:'Safari could not download the video.',3:'Safari could not decode the video.',4:'Safari could not use this stream source.'};report((reasons[code]||'Video failed to load.')+' (Media error '+(code||'unknown')+').');};
-  v.onplaying=()=>{if(attempt!==playbackAttempt)return;clearTimeout(playbackTimer);playbackProbe?.abort();playbackDiagnostic++;$('compatible').classList.add('hide');$('alternate').classList.add('hide');$('playstatus').textContent=isMovie&&compatible?'Now playing · Compatible movie mode · Seeking is limited':alternate?'Now playing · Alternate player':'Now playing';};
-  v.onwaiting=()=>{if(attempt!==playbackAttempt)return;if(isMovie&&alternate&&movieStarted){movieBuffering=true;v.pause();$('playstatus').textContent='Refilling the movie buffer…';}else $('playstatus').textContent=isMovie?'Buffering movie…':'Buffering live stream…';};
+  v.onplaying=()=>{if(attempt!==playbackAttempt)return;clearTimeout(playbackTimer);playbackProbe?.abort();playbackDiagnostic++;$('compatible').classList.add('hide');$('alternate').classList.add('hide');$('playstatus').textContent=isFile&&compatible?'Now playing · Compatible '+(isEpisode?'episode':'movie')+' mode · Seeking is limited':alternate?'Now playing · Alternate player':'Now playing';};
+  v.onwaiting=()=>{if(attempt!==playbackAttempt)return;if(isFile&&alternate&&movieStarted){movieBuffering=true;v.pause();$('playstatus').textContent='Refilling the '+(isEpisode?'episode':'movie')+' buffer…';}else $('playstatus').textContent=isMovie?'Buffering movie…':isEpisode?'Buffering episode…':'Buffering live stream…';};
   if(alternate){
     $('playstatus').textContent='Loading alternate player at original quality…';
     try{
@@ -194,7 +310,7 @@ async function play(c,compatible=false,alternate=false){
       // Standard playback keeps the existing AirPlay behavior.
       v.disableRemotePlayback=true;
       if(!Hls.isSupported()){v.disableRemotePlayback=false;report('The alternate player is not supported by this browser.');return}
-      const hls=new Hls({preferManagedMediaSource:true,enableWorker:true,lowLatencyMode:false,backBufferLength:8,maxBufferLength:isMovie?30:20,maxMaxBufferLength:isMovie?40:30,maxBufferSize:(isMovie?64:32)*1024*1024,...(isMovie?{liveSyncDurationCount:4,manifestLoadPolicy:{default:{...Hls.DefaultConfig.manifestLoadPolicy.default,maxTimeToFirstByteMs:60000,maxLoadTimeMs:60000}}}:{})});activeHls=hls;if(isMovie)v.autoplay=false;
+      const hls=new Hls({preferManagedMediaSource:true,enableWorker:true,lowLatencyMode:false,backBufferLength:8,maxBufferLength:isFile?30:20,maxMaxBufferLength:isFile?40:30,maxBufferSize:(isFile?64:32)*1024*1024,...(isFile?{liveSyncDurationCount:4,manifestLoadPolicy:{default:{...Hls.DefaultConfig.manifestLoadPolicy.default,maxTimeToFirstByteMs:60000,maxLoadTimeMs:60000}}}:{})});activeHls=hls;if(isFile)v.autoplay=false;
       const safeErrors={manifestLoadError:'playlist download failed',manifestLoadTimeOut:'playlist download timed out',manifestParsingError:'playlist is invalid',levelLoadError:'channel playlist download failed',fragLoadError:'video segment download failed',fragLoadTimeOut:'video segment download timed out',keyLoadError:'encryption key download failed',keyLoadTimeOut:'encryption key download timed out',fragParsingError:'video segment could not be parsed',bufferAppendError:'Safari rejected the video buffer',bufferAddCodecError:'Safari rejected the video codec',bufferIncompatibleCodecsError:'video codec is unsupported',internalException:'player processing failed'};
       hls.on(Hls.Events.ERROR,(_event,data)=>{
         if(attempt!==playbackAttempt||!data.fatal)return;
@@ -208,9 +324,9 @@ async function play(c,compatible=false,alternate=false){
       };
       hls.on(Hls.Events.MANIFEST_PARSED,()=>{
         if(attempt!==playbackAttempt)return;
-        if(isMovie)$('playstatus').textContent='Building the movie buffer before playback…';else startAlternate();
+        if(isFile)$('playstatus').textContent='Building the '+(isEpisode?'episode':'movie')+' buffer before playback…';else startAlternate();
       });
-      if(isMovie)hls.on(Hls.Events.FRAG_BUFFERED,()=>{
+      if(isFile)hls.on(Hls.Events.FRAG_BUFFERED,()=>{
         if(attempt!==playbackAttempt||movieStarted&&!movieBuffering)return;
         const buffered=v.buffered,position=Math.max(v.currentTime,Number(hls.startPosition)||0);let ahead=0;
         for(let i=0;i<(buffered?.length||0);i++){if(buffered.start(i)<=position+0.5&&buffered.end(i)>position)ahead=buffered.end(i)-position;}
@@ -218,17 +334,17 @@ async function play(c,compatible=false,alternate=false){
         const target=details&&!details.live?Math.min(8,Math.max(0,details.edge-position)):8;
         if(ahead>=target&&ahead>0)startAlternate();
       });
-      $('playstatus').textContent=isMovie?'Preparing a movie buffer for smoother playback…':'Connecting with alternate player…';
-      playbackTimer=setTimeout(()=>{if(attempt===playbackAttempt)report(isMovie?'The movie buffer did not become ready after 75 seconds.':'Alternate player did not start after 30 seconds.');},isMovie?75000:30000);
+      $('playstatus').textContent=isFile?'Preparing a '+(isEpisode?'episode':'movie')+' buffer for smoother playback…':'Connecting with alternate player…';
+      playbackTimer=setTimeout(()=>{if(attempt===playbackAttempt)report(isFile?'The '+(isEpisode?'episode':'movie')+' buffer did not become ready after 75 seconds.':'Alternate player did not start after 30 seconds.');},isFile?75000:30000);
       hls.loadSource(u.href);hls.attachMedia(v);
     }catch{if(attempt===playbackAttempt){activeHls?.destroy();activeHls=null;v.disableRemotePlayback=false;report('The alternate player could not be loaded. Check your connection and retry.');}}
     return;
   }
-  v.src=u.href;v.load();$('playstatus').textContent=compatible?'Preparing same-quality compatible playback…':isMovie?'Loading movie…':'Connecting to live stream…';
-  const startupMs=compatible?(isMovie?75000:40000):20000;playbackTimer=setTimeout(()=>{if(attempt===playbackAttempt)report(compatible?'Compatible playback did not start after '+(startupMs/1000)+' seconds.':'No video received after 20 seconds.');},startupMs);
+  v.src=u.href;v.load();$('playstatus').textContent=compatible?'Preparing same-quality compatible playback…':isMovie?'Loading movie…':isEpisode?'Loading episode…':'Connecting to live stream…';
+  const startupMs=compatible?(isFile?75000:40000):20000;playbackTimer=setTimeout(()=>{if(attempt===playbackAttempt)report(compatible?'Compatible playback did not start after '+(startupMs/1000)+' seconds.':'No video received after 20 seconds.');},startupMs);
   try{
     await v.play();
-    if(attempt===playbackAttempt&&!v.error){clearTimeout(playbackTimer);$('playstatus').textContent=isMovie&&compatible?'Now playing · Compatible movie mode · Seeking is limited':'Now playing';}
+    if(attempt===playbackAttempt&&!v.error){clearTimeout(playbackTimer);$('playstatus').textContent=isFile&&compatible?'Now playing · Compatible '+(isEpisode?'episode':'movie')+' mode · Seeking is limited':'Now playing';}
   }catch(err){
     if(attempt!==playbackAttempt)return;
     if(err.name==='NotAllowedError'){clearTimeout(playbackTimer);$('playstatus').textContent='Tap the video Play button to start playback.';}
@@ -275,8 +391,9 @@ if(savedProviders.length>1){
 }
 const connectBody=providerId?{provider_id:providerId}:undefined;
 let response;try{response=await fetch(gateway.origin+'/api/connect',{method:'POST',headers:{Authorization:'Bearer '+current.access_token,...(connectBody?{'Content-Type':'application/json'}:{})},...(connectBody?{body:JSON.stringify(connectBody)}:{}),cache:'no-store',signal:AbortSignal.timeout(60000)});}catch{throw Error('Gateway unreachable. Connect Tailscale and check that the gateway is running.');}
-const result=await response.json();if(!response.ok)throw Error(result.error==='save_provider_first'?'Save your provider securely before connecting through the gateway.':result.error==='provider_not_found'?'The selected provider is no longer saved. Pick another provider or save it again.':result.error==='provider_connection_failed'?'The saved provider could not load channels. Check the saved URL and login details.':'Gateway: '+(result.error||response.status));
+const result=await response.json();if(!result||typeof result!=='object')throw Error('Invalid gateway response.');if(!response.ok)throw Error(result.error==='save_provider_first'?'Save your provider securely before connecting through the gateway.':result.error==='provider_not_found'?'The selected provider is no longer saved. Pick another provider or save it again.':result.error==='provider_connection_failed'?'The saved provider could not load channels. Check the saved URL and login details.':'Gateway: '+(result.error||response.status));
 if(result.movies_path){if(!/^\/api\/movies\/[A-Za-z0-9_-]+$/.test(result.movies_path))throw Error('Invalid movie catalog path.');result.movies_path=gateway.origin+result.movies_path;}
+if(result.series_path){if(!/^\/api\/series\/[A-Za-z0-9_-]+$/.test(result.series_path))throw Error('Invalid series catalog path.');result.series_path=gateway.origin+result.series_path;}
 if(!Array.isArray(result.channels)||!result.streams)throw Error('Invalid gateway response.');
 for(const [id,path] of Object.entries(result.streams)){if(typeof path!=='string'||!/^\/media\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(path))throw Error('Invalid gateway stream path.');result.streams[id]=gateway.origin+path;}
 return result;

@@ -5,9 +5,10 @@ const html=fs.readFileSync(new URL('../xtream.html',import.meta.url),'utf8');
 const scripts=[...html.matchAll(/<script(?: type="module")?>([\s\S]*?)<\/script>/g)].map(m=>m[1]);
 const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
 const makeEl=()=>({value:'',textContent:'',disabled:false,type:'',className:'',children:[],classList:{add(){},remove(){},toggle(){}},style:{},append(...kids){this.children.push(...kids)},replaceChildren(){this.children=[]},setAttribute(){},addEventListener(){},onclick:null,onchange:null,pause(){},load(){},removeAttribute(){},scrollIntoView(){},requestSubmit(){throw Error('Unexpected automatic connection')}});
-async function setup({saved=null,providers=null,protocol='https:',port='',failure=0,gatewayResponse=null,gateway='',metadataFailure=false,healthResponse={ok:true,multi_provider:true}}={}){
+async function setup({saved=null,providers=null,protocol='https:',port='',failure=0,gatewayResponse=null,gateway='',metadataFailure=false,healthResponse={ok:true,multi_provider:true},autoConnect=null}={}){
  const elements=new Map(); const element=id=>{if(!elements.has(id))elements.set(id,makeEl());return elements.get(id)};
  const writes=[]; const store=new Map();
+ if(autoConnect!==null)store.set('ant-auto-connect',autoConnect?'1':'0');
  const storage={getItem:k=>store.has(k)?store.get(k):null,setItem:(k,v)=>{store.set(String(k),String(v));writes.push([k,v])},removeItem:k=>{store.delete(k)}};
  const document={getElementById:element,querySelectorAll:()=>[],querySelector:()=>null,createElement:()=>makeEl(),documentElement:{setAttribute(){},getAttribute:()=>'dark'}};
  const window={scrollTo(){}}; const location={protocol,port,assign(){}};
@@ -37,9 +38,9 @@ async function setup({saved=null,providers=null,protocol='https:',port='',failur
 const P1='11111111-1111-4111-8111-111111111111',P2='22222222-2222-4222-8222-222222222222';
 const twoProviders=[{id:P1,label:'Alpha',server_url:'http://alpha.invalid',username:'u1',password:'p1'},{id:P2,label:'Beta',server_url:'http://beta.invalid',username:'u2',password:'p2'}];
 const a=await setup();a.element('server').value='http://provider.example.invalid:8080/';a.element('user').value='test-user';a.element('pass').value='dummy-test-password';a.element('providerLabel').value='Home';a.element('gateway').value='https://homepi.test.ts.net:8443/';await a.element('saveProvider').onclick();const aPost=a.requests.find(r=>r.method==='POST'&&String(r.url).includes('provider-vault'));assert.equal(JSON.parse(aPost.body).server_url,'http://provider.example.invalid:8080');assert.equal(JSON.parse(aPost.body).label,'Home');assert.match(a.element('acctStatus').textContent,/saved securely/i);assert.equal(a.requests.length,3);assert.ok(a.requests.every(r=>r.cache==='no-store'));
-const b=await setup({saved:{saved:true,server_url:'http://provider.example.invalid:8080',username:'test-user',password:'dummy-test-password'},gateway:'https://homepi.test.ts.net:8443'});assert.equal(b.element('pass').value,'dummy-test-password');assert.equal(b.element('gateway').value,'https://homepi.test.ts.net:8443');assert.match(b.element('status').textContent,/HTTPS gateway/);assert.equal(b.requests.length,1);await b.element('deleteProvider').onclick();assert.equal(b.element('pass').value,'');assert.match(b.element('acctStatus').textContent,/deleted/);assert.equal(b.element('gateway').value,'');assert.equal(b.metadataWrites.at(-1).data.rigatoni_gateway_url,null);
+const b=await setup({saved:{saved:true,server_url:'http://provider.example.invalid:8080',username:'test-user',password:'dummy-test-password'},gateway:'https://homepi.test.ts.net:8443',autoConnect:false});assert.equal(b.element('pass').value,'dummy-test-password');assert.equal(b.element('gateway').value,'https://homepi.test.ts.net:8443');assert.match(b.element('status').textContent,/HTTPS gateway/);assert.equal(b.requests.length,1);await b.element('deleteProvider').onclick();assert.equal(b.element('pass').value,'');assert.match(b.element('acctStatus').textContent,/deleted/);assert.equal(b.element('gateway').value,'');assert.equal(b.metadataWrites.at(-1).data.rigatoni_gateway_url,null);
 const c=await setup({failure:404});assert.match(c.element('acctStatus').textContent,/unavailable/);c.element('server').value='https://provider.example.invalid';c.element('user').value='x';c.element('pass').value='x';await c.element('saveProvider').onclick();assert.match(c.element('acctStatus').textContent,/Could not save/);
-const d=await setup({protocol:'http:',port:'8090',saved:{saved:true,server_url:'http://provider.example.invalid',username:'x',password:'x'}});assert.match(d.element('status').textContent,/Choose Connect/);
+const d=await setup({protocol:'http:',port:'8090',saved:{saved:true,server_url:'http://provider.example.invalid',username:'x',password:'x'},autoConnect:false});assert.match(d.element('status').textContent,/Choose Connect/);
 assert.ok([...a.writes,...b.writes].every(([key,value])=>['rigatoni-favorites','ant-active-provider'].includes(key)&&!String(value).includes('dummy-test-password')));
 console.log('PASS save without connecting, HTTP reload without provider request, delete clears form, vault 404 reports failure, Pi mode, no credential storage');
 
@@ -54,7 +55,7 @@ const convenience=await setup();
 convenience.element('server').value='http://provider.example.invalid';convenience.element('user').value='dummy';convenience.element('pass').value='dummy-test-password';convenience.element('gateway').value='https://homepi.test.ts.net:8443/';
 await convenience.window.__rigatoniSaveSettings();
 const persisted=JSON.parse(convenience.requests.find(r=>r.method==='POST'&&String(r.url).includes('provider-vault')).body);
-const restored=await setup({saved:{saved:true,...persisted},gateway:convenience.metadataWrites.at(-1).data.rigatoni_gateway_url});
+const restored=await setup({saved:{saved:true,...persisted},gateway:convenience.metadataWrites.at(-1).data.rigatoni_gateway_url,autoConnect:false});
 assert.equal(restored.element('server').value,persisted.server_url);assert.equal(restored.element('user').value,persisted.username);assert.equal(restored.element('pass').value,persisted.password);assert.equal(restored.element('gateway').value,'https://homepi.test.ts.net:8443');assert.equal(restored.requests.length,1);
 restored.element('gateway').value='https://homepi.other.ts.net:8443/';await restored.element('gateway').onchange();assert.equal(restored.metadataWrites.at(-1).data.rigatoni_gateway_url,'https://homepi.other.ts.net:8443');assert.equal(restored.requests.length,1);
 restored.element('gateway').value='http://unsafe.example.invalid';await restored.element('gateway').onchange();assert.equal(restored.metadataWrites.length,1);assert.match(restored.element('acctStatus').textContent,/Could not save gateway/);
@@ -97,3 +98,10 @@ const mh2Post=mh2.requests.filter(r=>String(r.url).endsWith('/api/connect')).at(
 assert.equal(JSON.parse(mh2Post.body).provider_id,P1);
 assert.equal(mh2Reply.streams[7],'https://homepi.test.ts.net:8443/media/x/y');
 console.log('PASS gateway multi-provider connect sends provider_id on new gateway');
+
+// Auto-connect on sign-in: with the toggle on (the default), a saved provider and
+// gateway connect automatically; with it off, sign-in only restores the form.
+const ac=await setup({saved:{saved:true,server_url:'http://provider.example.invalid:8080',username:'test-user',password:'dummy-test-password'},gateway:'https://homepi.test.ts.net:8443',gatewayResponse:{categories:[{category_id:1,category_name:'Test'}],channels:[{stream_id:7,name:'Test channel',category_id:1}],streams:{7:'/media/x/y'}}});
+assert.ok(ac.requests.some(r=>String(r.url).endsWith('/api/connect')));
+assert.equal(ac.element('account').textContent,'Connected ✓');
+console.log('PASS auto-connect on sign-in connects through the gateway when enabled');
