@@ -7,6 +7,7 @@ import {pipeline} from 'node:stream/promises';
 import {StringDecoder} from 'node:string_decoder';
 import {execFile} from 'node:child_process';
 import {createRemuxManager} from './remux.mjs';
+import {createDownloadManager} from './downloads.mjs';
 import {pathToFileURL} from 'node:url';
 
 export function publicAddress(address) {
@@ -134,9 +135,10 @@ export async function probeMedia(url) {
   const container=/^[a-z0-9_,]+$/.test(parsed.format?.format_name||'')?parsed.format.format_name.slice(0,100):'unknown';
   return {streams,container};
 }
-export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.github.io',fetchVault=fetch,upstream=providerRequest,probe=probeMedia,now=Date.now,maxSessions=20}={}) {
+export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.github.io',fetchVault=fetch,upstream=providerRequest,probe=probeMedia,now=Date.now,maxSessions=20,moviesDir=process.env.MOVIES_PATH||'',tvDir=process.env.TV_PATH||'',downloadStatfs}={}) {
   const sessions=new Map();
   const remux=createRemuxManager({options:supportedProbeOptions,now});
+  const downloads=createDownloadManager({upstream,moviesDir,tvDir,now,statfsFn:downloadStatfs});
   let probing=false;
   const inspection=async(session,key,input)=>{
     if(session.inspections?.has(key))return session.inspections.get(key);
@@ -160,7 +162,7 @@ export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.gi
     clean();
     try {
       const path=new URL(req.url,'http://localhost').pathname;
-      if(path==='/health'&&req.method==='GET')return json(res,200,{ok:true,service:'rigatoni-gateway',multi_provider:true,downloads:true});
+      if(path==='/health'&&req.method==='GET')return json(res,200,{ok:true,service:'rigatoni-gateway',multi_provider:true,downloads:true,server_downloads:downloads.configured});
       if(path==='/api/connect'&&req.method==='POST') {
         const auth=req.headers.authorization;
         if(!auth?.startsWith('Bearer ')||auth.length>8192)return json(res,401,{error:'sign_in_required'});
@@ -203,7 +205,7 @@ export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.gi
         const streams={};for(const channelId of channelIds){if(!/^\d+$/.test(channelId))continue;streams[channelId]=register(new URL(base.href.replace(/\/+$/,'')+'/live/'+encodeURIComponent(saved.username)+'/'+encodeURIComponent(saved.password)+'/'+channelId+'.m3u8'))}
         sessions.set(id,{expires:now()+4*60*60*1000,resources,register,api,apiObject,base:base.href.replace(/\/+$/,''),username:saved.username,password:saved.password});
         // Provider icons can be HTTP or carry provider credentials. Keep cards but use the existing fallback artwork.
-        return json(res,200,{categories,channels,streams,movies_path:'/api/movies/'+id,series_path:'/api/series/'+id,expires_in:14400});
+        return json(res,200,{categories,channels,streams,movies_path:'/api/movies/'+id,series_path:'/api/series/'+id,downloads_path:'/api/downloads/'+id,expires_in:14400});
       }
       if(path.startsWith('/api/movies/')&&req.method==='GET'){
         const match=path.match(/^\/api\/movies\/([A-Za-z0-9_-]+)$/),session=match&&sessions.get(match[1]);
@@ -370,6 +372,37 @@ export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.gi
         if(req.method==='HEAD'){response.destroy();res.writeHead(response.statusCode);res.end();return}
         res.writeHead(response.statusCode);res.on('close',()=>response.destroy());await pipeline(response,res);return;
       }
+      if(path.startsWith('/api/downloads/')) {
+        const jobMatch=path.match(/^\/api\/downloads\/([A-Za-z0-9_-]+)\/([A-Za-z0-9_-]+)$/);
+        const listMatch=!jobMatch&&path.match(/^\/api\/downloads\/([A-Za-z0-9_-]+)$/);
+        if(jobMatch&&req.method==='GET'){
+          const session=sessions.get(jobMatch[1]);
+          if(!session)return json(res,401,{error:'stream_session_expired'});
+          const job=downloads.get(jobMatch[2]);
+          if(!job)return json(res,404,{error:'download_not_found'});
+          return json(res,200,job);
+        }
+        if(listMatch&&req.method==='GET'){
+          const session=sessions.get(listMatch[1]);
+          if(!session)return json(res,401,{error:'stream_session_expired'});
+          return json(res,200,{jobs:downloads.list()});
+        }
+        if(listMatch&&req.method==='POST'){
+          const session=sessions.get(listMatch[1]);
+          if(!session)return json(res,401,{error:'stream_session_expired'});
+          const rawBody=await boundedBody(req,4096).catch(()=>null);
+          if(!rawBody)return json(res,400,{error:'invalid_request'});
+          let body;try{body=JSON.parse(rawBody)}catch{return json(res,400,{error:'invalid_request'})}
+          try{
+            const job=downloads.create({session,body});
+            return json(res,202,job);
+          }catch(error){
+            if(error.status&&error.code)return json(res,error.status,{error:error.code});
+            throw error;
+          }
+        }
+        return json(res,404,{error:'not_found'});
+      }
       return json(res,404,{error:'not_found'});
     } catch(error) {
       if(res.headersSent){res.destroy();return}
@@ -377,7 +410,7 @@ export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.gi
       return json(res,error.message==='probe_busy'?429:502,{error:known.includes(error.message)?error.message:'gateway_request_failed'});
     }
   });
-  server.on('close',()=>{void remux.close()});server.closeCompatibility=()=>remux.close();
+  server.on('close',()=>{void remux.close();downloads.close()});server.closeCompatibility=()=>remux.close();
   server.requestTimeout=30000;server.headersTimeout=15000;
   return server;
 }

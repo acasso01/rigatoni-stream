@@ -436,3 +436,91 @@ assert.equal(vm.runInContext('window.__dlNav',context),'https://homepi.test.ts.n
 await episodeRows()[0].onclick();assert.equal(get('video').src,'https://homepi.test.ts.net/media/test/ep101');assert.equal(get('playing').textContent,'Dummy series S1E1 — Pilot');
 vm.runInContext('stopVideo()',context);
 console.log('PASS download links: episode rows with Jellyfin names, HEAD probe navigation, row tap still plays');
+
+// --- Server downloads: button states, polling, Downloads tab, fallback ---
+window.__rigatoniClearProvider();
+get('search').value='';
+context.AbortSignal=AbortSignal;
+let dlJob={job_id:'job1',kind:'movie',stream_id:'1',filename:'Dune (2021).mp4',status:'queued',bytes:0,total_bytes:100,error:null};
+let dlPosts=[];
+context.fetch=async(url,options)=>{
+  const u=new URL(url);
+  if(u.pathname==='/api/downloads/dl-session'){
+    if(options?.method==='POST'){dlPosts.push(JSON.parse(options.body));return new Response(JSON.stringify({job_id:'job1',status:'queued',filename:'Dune (2021).mp4'}),{status:202,headers:{'content-type':'application/json'}})}
+    return new Response(JSON.stringify({jobs:[dlJob]}),{headers:{'content-type':'application/json'}});
+  }
+  return new Response(JSON.stringify({categories:[],movies:[
+    {stream_id:1,name:'Dune (2021)',kind:'movie',category_id:'1',container_extension:'mp4',stream_icon:''},
+    {stream_id:4,name:'Dune (1984)',kind:'movie',category_id:'1',container_extension:'mp4',stream_icon:''},
+  ],streams:{1:'/media/movie-session/resource1',4:'/media/movie-session/resource4'}}),{headers:{'content-type':'application/json'}});
+};
+vm.runInContext("credentials={base:'https://provider.example.invalid',user:'dummy',pass:'dummy'};gatewayStreams={7:'https://homepi.test.ts.net/media/session/resource'};moviesPath='https://homepi.test.ts.net/api/movies/movie-session';downloadsPath='https://homepi.test.ts.net/api/downloads/dl-session';usOnly=false;gatewayDownloads=true;gatewayServerDownloads=true;showTab('movies')",context);
+await vm.runInContext('loadMovies()',context);
+assert.equal(cards().length,2);
+const serverBtn=dlOf(cards()[0]);
+assert.ok(serverBtn);
+assert.equal(serverBtn.tag,'button');
+assert.equal(serverBtn.textContent,'⬇');
+serverBtn.onclick({preventDefault(){},stopPropagation(){}});
+await new Promise(r=>setTimeout(r,50));
+assert.equal(dlPosts.length,1);
+assert.deepEqual(dlPosts[0],{kind:'movie',stream_id:'1',container_extension:'mp4',filename:'Dune (2021).mp4'});
+assert.equal(serverBtn.textContent,'…');
+dlJob={...dlJob,status:'downloading',bytes:50};
+await vm.runInContext('pollServerDownloads()',context);
+assert.equal(serverBtn.textContent,'50%');
+dlJob={...dlJob,status:'done',bytes:100};
+await vm.runInContext('pollServerDownloads()',context);
+assert.equal(serverBtn.textContent,'✓');
+assert.equal(serverBtn.title,'Saved to Jellyfin');
+vm.runInContext("showTab('downloads')",context);
+const dlRows=()=>descendants(get('rows')).filter(n=>n.className==='download-row');
+assert.equal(dlRows().length,1);
+assert.equal(dlRows()[0].children[0].textContent,'Dune (2021).mp4');
+assert.equal(dlRows()[0].children[1].textContent,'✓ Saved to Jellyfin');
+vm.runInContext("gatewayServerDownloads=false;render()",context);
+assert.match(errText(),/latest Pi gateway/);
+vm.runInContext("gatewayServerDownloads=true;showTab('movies')",context);
+assert.equal(dlOf(cards()[0]).tag,'button');
+vm.runInContext("gatewayServerDownloads=false;render()",context);
+assert.equal(dlOf(cards()[0]).tag,'a');
+assert.equal(dlOf(cards()[0]).href,'https://homepi.test.ts.net/download/movie-session/resource1?filename=Dune%20(2021).mp4');
+vm.runInContext('stopDownloadsPolling()',context);
+console.log('PASS server downloads: movie tile button states, polling progress, Downloads tab, old-gateway notice and Phase 1 fallback');
+
+// --- Server downloads: episode rows post to the Pi with show/season ---
+window.__rigatoniClearProvider();
+get('search').value='';
+let epJob={job_id:'job2',kind:'episode',stream_id:'101',filename:'Dummy series - S01E01 - Pilot.mp4',status:'queued',bytes:0,total_bytes:10,error:null};
+let epPosts=[];
+context.fetch=async(url,options)=>{
+  const u=new URL(url);
+  if(u.pathname==='/api/downloads/dl-session'){
+    if(options?.method==='POST'){epPosts.push(JSON.parse(options.body));return new Response(JSON.stringify({job_id:'job2',status:'queued',filename:'Dummy series - S01E01 - Pilot.mp4'}),{status:202,headers:{'content-type':'application/json'}})}
+    return new Response(JSON.stringify({jobs:[epJob]}),{headers:{'content-type':'application/json'}});
+  }
+  if(u.pathname.endsWith('/info'))return new Response(JSON.stringify({info:{name:'Dummy series',cover:'/media/test/cover',plot:'A test plot.',cast:'Actor One',genre:'Drama',releaseDate:'2024-01-01',rating:'8.5'},seasons:[{season_number:1,episode_count:2,name:'Season 1'}],episodes:{'1':[{id:101,episode_num:1,title:'Pilot',container_extension:'mp4',season:1,stream_icon:'/media/test/ep101',plot:'Pilot plot.'},{id:102,episode_num:2,title:'Second',container_extension:'mkv',season:1}]},streams:{101:'/media/test/ep101',102:'/media/test/ep102'}}),{headers:{'content-type':'application/json'}});
+  return new Response(JSON.stringify({categories:[],series:[{stream_id:5,series_id:5,kind:'series',name:'Dummy series',category_id:'9',stream_icon:'/media/test/cover',rating:'8.5'}]}),{headers:{'content-type':'application/json'}});
+};
+vm.runInContext("credentials={base:'https://provider.example.invalid',user:'dummy',pass:'dummy'};gatewayStreams={7:'https://homepi.test.ts.net/media/session/resource'};seriesPath='https://homepi.test.ts.net/api/series/series-session';downloadsPath='https://homepi.test.ts.net/api/downloads/dl-session';gatewayDownloads=true;gatewayServerDownloads=true;showTab('series')",context);
+await vm.runInContext('loadSeries()',context);
+await cards()[0].onclick();
+assert.equal(episodeRows().length,2);
+const epBtn=episodeRows()[0].children.find(n=>n.className==='dl');
+assert.ok(epBtn);
+assert.equal(epBtn.tag,'button');
+epBtn.onclick({preventDefault(){},stopPropagation(){}});
+await new Promise(r=>setTimeout(r,50));
+assert.equal(epPosts.length,1);
+assert.deepEqual(epPosts[0],{kind:'episode',stream_id:'101',container_extension:'mp4',filename:'Dummy series - S01E01 - Pilot.mp4',show:'Dummy series',season:'1'});
+epJob={...epJob,status:'done',bytes:10};
+await vm.runInContext('pollServerDownloads()',context);
+assert.equal(epBtn.textContent,'✓');
+vm.runInContext("showTab('downloads')",context);
+assert.equal(dlRows().length,1);
+assert.equal(dlRows()[0].children[0].textContent,'Dummy series - S01E01 - Pilot.mp4');
+vm.runInContext('stopDownloadsPolling()',context);
+console.log('PASS server downloads: episode rows post show/season to the Pi and finish in the Downloads tab');
+
+// Leave no polling timer behind so the process can exit.
+vm.runInContext("tab='movies';downloadsPath=null;stopDownloadsPolling()",context);
