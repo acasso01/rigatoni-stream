@@ -8,19 +8,19 @@
 <div class="content"><div id="searchwrap" class="hide"><input class="searchbar" id="search" type="search" placeholder="Search channels…" autocomplete="off"><p id="count"></p></div><div id="rows"></div><p class="footnote">Ant Streams · Private development preview. Channel availability and playback depend on your provider.</p></div></div></main>
 <div id="watch" class="hide"><div id="watchbar"><button class="btn ghost" id="close">← Back</button><strong id="playing"></strong><button class="btn ghost" id="fullscreen">⛶</button></div><video id="video" controls playsinline autoplay></video><small id="playstatus">Loading stream…</small><button id="compatible" class="btn ghost hide" type="button" style="margin:0 20px 16px">Try compatible playback (same quality)</button><button id="alternate" class="btn ghost hide" type="button" style="margin:0 20px 16px">Try alternate player (same quality)</button></div>
 <script>
-const $=id=>document.getElementById(id);let gatewayStreams=null,credentials=null,channels=[],categories=[],movies=[],movieCategories=[],movieStreams=null,moviesPath=null,moviesLoaded=false,moviesLoading=null,movieError='',movieCategoryMode=false,movieCategory='',series=[],seriesCategories=[],seriesStreams=null,seriesPath=null,seriesLoaded=false,seriesLoading=null,seriesError='',seriesCategoryMode=false,seriesCategory='',seriesDetail=null,seriesDetailLoading=null,seriesDetailError='',seriesSeason='',tab='home',categoryPage=0,searchTimer,versionGroup=null,usOnly=localStorage.getItem('ant-us-only')==='1';let lastVersions={};try{lastVersions=JSON.parse(localStorage.getItem('ant-last-version')||'{}')||{}}catch(e){lastVersions={}}const favorites=new Set(JSON.parse(localStorage.getItem('rigatoni-favorites')||'[]'));window.__rigatoniFavorites=favorites;const status=s=>$('status').textContent=s;
+const $=id=>document.getElementById(id);let gatewayStreams=null,credentials=null,channels=[],categories=[],movies=[],movieCategories=[],movieStreams=null,moviesPath=null,moviesLoaded=false,moviesLoading=null,movieError='',movieCategoryMode=false,movieCategory='',series=[],seriesCategories=[],seriesStreams=null,seriesPath=null,seriesLoaded=false,seriesLoading=null,seriesError='',seriesCategoryMode=false,seriesCategory='',seriesDetail=null,seriesDetailLoading=null,seriesDetailError='',seriesSeason='',tab='home',categoryPage=0,searchTimer,movieCatCache=new Map(),seriesCatCache=new Map(),searchSweep=null,searchToken=0,versionGroup=null,usOnly=localStorage.getItem('ant-us-only')==='1';let lastVersions={};try{lastVersions=JSON.parse(localStorage.getItem('ant-last-version')||'{}')||{}}catch(e){lastVersions={}}const favorites=new Set(JSON.parse(localStorage.getItem('rigatoni-favorites')||'[]'));window.__rigatoniFavorites=favorites;const status=s=>$('status').textContent=s;
 function endpoint(action){const u=new URL(credentials.base+'/player_api.php');u.searchParams.set('username',credentials.user);u.searchParams.set('password',credentials.pass);u.searchParams.set('action',action);return u}
 async function load(action,params){const local=location.protocol==='http:'&&location.port==='8090';const target=endpoint(action);if(params)for(const [k,v] of Object.entries(params))target.searchParams.set(k,String(v));const r=await fetch(local?'/api':target,local?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({server:credentials.base,username:credentials.user,password:credentials.pass,action,...(params||{})}),cache:'no-store'}:{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);return r.json()}
-async function doConnect(opts){opts=opts||{};try{if(opts.saveFirst!==false&&window.__rigatoniSaveSettings){status('Saving your provider and gateway…');await window.__rigatoniSaveSettings();}if(window.__rigatoniSignedIn&&window.__rigatoniGetProvider){const aid=localStorage.getItem('ant-active-provider');if(aid){try{const full=await window.__rigatoniGetProvider(aid);if(full&&full.saved){$('server').value=full.server_url;$('user').value=full.username;$('pass').value=full.password;}}catch{}}}const password=$('pass').value;const url=new URL($('server').value.trim());if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash)throw Error('Enter only the provider server URL.');if(location.protocol==='https:'&&url.protocol==='http:'&&!$('gateway').value.trim())throw Error('Playback requires the HTTPS gateway on GitHub Pages. You can still save this HTTP provider securely, or use the private Raspberry Pi test site.');credentials={base:url.href.replace(/\/+$/,''),user:$('user').value.trim(),pass:password};$('connect').disabled=true;status('Connecting to your channels…');gatewayStreams=null;movies=[];movieCategories=[];movieStreams=null;moviesPath=null;moviesLoaded=false;moviesLoading=null;movieError='';movieCategoryMode=false;movieCategory='';series=[];seriesCategories=[];seriesStreams=null;seriesPath=null;seriesLoaded=false;seriesLoading=null;seriesError='';seriesCategoryMode=false;seriesCategory='';seriesDetail=null;seriesDetailLoading=null;seriesDetailError='';seriesSeason='';let cats,streams;if($('gateway').value.trim()){if(!window.__rigatoniGatewayConnect)throw Error('Sign in before using the gateway.');const result=await window.__rigatoniGatewayConnect();cats=result.categories;streams=result.channels;gatewayStreams=result.streams;moviesPath=result.movies_path||null;seriesPath=result.series_path||null;}else [cats,streams]=await Promise.all([load('get_live_categories'),load('get_live_streams')]);if(!Array.isArray(streams))throw Error('Unexpected channel response');categories=Array.isArray(cats)?cats:[];channels=streams;$('login').classList.add('hide');$('app').classList.remove('hide');$('account').textContent='Connected ✓';showTab('home')}catch(err){credentials=null;gatewayStreams=null;status('Connection failed: '+err.message)}finally{$('connect').disabled=false}}
+async function doConnect(opts){opts=opts||{};try{if(opts.saveFirst!==false&&window.__rigatoniSaveSettings){status('Saving your provider and gateway…');await window.__rigatoniSaveSettings();}if(window.__rigatoniSignedIn&&window.__rigatoniGetProvider){const aid=localStorage.getItem('ant-active-provider');if(aid){try{const full=await window.__rigatoniGetProvider(aid);if(full&&full.saved){$('server').value=full.server_url;$('user').value=full.username;$('pass').value=full.password;}}catch{}}}const password=$('pass').value;const url=new URL($('server').value.trim());if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash)throw Error('Enter only the provider server URL.');if(location.protocol==='https:'&&url.protocol==='http:'&&!$('gateway').value.trim())throw Error('Playback requires the HTTPS gateway on GitHub Pages. You can still save this HTTP provider securely, or use the private Raspberry Pi test site.');credentials={base:url.href.replace(/\/+$/,''),user:$('user').value.trim(),pass:password};$('connect').disabled=true;status('Connecting to your channels…');gatewayStreams=null;movies=[];movieCategories=[];movieStreams=null;moviesPath=null;moviesLoaded=false;moviesLoading=null;movieError='';movieCategoryMode=false;movieCategory='';series=[];seriesCategories=[];seriesStreams=null;seriesPath=null;seriesLoaded=false;seriesLoading=null;seriesError='';seriesCategoryMode=false;seriesCategory='';seriesDetail=null;seriesDetailLoading=null;seriesDetailError='';seriesSeason='';movieCatCache.clear();seriesCatCache.clear();searchToken++;searchSweep=null;let cats,streams;if($('gateway').value.trim()){if(!window.__rigatoniGatewayConnect)throw Error('Sign in before using the gateway.');const result=await window.__rigatoniGatewayConnect();cats=result.categories;streams=result.channels;gatewayStreams=result.streams;moviesPath=result.movies_path||null;seriesPath=result.series_path||null;}else [cats,streams]=await Promise.all([load('get_live_categories'),load('get_live_streams')]);if(!Array.isArray(streams))throw Error('Unexpected channel response');categories=Array.isArray(cats)?cats:[];channels=streams;$('login').classList.add('hide');$('app').classList.remove('hide');$('account').textContent='Connected ✓';showTab('home')}catch(err){credentials=null;gatewayStreams=null;status('Connection failed: '+err.message)}finally{$('connect').disabled=false}}
 $('form').onsubmit=e=>{e.preventDefault();doConnect({saveFirst:true})};
 window.__antConnect=doConnect;
-$('account').onclick=()=>{if(credentials){if(confirm('Disconnect from this provider?')){credentials=null;gatewayStreams=null;channels=[];categories=[];movies=[];movieCategories=[];movieStreams=null;moviesPath=null;moviesLoaded=false;moviesLoading=null;movieError='';movieCategoryMode=false;movieCategory='';series=[];seriesCategories=[];seriesStreams=null;seriesPath=null;seriesLoaded=false;seriesLoading=null;seriesError='';seriesCategoryMode=false;seriesCategory='';seriesDetail=null;seriesDetailLoading=null;seriesDetailError='';seriesSeason='';$('rows').replaceChildren();$('app').classList.add('hide');$('login').classList.remove('hide');$('account').textContent='Connect';stopVideo()}}else if(!window.__rigatoniSignedIn&&location.protocol==='https:')location.assign('./auth.html');else $('login').scrollIntoView()};
+$('account').onclick=()=>{if(credentials){if(confirm('Disconnect from this provider?')){credentials=null;gatewayStreams=null;channels=[];categories=[];movies=[];movieCategories=[];movieStreams=null;moviesPath=null;moviesLoaded=false;moviesLoading=null;movieError='';movieCategoryMode=false;movieCategory='';series=[];seriesCategories=[];seriesStreams=null;seriesPath=null;seriesLoaded=false;seriesLoading=null;seriesError='';seriesCategoryMode=false;seriesCategory='';seriesDetail=null;seriesDetailLoading=null;seriesDetailError='';seriesSeason='';movieCatCache.clear();seriesCatCache.clear();searchToken++;searchSweep=null;$('rows').replaceChildren();$('app').classList.add('hide');$('login').classList.remove('hide');$('account').textContent='Connect';stopVideo()}}else if(!window.__rigatoniSignedIn&&location.protocol==='https:')location.assign('./auth.html');else $('login').scrollIntoView()};
 function updateTabPresentation(t){
  const copy={home:['Live TV, made yours.','Discover channels, save your favorites, and jump straight into what you love.','▶ Browse Live TV','Search channels…'],live:['Live TV, made yours.','Browse your provider’s live channels and catch what’s on now.','▶ Browse Live TV','Search channels…'],movies:['Movie night, made yours.','Explore your provider’s movies and find your next favorite.','▶ Browse Movies','Search movies…'],favorites:['Your list, your favorites.','Your saved channels and movies, ready when you are.','▶ Browse Live TV','Search your list…'],series:['TV shows, made yours.','Browse your provider’s series — pick a show, then an episode.','▶ Browse Series','Search series…']}[t];
  $('heroTitle').textContent=copy[0];$('heroDescription').textContent=copy[1];$('browse').textContent=copy[2];$('search').placeholder=copy[3];$('search').value='';
 }
-function showTab(t){if(!credentials){status('Sign in and connect your provider to browse your library.');if(!window.__rigatoniSignedIn&&location.protocol==='https:')location.assign('./auth.html');else $('login').scrollIntoView();return}clearTimeout(searchTimer);categoryPage=0;tab=t;versionGroup=null;updateTabPresentation(t);document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===t));$('searchwrap').classList.toggle('hide',t==='home');if(t!=='series'){seriesDetail=null;seriesDetailLoading=null;seriesDetailError=''}render();window.scrollTo(0,0);if(t==='movies'&&!moviesLoaded)void loadMovies();if(t==='series'&&!seriesLoaded)void loadSeries()}
-document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));$('browse').onclick=()=>showTab(tab==='movies'?'movies':tab==='series'?'series':'live');$('mylist').onclick=()=>showTab('favorites');$('search').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{categoryPage=0;render()},180)};
+function showTab(t){if(!credentials){status('Sign in and connect your provider to browse your library.');if(!window.__rigatoniSignedIn&&location.protocol==='https:')location.assign('./auth.html');else $('login').scrollIntoView();return}clearTimeout(searchTimer);categoryPage=0;searchToken++;searchSweep=null;tab=t;versionGroup=null;updateTabPresentation(t);document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===t));$('searchwrap').classList.toggle('hide',t==='home');if(t!=='series'){seriesDetail=null;seriesDetailLoading=null;seriesDetailError=''}render();window.scrollTo(0,0);if(t==='movies'&&!moviesLoaded)void loadMovies();if(t==='series'&&!seriesLoaded)void loadSeries()}
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));$('browse').onclick=()=>showTab(tab==='movies'?'movies':tab==='series'?'series':'live');$('mylist').onclick=()=>showTab('favorites');$('search').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{categoryPage=0;if(!$('search').value.trim()){searchToken++;searchSweep=null}render()},180)};
 function favoriteId(c){return(c.kind==='movie'?'movie:':c.kind==='series'?'series:':'')+String(c.stream_id)}
 const US_EN_WORDS=new Set(['us','usa','en','eng','english']);
 function isUsEnCategory(cat){const words=String(cat&&cat.category_name||'').toLowerCase().replace(/\./g,'').replace(/[^a-z0-9]+/g,' ').trim().split(/\s+/);return words.some(w=>US_EN_WORDS.has(w))}
@@ -31,7 +31,7 @@ function groupItems(items){const groups=new Map(),order=[];for(const c of items)
 function rememberVersion(g,v){lastVersions[g.key]=String(v.stream_id);try{localStorage.setItem('ant-last-version',JSON.stringify(lastVersions))}catch(e){}}
 function groupIsFav(g){return g.versions.some(v=>favorites.has(favoriteId(v)))}
 function toggleGroupFav(g){const any=groupIsFav(g);for(const v of g.versions){const id=favoriteId(v);if(any){if(favorites.has(id)){favorites.delete(id);if(window.__rigatoniFavChanged)window.__rigatoniFavChanged(id,false,v.name||'')}}else if(v===g.versions[0]){favorites.add(id);if(window.__rigatoniFavChanged)window.__rigatoniFavChanged(id,true,v.name||'')}}localStorage.setItem('rigatoni-favorites',JSON.stringify([...favorites]))}
-function renderFilterBar(root){const bar=document.createElement('div');bar.className='filterbar';const label=document.createElement('label');label.className='us-only';const input=document.createElement('input');input.type='checkbox';input.checked=usOnly;input.setAttribute('aria-label','US and English categories only');input.onchange=()=>{usOnly=input.checked;try{localStorage.setItem('ant-us-only',usOnly?'1':'0')}catch(e){}categoryPage=0;render()};label.append(input);const span=document.createElement('span');span.textContent='US / English only';label.append(span);bar.append(label);root.append(bar)}
+function renderFilterBar(root){const bar=document.createElement('div');bar.className='filterbar';const label=document.createElement('label');label.className='us-only';const input=document.createElement('input');input.type='checkbox';input.checked=usOnly;input.setAttribute('aria-label','US and English categories only');input.onchange=()=>{usOnly=input.checked;try{localStorage.setItem('ant-us-only',usOnly?'1':'0')}catch(e){}categoryPage=0;searchToken++;searchSweep=null;render()};label.append(input);const span=document.createElement('span');span.textContent='US / English only';label.append(span);bar.append(label);root.append(bar)}
 function showVersionPicker(g){versionGroup=g;render()}
 function renderVersionPicker(root){
  const back=document.createElement('button');back.className='btn ghost';back.textContent='← Back';back.onclick=()=>{versionGroup=null;render()};root.append(back);
@@ -57,15 +57,93 @@ function renderVersionPicker(root){
  }
  root.append(wrap);
 }
+function gatewayReasons(kind){
+ const noun=kind==='movie'?'movie':'series',plural=kind==='movie'?'movies':'series';
+ return{catalog_too_large:'The '+noun+' catalog exceeds the gateway’s item limit.',response_too_large:'The '+noun+' catalog exceeds the gateway’s response-size limit.',session_resource_limit:kind==='movie'?'The combined live TV, movie and poster catalog exceeds the gateway’s resource limit.':'The combined live TV, movie, series and poster catalog exceeds the gateway’s resource limit.',provider_connection_failed:'The provider rejected the '+noun+' request or returned an invalid catalog.',upstream_timeout:'The provider timed out while loading '+plural+'.',upstream_unavailable:'The gateway could not reach the provider’s '+noun+' API.',unsafe_target:'The '+noun+' provider address failed the gateway security check.',not_found:'The gateway '+noun+' endpoint is unavailable. Update the Pi gateway and reconnect.'};
+}
+async function fetchGatewayCatalog(path,kind){
+ const reasons=gatewayReasons(kind);
+ for(let attempt=0;attempt<3;attempt++){
+  const r=await fetch(path,{cache:'no-store',signal:AbortSignal.timeout(60000)});
+  if(r.status===429&&attempt<2){await new Promise(res=>setTimeout(res,600));continue}
+  if(!r.ok){const failure=await r.json().catch(()=>({}));const err=Error(r.status===401?('Reconnect your provider to refresh the '+kind+' session.'):(reasons[failure.error]||('The gateway could not load the '+kind+' catalog.'))+' (Gateway HTTP '+r.status+')');err.status=r.status;throw err}
+  return r.json();
+ }
+}
+function normalizeMovieResult(result,basePath){
+ const origin=new URL(basePath).origin;
+ for(const movie of result.movies||[]){movie.kind='movie';if(movie.stream_icon){if(!/^\/media\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(movie.stream_icon))throw Error('Invalid movie poster path.');movie.stream_icon=origin+movie.stream_icon;}}
+ for(const [id,streamPath] of Object.entries(result.streams||{})){if(typeof streamPath!=='string'||!/^\/media\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(streamPath))throw Error('Invalid movie stream path.');result.streams[id]=origin+streamPath;}
+ if(!Array.isArray(result.movies)||!Array.isArray(result.categories)||!result.streams)throw Error('Invalid movie catalog.');
+ return result;
+}
+function normalizeSeriesResult(result,basePath){
+ const origin=new URL(basePath).origin;
+ for(const item of result.series||[]){item.kind='series';if(item.stream_icon){if(!/^\/media\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(item.stream_icon))throw Error('Invalid series poster path.');item.stream_icon=origin+item.stream_icon;}}
+ if(!Array.isArray(result.series)||!Array.isArray(result.categories))throw Error('Invalid series catalog.');
+ return result;
+}
+async function fetchMovieCategory(catId){
+ const url=new URL(moviesPath);url.searchParams.set('category_id',String(catId));
+ const result=await fetchGatewayCatalog(url.href,'movie');
+ normalizeMovieResult(result,moviesPath);
+ if(result.streams)movieStreams={...(movieStreams||{}),...result.streams};
+ return result.movies;
+}
+async function fetchSeriesCategory(catId){
+ const url=new URL(seriesPath);url.searchParams.set('category_id',String(catId));
+ const result=await fetchGatewayCatalog(url.href,'series');
+ normalizeSeriesResult(result,seriesPath);
+ return result.series;
+}
+function startSearchSweep(kind,q){
+ const token=++searchToken;
+ const cats=kind==='movies'?movieCategories:seriesCategories;
+ const visibleCats=usOnly?cats.filter(isUsEnCategory):cats;
+ const currentCat=kind==='movies'?movieCategory:seriesCategory;
+ const cache=kind==='movies'?movieCatCache:seriesCatCache;
+ const currentItems=kind==='movies'?movies:series;
+ if(currentCat)cache.set(String(currentCat),currentItems);
+ const seen=new Set();
+ const sweep={kind,query:q,token,done:false,items:[],error:''};
+ searchSweep=sweep;
+ const match=item=>String(item.name||'').toLowerCase().includes(q);
+ for(const item of currentItems){const key=item.kind+'|'+item.stream_id;if(seen.has(key))continue;seen.add(key);if(match(item))sweep.items.push(item)}
+ const pending=visibleCats.filter(c=>String(c.category_id)!==String(currentCat));
+ let next=0;
+ const run=async()=>{
+  while(next<pending.length){
+   if(token!==searchToken)return;
+   const cat=pending[next++];
+   const cid=String(cat.category_id);
+   let items;
+   if(cache.has(cid))items=cache.get(cid);
+   else{
+    let ok=false;
+    try{items=kind==='movies'?await fetchMovieCategory(cid):await fetchSeriesCategory(cid);ok=true}
+    catch(e){if(token!==searchToken)return;sweep.error=sweep.error||e.message;items=[]}
+    if(token!==searchToken)return;
+    if(ok)cache.set(cid,items||[]);
+   }
+   if(token!==searchToken||credentials===null)return;
+   for(const item of items||[]){const key=item.kind+'|'+item.stream_id;if(seen.has(key))continue;seen.add(key);if(match(item))sweep.items.push(item)}
+   if(tab===kind&&$('search').value.trim().toLowerCase()===q)render();
+  }
+ };
+ const workers=[];const n=Math.min(2,pending.length);
+ for(let i=0;i<n;i++)workers.push(run());
+ Promise.all(workers.map(w=>w.catch(()=>{}))).then(()=>{if(token!==searchToken)return;sweep.done=true;if(tab===kind&&$('search').value.trim().toLowerCase()===q)render()});
+ return sweep;
+}
 async function loadMovies(){
  if(moviesLoading)return moviesLoading;
  if(!credentials){movieError='Connect your provider to browse movies.';render();return}
  const current=credentials;
  moviesLoading=Promise.resolve().then(async()=>{
   try{
-   let result;if(gatewayStreams){if(!moviesPath)throw Error('Update the Pi gateway to enable Movies.');const fetchCatalog=async path=>{const r=await fetch(path,{cache:'no-store',signal:AbortSignal.timeout(60000)});if(!r.ok){const failure=await r.json().catch(()=>({}));const reasons={catalog_too_large:'The movie catalog exceeds the gateway’s item limit.',response_too_large:'The movie catalog exceeds the gateway’s response-size limit.',session_resource_limit:'The combined live TV, movie and poster catalog exceeds the gateway’s resource limit.',provider_connection_failed:'The provider rejected the movie request or returned an invalid catalog.',upstream_timeout:'The provider timed out while loading movies.',upstream_unavailable:'The gateway could not reach the provider’s movie API.',unsafe_target:'The movie provider address failed the gateway security check.',not_found:'The gateway movie endpoint is unavailable. Update the Pi gateway and reconnect.'};throw Error(r.status===401?'Reconnect your provider to refresh the movie session.':(reasons[failure.error]||'The gateway could not load the movie catalog.')+' (Gateway HTTP '+r.status+')');}return r.json()};const requestPath=new URL(moviesPath);if(movieCategoryMode&&movieCategory)requestPath.searchParams.set('category_id',movieCategory);result=await fetchCatalog(requestPath.href);if(credentials!==current)return;if(result.browse_by_category){if(!Array.isArray(result.categories))throw Error('Invalid movie categories.');movieCategoryMode=true;movieCategories=result.categories.filter(c=>/^\d{1,20}$/.test(String(c.category_id)));if(!result.category_id&&movieCategories.length){movieCategory=String(movieCategories[0].category_id);requestPath.searchParams.set('category_id',movieCategory);result=await fetchCatalog(requestPath.href);if(result.category_id!==movieCategory)throw Error('Update the Pi gateway to load movie categories.');}else if(result.category_id)movieCategory=String(result.category_id);}const origin=new URL(moviesPath).origin;for(const movie of result.movies||[]){movie.kind='movie';if(movie.stream_icon){if(!/^\/media\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(movie.stream_icon))throw Error('Invalid movie poster path.');movie.stream_icon=origin+movie.stream_icon;}}for(const [id,path] of Object.entries(result.streams||{})){if(typeof path!=='string'||!/^\/media\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(path))throw Error('Invalid movie stream path.');result.streams[id]=origin+path;}if(!Array.isArray(result.movies)||!Array.isArray(result.categories)||!result.streams)throw Error('Invalid movie catalog.');}
+   let result;if(gatewayStreams){if(!moviesPath)throw Error('Update the Pi gateway to enable Movies.');const fetchCatalog=async path=>fetchGatewayCatalog(path,'movie');const requestPath=new URL(moviesPath);if(movieCategoryMode&&movieCategory)requestPath.searchParams.set('category_id',movieCategory);result=await fetchCatalog(requestPath.href);if(credentials!==current)return;if(result.browse_by_category){if(!Array.isArray(result.categories))throw Error('Invalid movie categories.');movieCategoryMode=true;movieCategories=result.categories.filter(c=>/^\d{1,20}$/.test(String(c.category_id)));if(!result.category_id&&movieCategories.length){movieCategory=String(movieCategories[0].category_id);requestPath.searchParams.set('category_id',movieCategory);result=await fetchCatalog(requestPath.href);if(result.category_id!==movieCategory)throw Error('Update the Pi gateway to load movie categories.');}else if(result.category_id)movieCategory=String(result.category_id);}normalizeMovieResult(result,moviesPath);}
    else{const [categories,movies]=await Promise.all([load('get_vod_categories'),load('get_vod_streams')]);if(!Array.isArray(movies))throw Error('Invalid movie catalog.');result={categories:Array.isArray(categories)?categories:[],movies:movies.map(c=>({...c,kind:'movie',container_extension:/^(mp4|m4v|mov|mkv|avi|webm|ts|m3u8)$/.test(c.container_extension)?c.container_extension:'mp4'}))};}
-   if(credentials!==current)return;movies=result.movies;movieCategories=result.categories;movieStreams=result.streams||null;moviesLoaded=true;movieError='';
+   if(credentials!==current)return;movies=result.movies;movieCategories=result.categories;movieStreams=result.streams||null;moviesLoaded=true;movieError='';if(movieCategoryMode&&movieCategory)movieCatCache.set(String(movieCategory),result.movies);
   }catch(error){if(credentials===current)movieError=error.message}
   finally{if(credentials===current){moviesLoading=null;if(tab==='movies')render()}}
  });return moviesLoading;
@@ -79,20 +157,18 @@ async function loadSeries(){
    let result;
    if(gatewayStreams){
     if(!seriesPath)throw Error('Update the Pi gateway to enable Series.');
-    const fetchCatalog=async path=>{const r=await fetch(path,{cache:'no-store',signal:AbortSignal.timeout(60000)});if(!r.ok){const failure=await r.json().catch(()=>({}));const reasons={catalog_too_large:'The series catalog exceeds the gateway’s item limit.',response_too_large:'The series catalog exceeds the gateway’s response-size limit.',session_resource_limit:'The combined live TV, movie, series and poster catalog exceeds the gateway’s resource limit.',provider_connection_failed:'The provider rejected the series request or returned an invalid catalog.',upstream_timeout:'The provider timed out while loading series.',upstream_unavailable:'The gateway could not reach the provider’s series API.',unsafe_target:'The series provider address failed the gateway security check.',not_found:'The gateway series endpoint is unavailable. Update the Pi gateway and reconnect.'};throw Error(r.status===401?'Reconnect your provider to refresh the series session.':(reasons[failure.error]||'The gateway could not load the series catalog.')+' (Gateway HTTP '+r.status+')');}return r.json()};
+    const fetchCatalog=async path=>fetchGatewayCatalog(path,'series');
     const requestPath=new URL(seriesPath);if(seriesCategoryMode&&seriesCategory)requestPath.searchParams.set('category_id',seriesCategory);
     result=await fetchCatalog(requestPath.href);
     if(credentials!==current)return;
     if(result.browse_by_category){if(!Array.isArray(result.categories))throw Error('Invalid series categories.');seriesCategoryMode=true;seriesCategories=result.categories.filter(c=>/^\d{1,20}$/.test(String(c.category_id)));if(!result.category_id&&seriesCategories.length){seriesCategory=String(seriesCategories[0].category_id);requestPath.searchParams.set('category_id',seriesCategory);result=await fetchCatalog(requestPath.href);if(result.category_id!==seriesCategory)throw Error('Update the Pi gateway to load series categories.');}else if(result.category_id)seriesCategory=String(result.category_id);}
-    const origin=new URL(seriesPath).origin;
-    for(const item of result.series||[]){item.kind='series';if(item.stream_icon){if(!/^\/media\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(item.stream_icon))throw Error('Invalid series poster path.');item.stream_icon=origin+item.stream_icon;}}
-    if(!Array.isArray(result.series)||!Array.isArray(result.categories))throw Error('Invalid series catalog.');
+    normalizeSeriesResult(result,seriesPath);
    }else{
     const [categories,series]=await Promise.all([load('get_series_categories'),load('get_series')]);
     if(!Array.isArray(series))throw Error('Invalid series catalog.');
     result={categories:Array.isArray(categories)?categories:[],series:series.map(c=>({...c,kind:'series',stream_id:String(c.series_id),stream_icon:c.cover||''}))};
    }
-   if(credentials!==current)return;series=result.series;seriesCategories=result.categories;seriesStreams=null;seriesLoaded=true;seriesError='';
+   if(credentials!==current)return;series=result.series;seriesCategories=result.categories;seriesStreams=null;seriesLoaded=true;seriesError='';if(seriesCategoryMode&&seriesCategory)seriesCatCache.set(String(seriesCategory),result.series);
   }catch(error){if(credentials===current)seriesError=error.message}
   finally{if(credentials===current){seriesLoading=null;if(tab==='series')render()}}
  });return seriesLoading;
@@ -212,38 +288,41 @@ function render(){
   renderFilterBar(root);
   if(tab==='series'&&seriesCategoryMode&&seriesCategories.length){
     const visibleCats=usOnly?seriesCategories.filter(isUsEnCategory):seriesCategories;
-    if(usOnly&&visibleCats.length&&!visibleCats.some(c=>String(c.category_id)===seriesCategory)){seriesCategory=String(visibleCats[0].category_id);seriesLoaded=false;seriesError='';void loadSeries()}
+    if(usOnly&&visibleCats.length&&!visibleCats.some(c=>String(c.category_id)===seriesCategory)){seriesCategory=String(visibleCats[0].category_id);seriesLoaded=false;seriesError='';searchToken++;searchSweep=null;void loadSeries()}
     const label=document.createElement('label');label.textContent='Series category';label.setAttribute('for','seriesCategory');root.append(label);
     if(visibleCats.length){
       const select=document.createElement('select');select.setAttribute('id','seriesCategory');select.setAttribute('aria-label','Series category');select.style.cssText='width:100%;padding:12px;background:var(--input);color:var(--text);border:1px solid var(--border);border-radius:12px;margin-bottom:12px';
       for(const cat of visibleCats){const option=document.createElement('option');option.value=String(cat.category_id);option.textContent=cat.category_name||'Series';select.append(option)}select.value=seriesCategory;select.disabled=!!seriesLoading;
-      select.onchange=()=>{seriesCategory=select.value;seriesLoaded=false;seriesError='';categoryPage=0;$('search').value='';void loadSeries();render()};root.append(select);
+      select.onchange=()=>{seriesCategory=select.value;seriesLoaded=false;seriesError='';categoryPage=0;$('search').value='';searchToken++;searchSweep=null;void loadSeries();render()};root.append(select);
     }
-    const note=document.createElement('p');note.className='empty';note.textContent=visibleCats.length?'Your large series library loads one category at a time. Search filters the selected category.':'No US / English categories in this library.';root.append(note);
+    const note=document.createElement('p');note.className='empty';note.textContent=visibleCats.length?'Your large series library loads one category at a time. Search looks through every category.':'No US / English categories in this library.';root.append(note);
   }
   if(tab==='movies'&&movieCategoryMode&&movieCategories.length){
     const visibleCats=usOnly?movieCategories.filter(isUsEnCategory):movieCategories;
-    if(usOnly&&visibleCats.length&&!visibleCats.some(c=>String(c.category_id)===movieCategory)){movieCategory=String(visibleCats[0].category_id);moviesLoaded=false;movieError='';void loadMovies()}
+    if(usOnly&&visibleCats.length&&!visibleCats.some(c=>String(c.category_id)===movieCategory)){movieCategory=String(visibleCats[0].category_id);moviesLoaded=false;movieError='';searchToken++;searchSweep=null;void loadMovies()}
     const label=document.createElement('label');label.textContent='Movie category';label.setAttribute('for','movieCategory');root.append(label);
     if(visibleCats.length){
       const select=document.createElement('select');select.setAttribute('id','movieCategory');select.setAttribute('aria-label','Movie category');select.style.cssText='width:100%;padding:12px;background:var(--input);color:var(--text);border:1px solid var(--border);border-radius:12px;margin-bottom:12px';
       for(const cat of visibleCats){const option=document.createElement('option');option.value=String(cat.category_id);option.textContent=cat.category_name||'Movies';select.append(option)}select.value=movieCategory;select.disabled=!!moviesLoading;
-      select.onchange=()=>{movieCategory=select.value;moviesLoaded=false;movieError='';categoryPage=0;$('search').value='';void loadMovies();render()};root.append(select);
+      select.onchange=()=>{movieCategory=select.value;moviesLoaded=false;movieError='';categoryPage=0;$('search').value='';searchToken++;searchSweep=null;void loadMovies();render()};root.append(select);
     }
-    const note=document.createElement('p');note.className='empty';note.textContent=visibleCats.length?'Your large movie library loads one category at a time. Search filters the selected category.':'No US / English categories in this library.';root.append(note);
+    const note=document.createElement('p');note.className='empty';note.textContent=visibleCats.length?'Your large movie library loads one category at a time. Search looks through every category.':'No US / English categories in this library.';root.append(note);
   }
   const q=$('search').value.trim().toLowerCase();
+  if(q&&((tab==='movies'&&movieCategoryMode&&moviesLoaded)||(tab==='series'&&seriesCategoryMode&&seriesLoaded))&&(!searchSweep||searchSweep.kind!==tab||searchSweep.query!==q))startSearchSweep(tab,q);
+  const sweeping=!!(q&&searchSweep&&searchSweep.kind===tab&&searchSweep.query===q);
   if(tab==='movies'&&!moviesLoaded){const p=document.createElement('p');p.className='empty';p.textContent=movieError||'Loading your provider’s movies…';root.append(p);if(movieError){const retry=document.createElement('button');retry.className='btn ghost';retry.textContent='Retry movies';retry.onclick=()=>{movieError='';render();void loadMovies()};root.append(retry)}return}
   if(tab==='series'&&!seriesLoaded){const p=document.createElement('p');p.className='empty';p.textContent=seriesError||'Loading your provider’s series…';root.append(p);if(seriesError){const retry=document.createElement('button');retry.className='btn ghost';retry.textContent='Retry series';retry.onclick=()=>{seriesError='';render();void loadSeries()};root.append(retry)}return}
-  const catalog=tab==='movies'?movies:tab==='series'?series:tab==='favorites'?[...channels,...movies,...series]:channels;
+  const catalog=sweeping?searchSweep.items:tab==='movies'?movies:tab==='series'?series:tab==='favorites'?[...channels,...movies,...series]:channels;
   const favGroupKeys=new Set();
   if(tab==='favorites')for(const c of catalog)if(favorites.has(favoriteId(c))&&(c.kind==='movie'||c.kind==='series')){const p=titleParts(c.name);favGroupKeys.add(c.kind+'|'+p.base+'|'+p.year)}
   let list=catalog.filter(c=>(!q||String(c.name||'').toLowerCase().includes(q))&&(tab!=='favorites'||favorites.has(favoriteId(c))||((c.kind==='movie'||c.kind==='series')&&favGroupKeys.has(c.kind+'|'+titleParts(c.name).base+'|'+titleParts(c.name).year))));
   let usEnPass=()=>true;
   if(usOnly){const catById=new Map();for(const arr of [categories,movieCategories,seriesCategories])for(const c of arr)if(!catById.has(String(c.category_id)))catById.set(String(c.category_id),c);usEnPass=c=>{const cat=catById.get(String(c.category_id));return !!cat&&isUsEnCategory(cat)};list=list.filter(usEnPass)}
   if(tab==='movies'||tab==='series'||tab==='favorites')list=groupItems(list);
-  $('count').textContent=list.length+(tab==='movies'?' matching movies':tab==='series'?' matching series':' matching titles');
-  if(!list.length){const p=document.createElement('p');p.className='empty';p.textContent=tab==='favorites'?'Tap ♡ on any channel to add it to My List.':tab==='movies'?'Your provider has no matching movies.':tab==='series'?'Your provider has no matching series.':'No channels found.';root.append(p);return}
+  const suffix=tab==='movies'?' matching movies':tab==='series'?' matching series':' matching titles';
+  $('count').textContent=sweeping&&!searchSweep.done?('Searching all categories… '+list.length+' found so far'):list.length+suffix+(sweeping&&searchSweep.error?' · some categories could not be searched':'');
+  if(!list.length){const p=document.createElement('p');p.className='empty';p.textContent=sweeping&&!searchSweep.done?'Searching all categories…':sweeping&&searchSweep.error?'Search could not reach every category. '+searchSweep.error:tab==='favorites'?'Tap ♡ on any channel to add it to My List.':tab==='movies'?'Your provider has no matching movies.':tab==='series'?'Your provider has no matching series.':'No channels found.';root.append(p);return}
   if(tab==='favorites'){row('Your Favorites',list);return}
   if(q){row('Search Results',list);return}
   if(tab==='home')row('My List',channels.filter(c=>favorites.has(favoriteId(c))&&usEnPass(c)));
@@ -281,7 +360,7 @@ function stopVideo(preserveCompatibility=null){activeHls?.destroy();activeHls=nu
 $('close').onclick=stopVideo;$('fullscreen').onclick=()=>{const v=$('video');if(v.webkitEnterFullscreen)v.webkitEnterFullscreen();else if(v.requestFullscreen)v.requestFullscreen()};
 window.__rigatoniUseProvider=({base,user,pass})=>{$('server').value=base;$('user').value=user;$('pass').value=pass;status(location.protocol==='https:'&&new URL(base).protocol==='http:'?'Provider successfully loaded. Playback requires the HTTPS gateway on GitHub Pages. No HTTP connection was attempted. The private Raspberry Pi test site still works.':'Provider successfully loaded. Choose Connect & Watch when ready.');};
 window.__rigatoniProvider=()=>{const url=new URL($('server').value.trim());if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash)throw Error('Enter only the provider server URL.');const user=$('user').value.trim(),pass=$('pass').value||(credentials&&credentials.base===url.href.replace(/\/+$/,'')&&credentials.user===user?credentials.pass:'');if(!user||!pass)throw Error('Enter the provider username and password.');return{base:url.href.replace(/\/+$/,''),user,pass};};
-window.__rigatoniClearProvider=()=>{versionGroup=null;credentials=null;gatewayStreams=null;channels=[];categories=[];$('rows').replaceChildren();['server','user','pass','gateway'].forEach(id=>$(id).value='');movies=[];movieCategories=[];movieStreams=null;moviesPath=null;moviesLoaded=false;moviesLoading=null;movieError='';movieCategoryMode=false;movieCategory='';series=[];seriesCategories=[];seriesStreams=null;seriesPath=null;seriesLoaded=false;seriesLoading=null;seriesError='';seriesCategoryMode=false;seriesCategory='';seriesDetail=null;seriesDetailLoading=null;seriesDetailError='';seriesSeason='';$('app').classList.add('hide');$('login').classList.remove('hide');$('account').textContent='Connect';stopVideo();status('Saved provider deleted. Enter a provider to save or connect.');};
+window.__rigatoniClearProvider=()=>{versionGroup=null;credentials=null;gatewayStreams=null;channels=[];categories=[];$('rows').replaceChildren();['server','user','pass','gateway'].forEach(id=>$(id).value='');movies=[];movieCategories=[];movieStreams=null;moviesPath=null;moviesLoaded=false;moviesLoading=null;movieError='';movieCategoryMode=false;movieCategory='';series=[];seriesCategories=[];seriesStreams=null;seriesPath=null;seriesLoaded=false;seriesLoading=null;seriesError='';seriesCategoryMode=false;seriesCategory='';seriesDetail=null;seriesDetailLoading=null;seriesDetailError='';seriesSeason='';movieCatCache.clear();seriesCatCache.clear();searchToken++;searchSweep=null;$('app').classList.add('hide');$('login').classList.remove('hide');$('account').textContent='Connect';stopVideo();status('Saved provider deleted. Enter a provider to save or connect.');};
 async function diagnosePlayback(url,attempt,reason,isMovie=false,mediaLabel='Movie'){
   if(attempt!==playbackAttempt)return;
   $('playstatus').textContent=reason+' Checking gateway…';
