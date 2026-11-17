@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {Readable} from 'node:stream';
-import {createGateway,checkedTarget,publicAddress,rewritePlaylist,providerArray} from '../gateway/server.mjs';
+import {createGateway,checkedTarget,publicAddress,rewritePlaylist,providerArray,safeDownloadFilename,downloadDisposition} from '../gateway/server.mjs';
 const unicode=JSON.stringify([{name:'Café 🍝',extra:{value:'braces } and escaped " quotes',array:[1,2]}}]);
 const parsed=await providerArray(Readable.from([...Buffer.from(unicode)].map(byte=>Buffer.from([byte]))),c=>({name:c.name}));
 assert.deepEqual(parsed,[{name:'Café 🍝'}]);
@@ -8,6 +8,16 @@ for(const malformed of ['{}','[{"a":1},]','[{"a":1}] garbage','[{"a":1}','[{"a":
 await assert.rejects(()=>providerArray(Readable.from([Buffer.from('[{},{}]')]),c=>c,{maxItems:1}),/catalog_too_large/);
 await assert.rejects(()=>providerArray(Readable.from([Buffer.from('[{}]')]),c=>c,{maxBytes:3}),/response_too_large/);
 await assert.rejects(()=>providerArray(Readable.from([Buffer.from('[{"a":"too long"}]')]),c=>c,{maxItemBytes:5}),/response_too_large/);
+assert.equal(safeDownloadFilename('Dune (2021).mp4'),'Dune (2021).mp4');
+assert.equal(safeDownloadFilename('a/b\\c:d*e?f"g<h>i|j.mp4'),'a b c d e f g h i j.mp4');
+assert.equal(safeDownloadFilename('../../etc/passwd'),'.. etc passwd');
+assert.ok(!safeDownloadFilename('x\r\ny').includes('\r')&&!safeDownloadFilename('x\r\ny').includes('\n'));
+assert.equal(safeDownloadFilename(''),'download');
+assert.equal(safeDownloadFilename('.mp4'),'mp4');
+assert.ok(safeDownloadFilename('x'.repeat(200)+'.mp4').length<=150&&safeDownloadFilename('x'.repeat(200)+'.mp4').endsWith('.mp4'));
+assert.equal(safeDownloadFilename(null,'http://provider.example.invalid/movie/u/p/7.mp4'),'7.mp4');
+assert.match(downloadDisposition('Café (2024).mp4'),/attachment; filename="Caf_ \(2024\)\.mp4"; filename\*=UTF-8''Caf%C3%A9%20%282024%29\.mp4/);
+console.log('PASS download filenames: traversal/control-character sanitizing, length cap, provider fallback and RFC 5987 disposition');
 for(const address of ['127.0.0.1','10.1.2.3','172.16.1.1','192.168.1.10','169.254.169.254','100.78.38.112','0.0.0.0','224.0.0.1','::1','fe80::1','fc00::1','::ffff:127.0.0.1','2001:db8::1','2002:7f00:1::'])assert.equal(publicAddress(address),false,address);
 for(const address of ['8.8.8.8','1.1.1.1','2606:4700:4700::1111'])assert.equal(publicAddress(address),true,address);
 await assert.rejects(()=>checkedTarget('http://provider.example.invalid',async()=>[{address:'8.8.8.8',family:4},{address:'127.0.0.1',family:4}]),/unsafe_target/);
@@ -57,7 +67,7 @@ try{
  r=await fetch(root+'/api/connect',{method:'POST',headers:{Origin:'https://untrusted.example.invalid',Authorization:'Bearer dummy-auth'}});assert.equal(r.status,403);
  r=await fetch(root+'/api/connect',{method:'OPTIONS',headers:{Origin:'https://acasso01.github.io'}});assert.equal(r.status,204);assert.equal(r.headers.get('access-control-allow-origin'),'https://acasso01.github.io');
  r=await fetch(root+'/api/connect',{method:'POST',headers:{Authorization:'Bearer dummy-auth',Origin:'https://acasso01.github.io'}});assert.equal(r.status,200);assert.equal(r.headers.get('cache-control'),'no-store');const data=await r.json();assert.equal(data.channels.length,1);assert.equal(data.channels[0].stream_icon,'');assert.ok(!JSON.stringify(data).includes('dummy-password'));assert.ok(!JSON.stringify(data).includes('dummy-user'));
- r=await fetch(root+'/health');assert.equal(r.status,200);assert.deepEqual(await r.json(),{ok:true,service:'rigatoni-gateway',multi_provider:true});
+ r=await fetch(root+'/health');assert.equal(r.status,200);assert.deepEqual(await r.json(),{ok:true,service:'rigatoni-gateway',multi_provider:true,downloads:true});
  r=await fetch(root+'/api/connect',{method:'POST',headers:{Authorization:'Bearer dummy-auth',Origin:'https://acasso01.github.io','Content-Type':'application/json'},body:JSON.stringify({provider_id:'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa'})});assert.equal(r.status,200);const mpConnect=await r.json();assert.equal(mpConnect.channels.length,1);
  r=await fetch(root+'/api/connect',{method:'POST',headers:{Authorization:'Bearer dummy-auth',Origin:'https://acasso01.github.io','Content-Type':'application/json'},body:JSON.stringify({provider_id:'not-a-uuid'})});assert.equal(r.status,400);assert.equal((await r.json()).error,'invalid_provider_id');
  r=await fetch(root+'/api/connect',{method:'POST',headers:{Authorization:'Bearer dummy-auth',Origin:'https://acasso01.github.io','Content-Type':'application/json'},body:JSON.stringify({provider_id:'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb'})});assert.equal(r.status,404);assert.equal((await r.json()).error,'provider_not_found');
@@ -83,6 +93,16 @@ try{
  for(const path of paths){r=await fetch(root+path);assert.equal(r.status,200);assert.equal(await r.text(),'dummy-media-bytes')}
  r=await fetch(root+paths[1],{headers:{Range:'bytes=0-10'}});assert.equal(requests.at(-1).options.range,'bytes=0-10');await r.text();
  r=await fetch(root+paths[1],{headers:{Range:'bytes=0-1,3-4'}});assert.equal(r.status,400);
+ const movieDl=movieData.streams[7].replace('/media/','/download/')+'?filename='+encodeURIComponent('Dune (2021).mp4');
+ r=await fetch(root+movieDl);assert.equal(r.status,200);assert.equal(r.headers.get('content-disposition'),'attachment; filename="Dune (2021).mp4"; filename*=UTF-8\'\'Dune%20%282021%29.mp4');assert.equal(r.headers.get('content-type'),'video/mp2t');assert.equal(r.headers.get('content-length'),'17');assert.equal(await r.text(),'dummy-media-bytes');assert.equal(requests.at(-1).url.pathname,'/movie/dummy-user/dummy-password/7.mp4');
+ r=await fetch(root+movieDl,{method:'HEAD'});assert.equal(r.status,200);assert.equal(r.headers.get('content-disposition'),'attachment; filename="Dune (2021).mp4"; filename*=UTF-8\'\'Dune%20%282021%29.mp4');assert.equal(r.headers.get('content-length'),'17');assert.equal(await r.text(),'');
+ r=await fetch(root+movieDl,{headers:{Range:'bytes=0-10'}});assert.equal(r.status,200);assert.equal(requests.at(-1).options.range,'bytes=0-10');await r.text();
+ r=await fetch(root+movieDl,{headers:{Range:'bytes=0-1,3-4'}});assert.equal(r.status,400);
+ r=await fetch(root+'/download/not-a-session/not-a-resource');assert.equal(r.status,401);assert.equal((await r.json()).error,'stream_session_expired');
+ const channelDl=data.streams['7'].replace('/media/','/download/')+'?filename=Channel.m3u8';
+ r=await fetch(root+channelDl);assert.equal(r.status,409);assert.equal((await r.json()).error,'download_not_supported');
+ r=await fetch(root+movieDl.split('?')[0]+'?filename='+encodeURIComponent('../../etc/passwd'));assert.equal(r.status,200);assert.ok(r.headers.get('content-disposition').includes('filename=".. etc passwd"'));assert.ok(!r.headers.get('content-disposition').includes('/'));assert.ok(!r.headers.get('content-disposition').includes('\\'));await r.text();
+ console.log('PASS download route: attachment disposition with Jellyfin filename, HEAD probe, range forwarding, session expiry, playlist refusal and filename sanitizing');
  r=await fetch(root+'/media/not-a-session/not-a-resource');assert.equal(r.status,401);
  clock+=14400001;r=await fetch(root+data.streams['7']);assert.equal(r.status,401);r=await fetch(root+data.movies_path);assert.equal(r.status,401);
  assert.throws(()=>rewritePlaylist('not a playlist','http://example.invalid',()=>''),/invalid_playlist/);

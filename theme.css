@@ -307,6 +307,11 @@ p{line-height:1.6}
   width:32px; height:32px; display:grid; place-items:center; padding:0;
 }
 .tile .fav.saved{color:#FF3D50}
+.tile .dl{
+  position:absolute; top:8px; left:8px; border:0; border-radius:50%;
+  background:rgba(0,0,0,.65); color:#fff; font-size:16px;
+  width:32px; height:32px; display:grid; place-items:center; text-decoration:none;
+}
 .tile .versions{position:absolute;top:8px;left:8px;background:rgba(0,0,0,.65);color:#fff;font-size:11px;font-weight:800;letter-spacing:.5px;padding:4px 8px;border-radius:999px}
 .filterbar{display:flex;gap:10px;align-items:center;margin:18px 0 4px}
 .filterbar .us-only{display:inline-flex;align-items:center;gap:8px;margin:0;font-size:14px;color:var(--muted);cursor:pointer;min-height:36px}
@@ -344,11 +349,13 @@ p{line-height:1.6}
 .detail-meta h2{font-size:24px; letter-spacing:-.5px; margin:0 0 6px}
 .detail-meta p{margin:8px 0; font-size:14px}
 .episode-list{display:grid; gap:8px; margin:16px 0}
-.episode-row{display:flex; align-items:center; gap:14px; width:100%; text-align:left; background:var(--panel); border:1px solid var(--border-soft); border-radius:12px; padding:10px 14px; color:var(--text)}
+.episode-row{display:flex; align-items:center; gap:14px; width:100%; text-align:left; background:var(--panel); border:1px solid var(--border-soft); border-radius:12px; padding:10px 14px; color:var(--text); cursor:pointer}
 .episode-row:hover{border-color:var(--accent-line)}
 .episode-row img{width:86px; height:48px; object-fit:cover; border-radius:8px; flex-shrink:0}
 .episode-fallback{width:86px; height:48px; display:grid; place-items:center; flex-shrink:0; border-radius:8px; background:var(--wash); color:var(--faint); font-weight:900}
-.episode-title{font-size:14px; font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.episode-title{flex:1; min-width:0; font-size:14px; font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.episode-row .dl{margin-left:auto; flex-shrink:0; color:var(--muted); font-size:18px; line-height:1; text-decoration:none; padding:6px}
+.episode-row .dl:hover{color:var(--text)}
 
 /* ---------- Watch overlay (always a dark video surface) ---------- */
 #watch{position:fixed; inset:0; z-index:30; background:#050505; display:flex; flex-direction:column}
