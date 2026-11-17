@@ -86,6 +86,25 @@ export function rewritePlaylist(text,base,register) {
     return register(new URL(line.trim(),base));
   }).join('\n');
 }
+export function safeDownloadFilename(raw,fallbackUrl){
+  const clean=value=>String(value??'').replace(/[\u0000-\u001f\u007f]/g,' ').replace(/[/\\:*?"<>|]/g,' ').replace(/\s+/g,' ').trim().replace(/^\.+/,'').trim();
+  let name=clean(raw);
+  if(!name){
+    try{name=clean(decodeURIComponent(String(new URL(fallbackUrl).pathname.split('/').pop()||'')))}catch{name=''}
+  }
+  if(!name)name='download';
+  const dot=name.lastIndexOf('.');
+  const ext=dot>0?name.slice(dot):'';
+  let base=dot>0?name.slice(0,dot):name;
+  const baseChars=[...base],extChars=[...ext];
+  if(baseChars.length+extChars.length>150)base=baseChars.slice(0,Math.max(1,150-extChars.length)).join('').trim();
+  return (base||'download')+ext;
+}
+export function downloadDisposition(filename){
+  const fallback=filename.replace(/[^\x20-\x7e]/g,'_').replace(/["\\]/g,'_');
+  const encoded=encodeURIComponent(filename).replace(/['()*]/g,c=>'%'+c.charCodeAt(0).toString(16).toUpperCase());
+  return 'attachment; filename="'+fallback+'"; filename*=UTF-8\'\''+encoded;
+}
 const token=()=>randomBytes(24).toString('base64url');
 export function hlsProbeOptions(help) {
   // FFmpeg 7/8 added independent extension checks. Relay tickets intentionally have no suffix.
@@ -141,7 +160,7 @@ export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.gi
     clean();
     try {
       const path=new URL(req.url,'http://localhost').pathname;
-      if(path==='/health'&&req.method==='GET')return json(res,200,{ok:true,service:'rigatoni-gateway',multi_provider:true});
+      if(path==='/health'&&req.method==='GET')return json(res,200,{ok:true,service:'rigatoni-gateway',multi_provider:true,downloads:true});
       if(path==='/api/connect'&&req.method==='POST') {
         const auth=req.headers.authorization;
         if(!auth?.startsWith('Bearer ')||auth.length>8192)return json(res,401,{error:'sign_in_required'});
@@ -335,6 +354,20 @@ export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.gi
           res.writeHead(200,{'Content-Type':'application/vnd.apple.mpegurl'});res.end(playlist);return;
         }
         for(const header of ['content-type','content-length','content-range','accept-ranges'])if(response.headers[header])res.setHeader(header,response.headers[header]);
+        res.writeHead(response.statusCode);res.on('close',()=>response.destroy());await pipeline(response,res);return;
+      }
+      if(path.startsWith('/download/')&&(req.method==='GET'||req.method==='HEAD')) {
+        const [, ,id,key]=path.split('/');const session=sessions.get(id);const url=session?.resources.get(key);
+        if(!url)return json(res,401,{error:'stream_session_expired'});
+        const range=req.headers.range;if(range&&!/^bytes=\d*-\d*$/.test(range))return json(res,400,{error:'invalid_range'});
+        const {response,url:finalUrl}=await upstream(url,{range});
+        if(![200,206].includes(response.statusCode)){response.destroy();return json(res,502,{error:'stream_unavailable'})}
+        const type=String(response.headers['content-type']||'application/octet-stream');
+        if(/mpegurl/i.test(type)||/\.m3u8$/i.test(finalUrl.pathname)){response.destroy();return json(res,409,{error:'download_not_supported'})}
+        const filename=safeDownloadFilename(new URL(req.url,'http://localhost').searchParams.get('filename'),finalUrl);
+        res.setHeader('Content-Disposition',downloadDisposition(filename));
+        for(const header of ['content-type','content-length','content-range','accept-ranges'])if(response.headers[header])res.setHeader(header,response.headers[header]);
+        if(req.method==='HEAD'){response.destroy();res.writeHead(response.statusCode);res.end();return}
         res.writeHead(response.statusCode);res.on('close',()=>response.destroy());await pipeline(response,res);return;
       }
       return json(res,404,{error:'not_found'});

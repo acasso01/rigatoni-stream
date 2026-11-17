@@ -58,7 +58,7 @@ Provider destinations and every redirect are resolved and pinned to public IP ad
 
 ## Verify after installation
 
-- Health returns `{"ok":true,"service":"rigatoni-gateway"}`.
+- Health returns `{"ok":true,"service":"rigatoni-gateway","multi_provider":true,"downloads":true}`.
 - Save an authorized provider, reload, and confirm its settings restore without connecting.
 - Add the gateway URL, connect, select a channel, and confirm video plays.
 - Browser network requests for playlists/segments should use the Pi's HTTPS `/media/` paths.
@@ -99,6 +99,10 @@ curl http://127.0.0.1:8788/health
 Large movie catalogs automatically switch to browsing one provider category at a time. The gateway forwards a validated category_id to the provider and retains at most two category catalogs. Search filters the selected category. Opaque media resources remain bounded to 300,000 per session; optional posters yield to movie streams.
 
 TV series work the same way: the gateway exposes `/api/series/<session>` (one category at a time for large libraries) and `/api/series/<session>/info?series_id=<id>` for seasons and episodes, with episode streams served through the same opaque `/media/` relay. A gateway built before series support returns no `series_path`, and the player tells the user to update the Pi gateway instead of failing — update with `git pull --ff-only`, then `docker compose up -d --build` from its gateway directory.
+
+## Downloads
+
+Movies and series episodes can be downloaded to the device from the web player. The gateway exposes `GET /download/<session>/<key>?filename=<name>` (and `HEAD`, so the player can check the session before navigating), which relays the provider file with a `Content-Disposition: attachment` header so the browser saves it instead of playing it. Filenames are sanitized server-side and playlists (`.m3u8`) are refused with `409 download_not_supported`. `GET /health` reports `downloads: true`. A gateway built before download support shows no download button in the player — update with `git pull --ff-only`, then `docker compose up -d --build` from its gateway directory.
 
 Movie playback failures now inspect the actual file. Compatible movie mode copies H.264/HEVC video at its original resolution and converts unsupported audio to AAC. Movie input is paced in real time and uses the existing bounded rolling HLS window; this fallback starts from the beginning and has limited seeking. Normal MP4 playback keeps byte-range seeking.
 

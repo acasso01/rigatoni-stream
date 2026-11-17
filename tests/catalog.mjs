@@ -358,3 +358,81 @@ assert.equal(get('video').src,'https://homepi.test.ts.net/media/test/resource101
 assert.equal(get('playing').textContent,'Dune (2021) 4K');
 vm.runInContext('stopVideo()',context);
 console.log('PASS movie category search sweeps all categories, groups versions, retries a 429 and plays the swept version');
+
+// --- Download filenames: Jellyfin-friendly movie/episode names ---
+assert.equal(vm.runInContext("movieFilename({name:'Dune (2021) [1080p]',container_extension:'mkv'},null)",context),'Dune (2021).mkv');
+assert.equal(vm.runInContext("movieFilename({name:'Dune (2021) [1080p]',container_extension:'mp4'},{versions:[{stream_id:1},{stream_id:2}]})",context),'Dune (2021) [1080p].mp4');
+assert.equal(vm.runInContext("movieFilename({name:'Dune (2021) 4K',container_extension:'mkv'},{versions:[{stream_id:1},{stream_id:2}]})",context),'Dune (2021) [4K].mkv');
+assert.equal(vm.runInContext("episodeFilename('From',1,2,'Pilot','mp4')",context),'From - S01E02 - Pilot.mp4');
+assert.equal(vm.runInContext("episodeFilename('From',1,1,'','mkv')",context),'From - S01E01 - Episode 01.mkv');
+assert.equal(vm.runInContext("sanitizeFilename('a/b:c?.mp4')",context),'a b c .mp4');
+assert.ok(vm.runInContext("downloadFilename('x'.repeat(200),'mp4').length",context)<=150);
+assert.equal(vm.runInContext("versionTag('Dune (2021) 4K','Dune (2021)')",context),'4K');
+assert.equal(vm.runInContext("downloadUrlForTicket('https://homepi.test.ts.net/media/s/k','Dune (2021).mp4')",context),'https://homepi.test.ts.net/download/s/k?filename=Dune%20(2021).mp4');
+assert.equal(vm.runInContext("downloadUrlForTicket(null,'Dune.mp4')",context),null);
+console.log('PASS download filenames: Jellyfin movie/episode names, version tags, sanitizing and length cap');
+
+// --- Download: movie tile link, version picker link, HEAD probe, hidden cases ---
+window.__rigatoniClearProvider();
+get('search').value='';
+context.AbortSignal=AbortSignal;
+context.fetch=async()=>new Response(JSON.stringify({categories:[{category_id:'1',category_name:'USA Movies'}],movies:[
+ {stream_id:1,name:'Dune (2021)',kind:'movie',category_id:'1',container_extension:'mp4',stream_icon:''},
+ {stream_id:2,name:'Dune (2021) [1080p]',kind:'movie',category_id:'1',container_extension:'mp4',stream_icon:''},
+ {stream_id:3,name:'Dune (2021) 4K',kind:'movie',category_id:'1',container_extension:'mkv',stream_icon:''},
+ {stream_id:4,name:'Dune (1984)',kind:'movie',category_id:'1',container_extension:'mp4',stream_icon:''},
+ {stream_id:5,name:'Other Film',kind:'movie',category_id:'1',container_extension:'mp4',stream_icon:''},
+ {stream_id:6,name:'HLS Film',kind:'movie',category_id:'1',container_extension:'m3u8',stream_icon:''}
+],streams:{1:'/media/movie-session/resource1',2:'/media/movie-session/resource2',3:'/media/movie-session/resource3',4:'/media/movie-session/resource4',5:'/media/movie-session/resource5',6:'/media/movie-session/resource6'}}),{headers:{'content-type':'application/json'}});
+vm.runInContext("credentials={base:'https://provider.example.invalid',user:'dummy',pass:'dummy'};gatewayStreams={7:'https://homepi.test.ts.net/media/session/resource'};moviesPath='https://homepi.test.ts.net/api/movies/movie-session';usOnly=false;gatewayDownloads=true;showTab('movies')",context);
+await vm.runInContext('loadMovies()',context);
+assert.equal(cards().length,8);
+const dlOf=c=>c.children.find(n=>n.className==='dl');
+assert.equal(dlOf(cards()[0]),undefined);
+assert.ok(dlOf(cards()[1]));
+assert.equal(dlOf(cards()[1]).tag,'a');
+assert.equal(dlOf(cards()[1]).href,'https://homepi.test.ts.net/download/movie-session/resource4?filename=Dune%20(1984).mp4');
+assert.ok(dlOf(cards()[2]));
+assert.equal(dlOf(cards()[3]),undefined);
+vm.runInContext("location.assign=u=>{window.__dlNav=u}",context);
+context.fetch=async(url,options)=>{assert.equal(options.method,'HEAD');return new Response(null,{status:200})};
+dlOf(cards()[1]).onclick({preventDefault(){},stopPropagation(){}});
+await new Promise(r=>setTimeout(r,50));
+assert.equal(vm.runInContext('window.__dlNav',context),'https://homepi.test.ts.net/download/movie-session/resource4?filename=Dune%20(1984).mp4');
+context.fetch=async()=>new Response(null,{status:401});
+dlOf(cards()[1]).onclick({preventDefault(){},stopPropagation(){}});
+await new Promise(r=>setTimeout(r,50));
+assert.match(get('count').textContent,/Reconnect to download/);
+await cards()[0].onclick();
+assert.equal(versionRows().length,3);
+assert.equal(dlOf(versionRows()[1]).href,'https://homepi.test.ts.net/download/movie-session/resource2?filename=Dune%20(2021)%20%5B1080p%5D.mp4');
+assert.equal(dlOf(versionRows()[2]).href,'https://homepi.test.ts.net/download/movie-session/resource3?filename=Dune%20(2021)%20%5B4K%5D.mkv');
+context.fetch=async(url,options)=>{assert.equal(options.method,'HEAD');return new Response(null,{status:200})};
+dlOf(versionRows()[1]).onclick({preventDefault(){},stopPropagation(){}});
+await new Promise(r=>setTimeout(r,50));
+assert.equal(vm.runInContext('window.__dlNav',context),'https://homepi.test.ts.net/download/movie-session/resource2?filename=Dune%20(2021)%20%5B1080p%5D.mp4');
+get('rows').children[0].onclick();
+assert.equal(cards().length,8);
+vm.runInContext('gatewayDownloads=false;render()',context);
+assert.equal(descendants(get('rows')).filter(n=>n.className==='dl').length,0);
+vm.runInContext('gatewayDownloads=true;gatewayStreams=null;render()',context);
+assert.equal(descendants(get('rows')).filter(n=>n.className==='dl').length,0);
+console.log('PASS download links: movie tile and version picker, Jellyfin filenames, HEAD probe navigation, expired-session notice, hidden on old gateways, direct mode and playlists');
+
+// --- Download: episode rows in series detail ---
+window.__rigatoniClearProvider();
+get('search').value='';
+context.fetch=async input=>{const url=new URL(input);if(url.pathname.endsWith('/info'))return new Response(JSON.stringify({info:{name:'Dummy series',cover:'/media/test/cover',plot:'A test plot.',cast:'Actor One',genre:'Drama',releaseDate:'2024-01-01',rating:'8.5'},seasons:[{season_number:1,episode_count:2,name:'Season 1'},{season_number:2,episode_count:1,name:'Season 2'}],episodes:{'1':[{id:101,episode_num:1,title:'Pilot',container_extension:'mp4',season:1,stream_icon:'/media/test/ep101',plot:'Pilot plot.'},{id:102,episode_num:2,title:'Second',container_extension:'mkv',season:1}],'2':[{id:201,episode_num:1,title:'Return',container_extension:'mp4',season:2}]},streams:{101:'/media/test/ep101',102:'/media/test/ep102',201:'/media/test/ep201'}}),{headers:{'content-type':'application/json'}});return new Response(JSON.stringify({categories:[{category_id:'9',category_name:'Test Series'}],series:[{stream_id:5,series_id:5,kind:'series',name:'Dummy series',category_id:'9',stream_icon:'/media/test/cover',rating:'8.5'}]}),{headers:{'content-type':'application/json'}})};
+vm.runInContext("credentials={base:'https://provider.example.invalid',user:'dummy',pass:'dummy'};gatewayStreams={7:'https://homepi.test.ts.net/media/session/resource'};seriesPath='https://homepi.test.ts.net/api/series/series-session';gatewayDownloads=true;showTab('series')",context);
+await vm.runInContext('loadSeries()',context);
+await cards()[0].onclick();
+assert.equal(episodeRows().length,2);
+assert.equal(episodeRows()[0].children.find(n=>n.className==='dl').href,'https://homepi.test.ts.net/download/test/ep101?filename=Dummy%20series%20-%20S01E01%20-%20Pilot.mp4');
+assert.equal(episodeRows()[1].children.find(n=>n.className==='dl').href,'https://homepi.test.ts.net/download/test/ep102?filename=Dummy%20series%20-%20S01E02%20-%20Second.mkv');
+context.fetch=async(url,options)=>{assert.equal(options.method,'HEAD');return new Response(null,{status:200})};
+episodeRows()[0].children.find(n=>n.className==='dl').onclick({preventDefault(){},stopPropagation(){}});
+await new Promise(r=>setTimeout(r,50));
+assert.equal(vm.runInContext('window.__dlNav',context),'https://homepi.test.ts.net/download/test/ep101?filename=Dummy%20series%20-%20S01E01%20-%20Pilot.mp4');
+await episodeRows()[0].onclick();assert.equal(get('video').src,'https://homepi.test.ts.net/media/test/ep101');assert.equal(get('playing').textContent,'Dummy series S1E1 — Pilot');
+vm.runInContext('stopVideo()',context);
+console.log('PASS download links: episode rows with Jellyfin names, HEAD probe navigation, row tap still plays');
