@@ -307,6 +307,10 @@ p{line-height:1.6}
   width:32px; height:32px; display:grid; place-items:center; padding:0;
 }
 .tile .fav.saved{color:#FF3D50}
+.tile .versions{position:absolute;top:8px;left:8px;background:rgba(0,0,0,.65);color:#fff;font-size:11px;font-weight:800;letter-spacing:.5px;padding:4px 8px;border-radius:999px}
+.filterbar{display:flex;gap:10px;align-items:center;margin:18px 0 4px}
+.filterbar .us-only{display:inline-flex;align-items:center;gap:8px;margin:0;font-size:14px;color:var(--muted);cursor:pointer;min-height:36px}
+.filterbar .us-only input{width:auto;padding:0;accent-color:var(--accent)}
 .searchbar{
   width:100%; padding:14px 18px; background:var(--panel);
   border:1px solid var(--border); border-radius:999px; color:var(--text); margin:14px 0;
