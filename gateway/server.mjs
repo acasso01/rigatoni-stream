@@ -168,15 +168,23 @@ export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.gi
           const {response}=await upstream(url);if(response.statusCode!==200){response.resume();throw Error('provider_connection_failed')}
           return providerArray(response,project,{maxItems});
         };
+        // Single-object player API calls (get_series_info returns an object, not an array).
+        const apiObject=async(action,params)=>{
+          const url=new URL(base.href.replace(/\/+$/,'')+'/player_api.php');url.search=new URLSearchParams({username:saved.username,password:saved.password,action,...(params||{})}).toString();
+          const {response}=await upstream(url);if(response.statusCode!==200){response.resume();throw Error('provider_connection_failed')}
+          const text=await boundedBody(response,16*1024*1024);
+          let parsed;try{parsed=JSON.parse(text)}catch{throw Error('provider_connection_failed')}
+          return parsed;
+        };
         const categories=await api('get_live_categories',c=>({category_id:shortText(c.category_id),category_name:shortText(c.category_name)}),10000);
         const channels=await api('get_live_streams',c=>({stream_id:shortText(c.stream_id),name:shortText(c.name),category_id:shortText(c.category_id),stream_icon:''}),100000);
         if(!Array.isArray(channels))throw Error('provider_connection_failed');
         const id=token();const resources=new Map(),resourceKeys=new Map();const channelIds=new Set(channels.map(c=>String(c.stream_id)));
         const register=url=>{if(resourceKeys.has(url.href))return '/media/'+id+'/'+resourceKeys.get(url.href);if(!['http:','https:'].includes(url.protocol)||url.username||url.password)throw Error('unsafe_target');if(resources.size>=300000)throw Error('session_resource_limit');const key=token();resources.set(key,url.href);resourceKeys.set(url.href,key);return '/media/'+id+'/'+key};
         const streams={};for(const channelId of channelIds){if(!/^\d+$/.test(channelId))continue;streams[channelId]=register(new URL(base.href.replace(/\/+$/,'')+'/live/'+encodeURIComponent(saved.username)+'/'+encodeURIComponent(saved.password)+'/'+channelId+'.m3u8'))}
-        sessions.set(id,{expires:now()+4*60*60*1000,resources,register,api,base:base.href.replace(/\/+$/,''),username:saved.username,password:saved.password});
+        sessions.set(id,{expires:now()+4*60*60*1000,resources,register,api,apiObject,base:base.href.replace(/\/+$/,''),username:saved.username,password:saved.password});
         // Provider icons can be HTTP or carry provider credentials. Keep cards but use the existing fallback artwork.
-        return json(res,200,{categories,channels,streams,movies_path:'/api/movies/'+id,expires_in:14400});
+        return json(res,200,{categories,channels,streams,movies_path:'/api/movies/'+id,series_path:'/api/series/'+id,expires_in:14400});
       }
       if(path.startsWith('/api/movies/')&&req.method==='GET'){
         const match=path.match(/^\/api\/movies\/([A-Za-z0-9_-]+)$/),session=match&&sessions.get(match[1]);
@@ -212,6 +220,69 @@ export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.gi
         }
         return json(res,200,await session.movies);
       }
+      if(path.startsWith('/api/series/')&&req.method==='GET'){
+        const infoMatch=path.match(/^\/api\/series\/([A-Za-z0-9_-]+)\/info$/);
+        if(infoMatch){
+          const session=sessions.get(infoMatch[1]);
+          if(!session)return json(res,401,{error:'stream_session_expired'});
+          const seriesId=new URL(req.url,'http://localhost').searchParams.get('series_id');
+          if(seriesId===null||!/^\d{1,20}$/.test(seriesId))return json(res,400,{error:'invalid_series_id'});
+          const raw=await session.apiObject('get_series_info',{series_id:seriesId});
+          if(!raw||typeof raw!=='object'||Array.isArray(raw)||typeof raw.episodes!=='object'||!raw.episodes)throw Error('provider_connection_failed');
+          const infoRaw=(raw.info&&typeof raw.info==='object')?raw.info:{};
+          const info={name:shortText(infoRaw.name),plot:String(infoRaw.plot||'').slice(0,2048),cast:shortText(infoRaw.cast),director:shortText(infoRaw.director),genre:shortText(infoRaw.genre),releaseDate:shortText(infoRaw.releaseDate),rating:shortText(infoRaw.rating),youtube_trailer:String(infoRaw.youtube_trailer||'').slice(0,512),episode_run_time:shortText(infoRaw.episode_run_time),stream_icon:''};
+          if(typeof infoRaw.cover==='string'&&infoRaw.cover){try{info.stream_icon=session.register(new URL(infoRaw.cover))}catch{}}
+          const seasons=(Array.isArray(raw.seasons)?raw.seasons:[]).map(s=>({season_number:Number(s.season_number)||0,episode_count:Number(s.episode_count)||0,name:shortText(s.name)}));
+          const episodes={},streams={};
+          session.episodeKeys??=new Set();
+          for(const [seasonKey,list] of Object.entries(raw.episodes)){
+            if(!Array.isArray(list))continue;
+            const seasonNum=/^\d{1,20}$/.test(seasonKey)?seasonKey:'0';
+            episodes[seasonNum]=[];
+            for(const ep of list){
+              if(!ep||!/^\d+$/.test(String(ep.id||'')))continue;
+              const ext=/^(mp4|m4v|mov|mkv|avi|webm|ts|m3u8)$/.test(ep.container_extension)?ep.container_extension:'mp4';
+              const registered=session.register(new URL(session.base+'/series/'+encodeURIComponent(session.username)+'/'+encodeURIComponent(session.password)+'/'+ep.id+'.'+ext));
+              streams[String(ep.id)]=registered;session.episodeKeys.add(registered.split('/').at(-1));
+              let epIcon='';
+              if(ep.info&&typeof ep.info.movie_image==='string'&&ep.info.movie_image){try{epIcon=session.register(new URL(ep.info.movie_image))}catch{}}
+              episodes[seasonNum].push({id:String(ep.id),episode_num:Number(ep.episode_num)||0,title:shortText(ep.title),season:Number(ep.season)||Number(seasonNum)||0,container_extension:ext,stream_icon:epIcon,plot:String(ep.info?.plot||'').slice(0,512)});
+            }
+          }
+          if(!Object.keys(episodes).length)throw Error('provider_connection_failed');
+          return json(res,200,{info,seasons,episodes,streams});
+        }
+        const match=path.match(/^\/api\/series\/([A-Za-z0-9_-]+)$/),session=match&&sessions.get(match[1]);
+        if(!session)return json(res,401,{error:'stream_session_expired'});
+        const query=new URL(req.url,'http://localhost').searchParams;
+        const categoryId=query.get('category_id');
+        if(categoryId!==null&&!/^\d{1,20}$/.test(categoryId))return json(res,400,{error:'invalid_series_category'});
+        session.seriesCategories??=session.api('get_series_categories',c=>({category_id:shortText(c.category_id),category_name:shortText(c.category_name)}),10000).catch(error=>{session.seriesCategories=null;throw error});
+        const categories=await session.seriesCategories;
+        if(categoryId!==null&&!categories.some(c=>c.category_id===categoryId))return json(res,400,{error:'invalid_series_category'});
+        const getSeries=async()=>{
+          const series=await session.api('get_series',c=>({kind:'series',stream_id:shortText(c.series_id),name:shortText(c.name),category_id:shortText(c.category_id),poster:String(c.cover||'').slice(0,2048),rating:shortText(c.rating),genre:shortText(c.genre),releaseDate:shortText(c.releaseDate)}),50000,categoryId===null?undefined:categoryId);
+          for(const item of series){const poster=item.poster;delete item.poster;if(poster){try{item.stream_icon=session.register(new URL(poster))}catch{}}}
+          return{categories,series,...(categoryId===null?{}:{browse_by_category:true,category_id:categoryId})};
+        };
+        if(categoryId!==null){
+          session.seriesCatalogs??=new Map();
+          if(!session.seriesCatalogs.has(categoryId)){
+            // Keep only two completed category catalogs; active loads remain coalesced.
+            for(const [key,entry] of session.seriesCatalogs){if(session.seriesCatalogs.size<2)break;if(entry.done)session.seriesCatalogs.delete(key)}
+            if(session.seriesCatalogs.size>=2)return json(res,429,{error:'series_catalog_busy'});
+            const entry={done:false};entry.promise=getSeries().then(result=>{entry.done=true;return result}).catch(error=>{session.seriesCatalogs.delete(categoryId);throw error});session.seriesCatalogs.set(categoryId,entry);
+          }
+          return json(res,200,await session.seriesCatalogs.get(categoryId).promise);
+        }
+        if(!session.series){
+          session.series=getSeries().catch(error=>{
+            if(['catalog_too_large','response_too_large'].includes(error.message)&&categories.length)return{categories,series:[],browse_by_category:true};
+            session.series=null;throw error;
+          });
+        }
+        return json(res,200,await session.series);
+      }
       if(path.startsWith('/compatible/')&&req.method==='POST'){
         const match=path.match(/^\/compatible\/([A-Za-z0-9_-]+)\/([A-Za-z0-9_-]+)\/stop$/);
         if(!match)return json(res,404,{error:'not_found'});
@@ -226,7 +297,7 @@ export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.gi
         const input='http://127.0.0.1:'+server.address().port+'/media/'+id+'/'+key;
         const info=await inspection(session,key,input);
         const video=info.streams.find(s=>s.type==='video'),audio=info.streams.find(s=>s.type==='audio');
-        const movie=session.movieKeys?.has(key)||false;
+        const movie=session.movieKeys?.has(key)||session.episodeKeys?.has(key)||false;
         if(!['h264','hevc'].includes(video?.codec)||!movie&&audio&&audio.codec!=='aac')return json(res,409,{error:'compatibility_codec'});
         session.compatibleKeys??=new Set();session.compatibleKeys.add(key);
         const data=await remux.read(id+'/'+key,input,video.codec,file,{movie,hls:info.container==='hls',audio:audio?.codec||'aac'});

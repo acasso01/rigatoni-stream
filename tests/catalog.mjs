@@ -82,3 +82,49 @@ get('browse').onclick();assert.equal(vm.runInContext('tab',context),'movies');
 vm.runInContext("showTab('live')",context);assert.equal(get('heroTitle').textContent,'Live TV, made yours.');assert.equal(get('search').placeholder,'Search channels…');
 vm.runInContext("showTab('favorites')",context);assert.equal(get('heroTitle').textContent,'Your list, your favorites.');
 console.log('PASS Movies, Live TV and My List headings, descriptions, browse buttons and search prompts match their tabs');
+
+// --- Series (gateway mode): list, search, favorites, detail, episode playback ---
+window.__rigatoniClearProvider();
+get('search').value='';
+context.fetch=async input=>{const url=new URL(input);if(url.pathname.endsWith('/info'))return new Response(JSON.stringify({info:{name:'Dummy series',cover:'/media/test/cover',plot:'A test plot.',cast:'Actor One',genre:'Drama',releaseDate:'2024-01-01',rating:'8.5'},seasons:[{season_number:1,episode_count:2,name:'Season 1'},{season_number:2,episode_count:1,name:'Season 2'}],episodes:{'1':[{id:101,episode_num:1,title:'Pilot',container_extension:'mp4',season:1,stream_icon:'/media/test/ep101',plot:'Pilot plot.'},{id:102,episode_num:2,title:'Second',container_extension:'mkv',season:1}],'2':[{id:201,episode_num:1,title:'Return',container_extension:'mp4',season:2}]},streams:{101:'/media/test/ep101',102:'/media/test/ep102',201:'/media/test/ep201'}}),{headers:{'content-type':'application/json'}});return new Response(JSON.stringify({categories:[{category_id:'9',category_name:'Test Series'}],series:[{stream_id:5,series_id:5,kind:'series',name:'Dummy series',category_id:'9',stream_icon:'/media/test/cover',rating:'8.5'}]}),{headers:{'content-type':'application/json'}})};
+vm.runInContext("credentials={base:'https://provider.example.invalid',user:'dummy',pass:'dummy'};gatewayStreams={7:'https://homepi.test.ts.net/media/session/resource'};seriesPath='https://homepi.test.ts.net/api/series/series-session';showTab('series')",context);
+await vm.runInContext('loadSeries()',context);
+assert.equal(cards().length,2);assert.match(get('count').textContent,/1 matching series/);
+assert.equal(get('heroTitle').textContent,'TV shows, made yours.');assert.equal(get('search').placeholder,'Search series…');
+get('search').value='Dummy';get('search').oninput();await new Promise(r=>setTimeout(r,250));assert.equal(cards().length,1);
+get('search').value='Nope';get('search').oninput();await new Promise(r=>setTimeout(r,250));assert.equal(cards().length,0);
+get('search').value='';get('search').oninput();await new Promise(r=>setTimeout(r,250));assert.equal(cards().length,2);
+cards()[0].children.at(-1).onclick({stopPropagation(){}});assert.ok(writes.at(-1)[1].includes('series:5'));
+vm.runInContext("showTab('favorites')",context);assert.equal(cards().length,1);assert.equal(cards()[0].children[1].textContent,'Dummy series');
+vm.runInContext("showTab('series')",context);
+await cards()[0].onclick();
+const episodeRows=()=>descendants(get('rows')).filter(n=>n.className==='episode-row');
+assert.equal(episodeRows().length,2);
+const seasonSelect=()=>get('rows').children.find(n=>n.tag==='select');assert.equal(seasonSelect().children.length,2);
+seasonSelect().value='2';seasonSelect().onchange();assert.equal(episodeRows().length,1);
+seasonSelect().value='1';seasonSelect().onchange();assert.equal(episodeRows().length,2);
+await episodeRows()[0].onclick();assert.equal(get('video').src,'https://homepi.test.ts.net/media/test/ep101');assert.equal(get('playing').textContent,'Dummy series S1E1 — Pilot');
+vm.runInContext('stopVideo()',context);
+get('rows').children[0].onclick();assert.equal(cards().length,2);
+console.log('PASS series tab: gateway list/search, namespaced favorites, detail with seasons, episode playback and back navigation');
+
+// --- Series (direct mode): list and detail without a gateway ---
+window.__rigatoniClearProvider();
+get('search').value='';
+context.fetch=async input=>{const url=new URL(input);const action=url.searchParams.get('action');if(action==='get_series_categories')return new Response(JSON.stringify([{category_id:'9',category_name:'Direct Series'}]));if(action==='get_series')return new Response(JSON.stringify([{series_id:9,name:'Direct show',category_id:'9',cover:'https://provider.example.invalid/cover.jpg',rating:'7'}]));if(action==='get_series_info')return new Response(JSON.stringify({info:{name:'Direct show',cover:'https://provider.example.invalid/cover.jpg',plot:'Direct plot.'},seasons:[{season_number:1,episode_count:1,name:'Season 1'}],episodes:{'1':[{id:301,episode_num:1,title:'One',container_extension:'mp4',season:1,info:{movie_image:'',plot:''}}]}}));throw new Error('unexpected '+action)};
+vm.runInContext("credentials={base:'https://provider.example.invalid',user:'dummy',pass:'dummy'};gatewayStreams=null;seriesPath=null;showTab('series')",context);
+await vm.runInContext('loadSeries()',context);
+assert.equal(cards().length,2);assert.equal(cards()[0].children[1].textContent,'Direct show');
+await cards()[0].onclick();
+assert.equal(episodeRows().length,1);
+await episodeRows()[0].onclick();assert.equal(get('video').src,'https://provider.example.invalid/series/dummy/dummy/301.mp4');
+vm.runInContext('stopVideo()',context);
+console.log('PASS direct series load and episode playback without a gateway');
+
+// --- Series without a gateway series endpoint: clear guidance, no crash ---
+window.__rigatoniClearProvider();
+vm.runInContext("credentials={base:'https://provider.example.invalid',user:'dummy',pass:'dummy'};gatewayStreams={};seriesPath=null;seriesLoading=null;seriesLoaded=false;tab='series'",context);
+await vm.runInContext('loadSeries()',context);
+assert.match(get('rows').children[0].textContent,/Update the Pi/);assert.equal(vm.runInContext('seriesLoading',context),null);
+window.__rigatoniClearProvider();assert.equal(vm.runInContext('series.length',context),0);
+console.log('PASS series on an outdated gateway explains the Pi update and resets cleanly');
