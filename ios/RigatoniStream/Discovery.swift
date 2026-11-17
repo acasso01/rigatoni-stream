@@ -515,13 +515,15 @@ struct LibraryPreferences: Codable {
     var renames: [String: String] = [:]
     /// On hides categories explicitly tagged for another country. Untagged categories stay.
     var unitedStatesOnly: Bool = true
+    /// Automatically hide categories explicitly marked as non-English.
+    var hideNonEnglishCategories: Bool = true
     /// Display-only cleanup of category and channel names.
     var cleanNames: Bool = true
 
     init() {}
 
     enum CodingKeys: String, CodingKey {
-        case hiddenLiveCategories, hiddenMovieCategories, hiddenSeriesCategories, hiddenChannels, progress, categoryOrder, renames, unitedStatesOnly, cleanNames
+        case hiddenLiveCategories, hiddenMovieCategories, hiddenSeriesCategories, hiddenChannels, progress, categoryOrder, renames, unitedStatesOnly, hideNonEnglishCategories, cleanNames
     }
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -533,6 +535,7 @@ struct LibraryPreferences: Codable {
         categoryOrder = try container.decodeIfPresent([String: [String]].self, forKey: .categoryOrder) ?? [:]
         renames = try container.decodeIfPresent([String: String].self, forKey: .renames) ?? [:]
         unitedStatesOnly = try container.decodeIfPresent(Bool.self, forKey: .unitedStatesOnly) ?? true
+        hideNonEnglishCategories = try container.decodeIfPresent(Bool.self, forKey: .hideNonEnglishCategories) ?? true
         cleanNames = try container.decodeIfPresent(Bool.self, forKey: .cleanNames) ?? true
     }
     func encode(to encoder: Encoder) throws {
@@ -545,6 +548,7 @@ struct LibraryPreferences: Codable {
         try container.encode(categoryOrder, forKey: .categoryOrder)
         try container.encode(renames, forKey: .renames)
         try container.encode(unitedStatesOnly, forKey: .unitedStatesOnly)
+        try container.encode(hideNonEnglishCategories, forKey: .hideNonEnglishCategories)
         try container.encode(cleanNames, forKey: .cleanNames)
     }
     static func read(key: String?) -> Self {
@@ -666,7 +670,9 @@ struct LibraryCustomizationView: View {
                 model.preferences.setSection(category.id, section: section, visible: $0); model.savePreferences()
             }))
             if title != category.name { Text(category.name).font(.caption).foregroundStyle(.secondary) }
-            if model.preferences.unitedStatesOnly && !CategoryRegion.included(category.name, unitedStatesOnly: true) {
+            if model.preferences.hideNonEnglishCategories && CategoryRegion.isNonEnglish(category.name) {
+                Text("Hidden while Hide non-English categories is on").font(.caption).foregroundStyle(.secondary)
+            } else if model.preferences.unitedStatesOnly && !CategoryRegion.included(category.name, unitedStatesOnly: true) {
                 Text("Hidden while U.S. only is on").font(.caption).foregroundStyle(.secondary)
             }
             HStack {
@@ -758,14 +764,22 @@ struct MovieDetailView: View {
     @State private var metadataNotice = ""
     @State private var playing = false
     @State private var resumeSeconds = 0.0
-    // tvOS focus entry point: the focus engine can lose its way in a pushed
-    // detail view, so the primary action is focused explicitly on appear.
+    // Shared bindings identify the detail actions; tvOS also needs a directional
+    // focus section because the poster separates Back from the action column.
     @FocusState private var detailFocus: String?
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                Button { dismiss() } label: { Label("Back", systemImage: "chevron.left") }
-                    .focused($detailFocus, equals: "back")
+                HStack {
+                    Button { dismiss() } label: { Label("Back", systemImage: "chevron.left") }
+                        .focused($detailFocus, equals: "back")
+                    Spacer(minLength: 0)
+                }
+                #if os(tvOS)
+                // Match the detail row's width so Up from Play/Continue can
+                // reach Back even though the button is above the poster.
+                .focusSection()
+                #endif
                 HStack(alignment: .top, spacing: 28) {
                     ProviderPoster(url: item.poster, kind: .movies).aspectRatio(2.0 / 3.0, contentMode: .fit)
                         .frame(maxWidth: posterWidth).clipShape(RoundedRectangle(cornerRadius: 18))
@@ -784,6 +798,11 @@ struct MovieDetailView: View {
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
+                #if os(tvOS)
+                // Include the poster and metadata in the focus region so Down
+                // from Back can reach the otherwise diagonal play controls.
+                .focusSection()
+                #endif
                 #if os(iOS)
                 MobileSaveButton(record: MobileRecords.record(item)).buttonStyle(.bordered)
                 #endif
@@ -793,7 +812,13 @@ struct MovieDetailView: View {
                 if !metadataNotice.isEmpty { Text(metadataNotice).font(.footnote).foregroundStyle(.secondary) }
             }.padding(28).frame(maxWidth: 1200, alignment: .leading).frame(maxWidth: .infinity)
         }.background { StreamBackdrop() }
+        #if os(tvOS)
+        // Evaluate when the destination enters the focus hierarchy, rather than
+        // making a one-shot request before the navigation transition completes.
+        .defaultFocus($detailFocus, "play")
+        #else
         .onAppear { detailFocus = "play" }
+        #endif
         .task {
             defer { loading = false }
             do {

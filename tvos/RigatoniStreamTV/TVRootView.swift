@@ -78,9 +78,7 @@ struct TVRootView: View {
                             .environment(\.tvContentFocusScope, contentFocus)
                             .environment(\.tvRailAction, TVRailAction(returnToRail: { returnToRail() }))
                             .onExitCommand {
-                                // Menu while entry is still resolving is the
-                                // failed right-move, not a request to leave.
-                                if !entryGrace { returnToRail() }
+                                returnToRail()
                             }
                     }
                     .onAppear {
@@ -152,6 +150,7 @@ struct TVRootView: View {
                 }
                 .buttonStyle(TVCompactButtonStyle())
                 .focused($focusedItem, equals: section)
+                .accessibilityIdentifier("rail-\(section.rawValue)")
                 .prefersDefaultFocus(selected, in: railFocus)
                 .onMoveCommand { direction in
                     // Let tvOS perform vertical focus movement once. Reassigning
@@ -196,6 +195,7 @@ struct TVRootView: View {
 
     /// Menu, or focus returning from the content pane. Does not change tabs.
     private func returnToRail() {
+        entryTask?.cancel()
         entryToken = UUID()
         entryGrace = false
         contentOwnsFocus = false

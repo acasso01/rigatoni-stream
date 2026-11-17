@@ -1,5 +1,11 @@
 import XCTest
+#if REGRESSION_HOST
+@testable import AntStreamsRegressionHost
+#elseif os(tvOS)
+@testable import RigatoniStreamTV
+#else
 @testable import RigatoniStream
+#endif
 
 final class CatalogPresentationTests: XCTestCase {
     func testCleanNamesMatchProviderSamples() {
@@ -68,6 +74,73 @@ final class CatalogPresentationTests: XCTestCase {
         XCTAssertTrue(CategoryRegion.included("MX| TELEMUNDO", unitedStatesOnly: false))
         XCTAssertTrue(CategoryRegion.included("Home · US| ESPN", unitedStatesOnly: true))
         XCTAssertFalse(CategoryRegion.included("Home · UK| BBC", unitedStatesOnly: true))
+    }
+
+    func testEnglishTagsAreIncludedWithoutMatchingFragments() {
+        for name in ["EN Movies", "en| Movies", "[EN] From", "From (EN)", "Movie en HD", "ENG | Drama", "English Movies", "UK | EN Movies"] {
+            XCTAssertTrue(CategoryRegion.isUnitedStates(name), name)
+            XCTAssertTrue(CategoryRegion.included(name, unitedStatesOnly: true), name)
+        }
+        for name in ["Enemy", "Frozen", "Entertainment", "Englishman"] {
+            XCTAssertFalse(CategoryRegion.isEnglish(name), name)
+        }
+        XCTAssertFalse(CategoryRegion.included("UK | BBC", unitedStatesOnly: true))
+    }
+
+    func testEnglishTitlesOverrideRegionButRespectManualHiding() {
+        let categories = [CatalogCategory(id: "uk", name: "UK | Mixed")]
+        let channel = CatalogItem(id: "en-live", name: "News EN", kind: .live, fileExtension: "ts", poster: nil, categoryID: "uk")
+        let movie = CatalogItem(id: "en-movie", name: "Movie (EN)", kind: .movies, fileExtension: "mp4", poster: nil, categoryID: "uk")
+        let show = SeriesItem(id: "en-show", name: "From EN", poster: nil, categoryID: "uk")
+        var preferences = LibraryPreferences()
+        preferences.unitedStatesOnly = true
+        XCTAssertTrue(preferences.accepts(channel, categories: categories))
+        XCTAssertTrue(preferences.accepts(movie, categories: categories))
+        XCTAssertTrue(preferences.acceptsSeries(show, categories: categories))
+        preferences.hiddenChannels.insert(channel.scopedID)
+        preferences.hiddenMovieCategories.insert("uk")
+        preferences.hiddenSeriesCategories.insert("uk")
+        XCTAssertFalse(preferences.accepts(channel, categories: categories))
+        XCTAssertFalse(preferences.accepts(movie, categories: categories))
+        XCTAssertFalse(preferences.acceptsSeries(show, categories: categories))
+    }
+
+    func testNonEnglishCategoriesAreAutomaticallyHiddenAndCanBeRestored() throws {
+        let hidden = ["Arabic Movies", "AR| Drama", "العربية", "أفلام عربية", "الأخبار", "ES| Cine", "Spanish Movies", "Hindi Movies", "Русские каналы"]
+        let retained = ["EN Movies", "English Drama", "US| News", "UK| News", "Sports", "Entertainment"]
+        var preferences = LibraryPreferences()
+        preferences.unitedStatesOnly = false
+        XCTAssertTrue(preferences.hideNonEnglishCategories)
+        for name in hidden {
+            XCTAssertTrue(CategoryRegion.isNonEnglish(name), name)
+            for section in CatalogSection.allCases {
+                XCTAssertFalse(preferences.allows(CatalogCategory(id: "test", name: name), section: section), name)
+            }
+        }
+        for name in retained {
+            XCTAssertFalse(CategoryRegion.isNonEnglish(name), name)
+            XCTAssertTrue(preferences.allows(CatalogCategory(id: "test", name: name), section: .live), name)
+        }
+        let legacy = try JSONDecoder().decode(LibraryPreferences.self, from: Data(#"{"unitedStatesOnly":false,"progress":{"7":{"seconds":125,"duration":7200,"updated":1}}}"#.utf8))
+        XCTAssertTrue(legacy.hideNonEnglishCategories)
+        XCTAssertEqual(legacy.progress["7"]?.seconds, 125)
+        preferences.hideNonEnglishCategories = false
+        let restored = try JSONDecoder().decode(LibraryPreferences.self, from: JSONEncoder().encode(preferences))
+        XCTAssertFalse(restored.hideNonEnglishCategories)
+        XCTAssertTrue(restored.allows(CatalogCategory(id: "ar", name: "العربية"), section: .live))
+    }
+
+    func testNonEnglishCategoryContentIsExcludedEvenWithEnglishTitle() {
+        let categories = [CatalogCategory(id: "ar", name: "العربية")]
+        var preferences = LibraryPreferences()
+        preferences.unitedStatesOnly = false
+        let movie = CatalogItem(id: "1", name: "Movie EN", kind: .movies, fileExtension: "mp4", poster: nil, categoryID: "ar")
+        let show = SeriesItem(id: "2", name: "Show EN", poster: nil, categoryID: "ar")
+        XCTAssertFalse(preferences.accepts(movie, categories: categories))
+        XCTAssertFalse(preferences.acceptsSeries(show, categories: categories))
+        preferences.hideNonEnglishCategories = false
+        XCTAssertTrue(preferences.accepts(movie, categories: categories))
+        XCTAssertTrue(preferences.acceptsSeries(show, categories: categories))
     }
 
     func testBrowseCategoriesHidesForeignAndHonorsOrderAndRenames() {

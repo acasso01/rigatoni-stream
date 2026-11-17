@@ -133,8 +133,7 @@ private struct TVMultiPane: View {
 
     @EnvironmentObject private var model: AppModel
     @StateObject private var player = TVNativePlayer()
-    @Environment(\.isFocused) private var focused
-    @FocusState private var held: Bool
+    @FocusState private var focused: Bool
 
     private var url: URL? {
         guard let item else { return nil }
@@ -143,8 +142,9 @@ private struct TVMultiPane: View {
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
-            if let item, let url {
-                TVMultiSurface(player: player, url: url, cache: cache)
+            if item != nil, let url {
+                TVMultiSurface(player: player)
+                    .task(id: "\(item?.scopedID ?? "")-\(url)-\(suspended)") { playCurrent() }
             } else {
                 Color.black
                 VStack(spacing: 16) {
@@ -205,34 +205,31 @@ private struct TVMultiPane: View {
                         lineWidth: isActive ? 5 : 2)
         )
         .focusable()
-        .focused($held)
+        .focused($focused)
         .focusSection()
         .onTapGesture { onSelect() }
         .onMoveCommand { direction in
             switch direction {
             case .up:
                 onStep(-1)
-                held = true
-                Task { @MainActor in held = true }
+                focused = true
+                Task { @MainActor in focused = true }
             case .down:
                 onStep(1)
-                held = true
-                Task { @MainActor in held = true }
+                focused = true
+                Task { @MainActor in focused = true }
             default:
                 break
             }
         }
-        .onPlayPauseCommand { player.toggle() }
+        .onPlayPauseCommand { if !suspended { player.toggle() } }
         .contextMenu {
             Button("Watch fullscreen") { onExpand() }
             Button("Change channel") { onSelect() }
         }
         .onChange(of: focused) { _, value in if value { onFocused() } }
         .onChange(of: isActive) { _, _ in applyVolume() }
-        .onChange(of: item?.scopedID) { _, _ in playCurrent() }
-        .onChange(of: suspended) { _, value in
-            if value { player.stop() } else { playCurrent() }
-        }
+        .onChange(of: player.playing) { _, _ in applyVolume() }
         .onAppear { applyVolume() }
         .onDisappear { player.stop() }
     }
@@ -250,23 +247,20 @@ private struct TVMultiPane: View {
         player.title = item.name
         player.isLive = true
         player.play(url: url, cache: cache)
+        applyVolume()
     }
 }
 
 // Plain UIView as the VLC drawable for one multi-view pane. Playback
-// starts in makeUIView, mirroring TVVideoSurface; later channel changes
-// go through the pane's playCurrent().
+// starts in the surface task, after attachment, so published playback
+// state never changes during a SwiftUI view update.
 private struct TVMultiSurface: UIViewRepresentable {
     let player: TVNativePlayer
-    let url: URL
-    let cache: Int
 
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
         view.backgroundColor = .black
         player.attach(view)
-        player.isLive = true
-        player.play(url: url, cache: cache)
         return view
     }
 

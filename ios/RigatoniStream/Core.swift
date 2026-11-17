@@ -454,6 +454,12 @@ final class AccountAPI {
 }
 
 @MainActor final class AppModel: ObservableObject {
+    enum ProviderSource: String { case profiles, local, account }
+    static let providerSourceKey = "ant-active-provider-source"
+    private var providerSource: ProviderSource? {
+        get { UserDefaults.standard.string(forKey: Self.providerSourceKey).flatMap(ProviderSource.init(rawValue:)) }
+        set { UserDefaults.standard.set(newValue?.rawValue, forKey: Self.providerSourceKey) }
+    }
     @Published var starting = true
     @Published var busy = false
     @Published var notice = ""
@@ -467,8 +473,10 @@ final class AccountAPI {
     @Published var localProviders: [LocalProvider] = []
     @Published var activeLocalID: String?
     @Published var preferences = LibraryPreferences()
-    let account = AccountAPI()
+    let account: AccountAPI
     let catalog = SessionCatalog()
+
+    init(account: AccountAPI? = nil) { self.account = account ?? AccountAPI() }
     private var restored = false
     private var warmup: Task<Void, Never>?
     var gatewayConnection: [String: Any]?
@@ -498,7 +506,7 @@ final class AccountAPI {
     }
     var preferenceKey: String? {
         if libraryMode == .combined { return "ant-combined-library-v1" }
-        if let selected = vault.selectedID { return "ant-provider-" + selected.uuidString + "-library-v1" }
+        if providerSource == .profiles, let selected = vault.selectedID { return "ant-provider-" + selected.uuidString + "-library-v1" }
         // Device-local / account provider with no vault profile: scope by
         // account id and provider host, as before.
         guard let id = libraryAccountID, let host = try? provider.baseURL().host else { return nil }
@@ -506,7 +514,7 @@ final class AccountAPI {
     }
     var pinKey: String? {
         if libraryMode == .combined { return "ant-combined-library-v1-pins" }
-        if let selected = vault.selectedID { return "ant-provider-" + selected.uuidString + "-pins" }
+        if providerSource == .profiles, let selected = vault.selectedID { return "ant-provider-" + selected.uuidString + "-pins" }
         guard let id = libraryAccountID, let host = try? provider.baseURL().host else { return nil }
         return CategoryPins.key(accountID: id, host: host)
     }
@@ -571,10 +579,6 @@ final class AccountAPI {
         do {
             vault = try ProviderKeychain.read(service: ProviderKeychain.vaultService)
             restored = true
-            if let profile = vault.profiles.first(where: { $0.id == vault.selectedID }) ?? vault.profiles.first {
-                vault.selectedID = profile.id; provider = profile.provider
-                resetCatalog(); preload()
-            }
         } catch { notice = error.localizedDescription }
         // Device-local providers and the account session.
         do {
@@ -584,7 +588,7 @@ final class AccountAPI {
         do {
             signedIn = try await account.restore()
             if signedIn { try await reloadSettings() }
-            else { activateDeviceProvider(); resetGateway() }
+            else { activateDeviceProvider(); resetCatalog(); if providerReady { preload() } }
         } catch {
             notice = error.localizedDescription
             if !providerReady { activateDeviceProvider() }
@@ -592,7 +596,23 @@ final class AccountAPI {
             settingsVisible = signedIn && !providerReady
         }
     }
-    func reloadSettings() async throws {
+    func reloadSettings(preferAccount: Bool = false) async throws {
+        // An account session and two device stores may coexist. Reload the
+        // source the user explicitly chose, rather than letting startup order
+        // replace it with an older record from a different store.
+        if !preferAccount {
+            if providerSource == .profiles, let profile = selectedProfile {
+                applyProfile(profile)
+                resetCatalog(); if providerReady { preload() }
+                notice = "Provider loaded from this device."
+                return
+            }
+            if providerSource == .local, activateLocalProvider() {
+                resetCatalog(); if providerReady { preload() }
+                notice = "Provider loaded from this device."
+                return
+            }
+        }
         if account.session != nil {
             let result = try await account.loadSettings()
             let vaultReady = (try? result.provider.baseURL()) != nil
@@ -601,6 +621,7 @@ final class AccountAPI {
                 gateway = result.gateway
                 providerName = result.name
                 activeLocalID = nil
+                providerSource = .account
             } else if !providerReady {
                 activateDeviceProvider()
             }
@@ -617,10 +638,27 @@ final class AccountAPI {
         }
     }
     func saveSettings() async {
+        guard !busy else { return }
         busy = true; defer { busy = false }
         do {
-            if account.session != nil {
+            if providerSource == .profiles, let profile = selectedProfile {
+                var value = provider
+                let label = providerName.trimmingCharacters(in: .whitespacesAndNewlines)
+                value.name = label.isEmpty ? profile.provider.name : label
+                _ = try value.baseURL()
+                if !value.epgURL.isEmpty { _ = try Provider.validURL(value.epgURL) }
+                var next = vault
+                let index = next.profiles.firstIndex { $0.id == profile.id }!
+                next.profiles[index].provider = value
+                next.selectedID = profile.id
+                try ProviderKeychain.write(next, service: ProviderKeychain.vaultService)
+                vault = next
+                applyProfile(next.profiles[index])
+                resetCatalog(); if providerReady { preload() }
+                notice = "Provider saved on this device."
+            } else if account.session != nil, providerSource != .local {
                 try await account.save(provider: provider, gateway: gateway, name: providerName)
+                providerSource = .account
                 gateway = try AccountAPI.gatewayOrigin(gateway)
                 if let id = activeLocalID {
                     let record = try LocalProvider.make(id: id, name: providerName, provider: provider, gateway: gateway)
@@ -639,9 +677,14 @@ final class AccountAPI {
         } catch { notice = error.localizedDescription }
     }
     func deleteSettings() async {
+        guard !busy else { return }
+        if providerSource == .profiles, let profile = selectedProfile {
+            do { try deleteProvider(profile.id) } catch { notice = error.localizedDescription }
+            return
+        }
         busy = true; defer { busy = false }
         do {
-            if account.session != nil {
+            if account.session != nil, providerSource != .local {
                 try await account.deleteSettings()
                 provider = Provider(); providerName = ""; gateway = ""
                 activeLocalID = nil
@@ -716,11 +759,13 @@ final class AccountAPI {
                 try ProviderKeychain.write(store)
                 localProviders = store.providers
             }
-            if account.session == nil, activeLocalID == id {
+            if (account.session == nil || providerSource == .local), activeLocalID == id {
                 if let nextID = store.activeID, let next = store.providers.first(where: { $0.id == nextID }) {
                     applyLocal(next)
                 } else {
                     provider = Provider(); providerName = ""; gateway = ""; activeLocalID = nil
+                    providerSource = nil
+                    activateDeviceProvider()
                 }
                 resetGateway(); libraryRevision += 1
             }
@@ -732,23 +777,36 @@ final class AccountAPI {
         "Provider saved on this device. No account required."
     }
 
-    /// Device-local provider: the multi-profile vault wins when it has a
-    /// usable selected profile; otherwise fall back to the local store.
-    private func activateDeviceProvider() {
-        if let profile = vault.profiles.first(where: { $0.id == vault.selectedID }) ?? vault.profiles.first,
-           (try? profile.provider.baseURL()) != nil {
-            provider = profile.provider
-            return
-        }
-        activateLocalProvider()
+    private var selectedProfile: ProviderProfile? {
+        vault.profiles.first(where: { $0.id == vault.selectedID }) ?? vault.profiles.first
     }
 
-    private func activateLocalProvider() {
+    private func applyProfile(_ profile: ProviderProfile) {
+        provider = profile.provider
+        providerName = profile.provider.name
+        gateway = ""
+        activeLocalID = nil
+        providerSource = .profiles
+    }
+
+    /// Fall back only if the explicitly selected source has no usable entry.
+    private func activateDeviceProvider() {
+        if providerSource == .local, activateLocalProvider() { return }
+        if let profile = selectedProfile, (try? profile.provider.baseURL()) != nil {
+            vault.selectedID = profile.id
+            applyProfile(profile)
+            return
+        }
+        _ = activateLocalProvider()
+    }
+
+    @discardableResult
+    private func activateLocalProvider() -> Bool {
         let store = (try? ProviderKeychain.read()) ?? LocalProviderVault()
         localProviders = store.providers
         guard let record = store.providers.first(where: { $0.id == store.activeID }) ?? store.providers.first else {
             activeLocalID = nil
-            return
+            return false
         }
         if store.activeID != record.id {
             var fixed = store
@@ -756,13 +814,15 @@ final class AccountAPI {
             try? ProviderKeychain.write(fixed)
         }
         applyLocal(record)
+        return true
     }
 
     private func applyLocal(_ record: LocalProvider) {
-        provider = Provider(server: record.server, username: record.username, password: record.password)
+        provider = Provider(server: record.server, username: record.username, password: record.password, name: record.name)
         providerName = record.name
         gateway = record.gateway
         activeLocalID = record.id
+        providerSource = .local
     }
 
     private func storeLocal(_ record: LocalProvider, makeActive: Bool) throws {
@@ -796,14 +856,14 @@ final class AccountAPI {
             let entry = ProviderProfile(provider: value); next.profiles.append(entry); next.selectedID = entry.id
         }
         try ProviderKeychain.write(next, service: ProviderKeychain.vaultService)
-        vault = next; provider = value; restored = true
+        vault = next; applyProfile(next.profiles.first { $0.id == next.selectedID }!); restored = true
         resetCatalog(); preload(); notice = "Provider saved securely on this device."
     }
     func selectProvider(_ id: UUID) throws {
         guard !busy, let selected = vault.profiles.first(where: { $0.id == id }) else { return }
         var next = vault; next.selectedID = id
         try ProviderKeychain.write(next, service: ProviderKeychain.vaultService)
-        vault = next; provider = selected.provider; resetCatalog(); preload(); notice = ""
+        vault = next; applyProfile(selected); resetCatalog(); preload(); notice = ""
     }
     func deleteProvider(_ id: UUID) throws {
         guard !busy else { return }
@@ -819,8 +879,12 @@ final class AccountAPI {
         vault = next
         let prefix = "ant-provider-" + id.uuidString
         for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix(prefix) { UserDefaults.standard.removeObject(forKey: key) }
-        if switched || next.profiles.isEmpty {
-            provider = next.profiles.first(where: { $0.id == next.selectedID })?.provider ?? Provider()
+        if providerSource == .profiles, switched || next.profiles.isEmpty {
+            if let profile = next.profiles.first(where: { $0.id == next.selectedID }) { applyProfile(profile) }
+            else {
+                provider = Provider(); providerName = ""; activeLocalID = nil; providerSource = nil
+                activateDeviceProvider()
+            }
             resetCatalog(); if providerReady { preload() }
         }
         notice = "Provider deleted from this device."

@@ -99,7 +99,7 @@ struct TVLoginView: View {
                     email: email.trimmingCharacters(in: .whitespacesAndNewlines), password: password)
             }
             password = ""; model.signedIn = true
-            do { try await model.reloadSettings() }
+            do { try await model.reloadSettings(preferAccount: true) }
             catch { model.notice = "Signed in. \(error.localizedDescription)" }
         } catch { model.notice = error.localizedDescription }
     }

@@ -119,7 +119,7 @@ enum CategoryRegion {
     static func included(_ name: String, unitedStatesOnly: Bool) -> Bool {
         guard unitedStatesOnly else { return true }
         let folded = NameCleaner.fold(name)
-        if hasTag(folded, words: usWords, codes: ["U.S.A.", "U.S.", "USA", "US"]) { return true }
+        if hasTag(folded, words: usWords, codes: ["U.S.A.", "U.S.", "USA", "US"]) || isEnglish(folded) { return true }
         if hasTag(folded, words: foreignWords, codes: separatedCodes.filter { !["U.S.A.", "U.S.", "USA", "US", "ENGLISH", "ENG", "EN"].contains($0) }) { return false }
         if hasTag(folded, words: englishWords, codes: ["ENGLISH", "ENG", "EN"]) { return true }
         return true
@@ -127,7 +127,37 @@ enum CategoryRegion {
 
     static func isUnitedStates(_ name: String) -> Bool {
         let folded = NameCleaner.fold(name)
-        return hasTag(folded, words: usWords.union(englishWords), codes: ["U.S.A.", "U.S.", "USA", "US", "ENGLISH", "ENG", "EN"])
+        return hasTag(folded, words: usWords, codes: ["U.S.A.", "U.S.", "USA", "US"]) || isEnglish(folded)
+    }
+
+    private static let englishTag = try! NSRegularExpression(
+        pattern: #"(?<![\p{L}\p{N}])(?:EN|ENG|ENGLISH)(?![\p{L}\p{N}])"#,
+        options: [.caseInsensitive])
+
+    static func isEnglish(_ name: String) -> Bool {
+        let folded = NameCleaner.fold(name)
+        return englishTag.firstMatch(in: folded, range: NSRange(folded.startIndex..., in: folded)) != nil
+    }
+
+    private static let nonEnglishScript = try! NSRegularExpression(
+        pattern: #"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0400-\u052F\u0590-\u05FF\u0900-\u0DFF\u0E00-\u0E7F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]"#)
+    private static let nonEnglishLanguages: Set<String> = [
+        "ARABIC", "ARAB", "SPANISH", "ESPANOL", "ESPAÑOL", "FRENCH", "FRANCAIS", "FRANÇAIS",
+        "GERMAN", "DEUTSCH", "ITALIAN", "ITALIANO", "PORTUGUESE", "PORTUGUES", "PORTUGUÊS",
+        "HINDI", "DESI", "PUNJABI", "URDU", "TAMIL", "TELUGU", "MALAYALAM", "BENGALI",
+        "TURKISH", "TURKCE", "TÜRKÇE", "RUSSIAN", "POLISH", "KOREAN", "JAPANESE", "CHINESE",
+        "PERSIAN", "FARSI", "HEBREW", "GREEK", "DUTCH", "SWEDISH", "NORWEGIAN", "DANISH",
+        "ROMANIAN", "HUNGARIAN", "CZECH", "THAI", "VIETNAMESE", "LATINO", "LATINA", "LATAM"
+    ]
+
+    static func isNonEnglish(_ name: String) -> Bool {
+        let folded = NameCleaner.fold(name)
+        if isEnglish(folded) { return false }
+        if nonEnglishScript.firstMatch(in: folded, range: NSRange(folded.startIndex..., in: folded)) != nil { return true }
+        return hasTag(folded, words: nonEnglishLanguages,
+                      codes: ["AR", "ARA", "ES", "SPA", "FR", "FRA", "DE", "GER", "IT", "ITA", "PT", "POR",
+                              "HI", "HIN", "UR", "TAM", "TR", "TUR", "RU", "RUS", "PL", "POL", "KR", "KO",
+                              "JP", "JA", "CN", "ZH", "FA", "HE", "GR", "EL", "NL", "SV", "NO", "DA", "RO"])
     }
 
     static func isForeign(_ name: String) -> Bool {
@@ -465,7 +495,9 @@ extension LibraryPreferences {
         }
     }
     func allows(_ category: CatalogCategory, section: CatalogSection) -> Bool {
-        categoryVisible(category.id, section: section) && CategoryRegion.included(category.name, unitedStatesOnly: unitedStatesOnly)
+        categoryVisible(category.id, section: section)
+            && (!hideNonEnglishCategories || !CategoryRegion.isNonEnglish(category.name))
+            && CategoryRegion.included(category.name, unitedStatesOnly: unitedStatesOnly)
     }
     func presented(_ categories: [CatalogCategory], section: CatalogSection) -> [CatalogCategory] {
         CategoryOrder.apply(categories.filter { allows($0, section: section) }, saved: categoryOrder[section.rawValue] ?? [])
@@ -484,11 +516,16 @@ extension LibraryPreferences {
         let section = CatalogSection(item.kind)
         guard !item.categoryID.isEmpty else { return true }
         guard let category = categories.first(where: { $0.id == item.categoryID }) else { return true }
+        if hideNonEnglishCategories, CategoryRegion.isNonEnglish(category.name) { return false }
+        if unitedStatesOnly, CategoryRegion.isEnglish(item.name) { return true }
         return allows(category, section: section)
     }
     func acceptsSeries(_ item: SeriesItem, categories: [CatalogCategory]) -> Bool {
+        guard categoryVisible(item.categoryID, section: .series) else { return false }
         guard !item.categoryID.isEmpty else { return true }
         guard let category = categories.first(where: { $0.id == item.categoryID }) else { return true }
+        if hideNonEnglishCategories, CategoryRegion.isNonEnglish(category.name) { return false }
+        if unitedStatesOnly, CategoryRegion.isEnglish(item.name) { return true }
         return allows(category, section: .series)
     }
     static func renameKey(section: CatalogSection, role: String, id: String) -> String {
@@ -693,6 +730,13 @@ struct LibraryFilterToggles: View {
             set: { model.preferences.unitedStatesOnly = $0; model.savePreferences() }
         ))
         Text("Hides categories tagged for other countries, such as UK| or Spanish. Categories with no country tag stay visible.")
+            .font(.footnote).foregroundStyle(.secondary)
+        Toggle("Hide non-English categories", isOn: Binding(
+            get: { model.preferences.hideNonEnglishCategories },
+            set: { model.preferences.hideNonEnglishCategories = $0; model.savePreferences() }
+        ))
+        .accessibilityIdentifier("hide-non-english-categories")
+        Text("On by default. Hides categories marked Arabic and other non-English languages, including Arabic-script names. EN, ENG, English and untagged categories remain available.")
             .font(.footnote).foregroundStyle(.secondary)
         Toggle("Clean names", isOn: Binding(
             get: { model.preferences.cleanNames },

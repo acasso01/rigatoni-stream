@@ -11,8 +11,17 @@ struct TVSearchView: View {
     @State private var playing: CatalogItem?
     @State private var seriesStore: SeriesStore?
     @State private var allSeries: [SeriesItem] = []
+    @State private var seriesGroups: [SeriesSearchGroup] = []
+    @State private var seriesDataRevision = 0
+    @State private var groupedKey = ""
+    @State private var selectedGroup: SeriesSearchGroup?
+    @State private var showingVersions = false
     @State private var seriesLoading = false
     @State private var seriesNotice = ""
+    @State private var seriesProgress = ""
+    @State private var seriesComplete = false
+    @State private var seriesRequest = UUID()
+    @State private var completedLoadKey: String?
     @State private var limit = 60
     @State private var retry = 0
     // Detail screens push on a NavigationStack so the player's cover is a
@@ -24,12 +33,12 @@ struct TVSearchView: View {
     // The search field mounts synchronously, so focusing it on appear is
     // deterministic. Selecting it opens the tvOS keyboard.
     @FocusState private var fieldFocused: Bool
+    private var loadKey: String { "\(hasQuery)-\(filter)-\(model.libraryRevision)-\(retry)" }
+    private var includesSeries: Bool { filter == "all" || filter == "series" }
     private var normalizedQuery: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var hasQuery: Bool { normalizedQuery.count >= 2 }
-    private var seriesMatches: [SeriesItem] {
-        guard !normalizedQuery.isEmpty else { return [] }
-        return allSeries.filter { $0.name.localizedStandardContains(normalizedQuery) }
-    }
+    private var groupingKey: String { "\(normalizedQuery)-\(seriesDataRevision)-\(model.libraryRevision)" }
+    private var seriesMatches: [SeriesSearchGroup] { seriesGroups }
 
     var body: some View {
         NavigationStack {
@@ -49,6 +58,7 @@ struct TVSearchView: View {
                         .font(.system(size: 20)).foregroundStyle(.secondary)
                     StreamOptionPicker(options: [("all", "All"), (LibraryKind.movies.rawValue, "Movies"), (LibraryKind.live.rawValue, "Live TV"), ("series", "TV Shows")], selection: $filter)
                         .frame(maxWidth: 580)
+                        .focusSection()
                 }
                 .onAppear { fieldFocused = true }
                 if !hasQuery {
@@ -62,13 +72,13 @@ struct TVSearchView: View {
                     ForEach(notices, id: \.self) { Text($0).font(.callout).foregroundStyle(.secondary) }
                     if !notices.isEmpty { Button("Retry unavailable catalogs") { retry += 1 } }
                     if filter == "all" || filter == "series" {
-                        if seriesLoading { ProgressView("Loading TV shows…") }
+                        if seriesLoading { ProgressView(seriesProgress.isEmpty ? "Loading TV shows…" : "Searching TV shows: \(seriesProgress)") }
                         if !seriesNotice.isEmpty {
                             Text("TV show search: \(seriesNotice)")
                                 .font(.callout).foregroundStyle(.secondary)
                             Button("Retry TV show search") { retry += 1 }
                         }
-                        if filter == "series", !seriesLoading, seriesNotice.isEmpty, seriesMatches.isEmpty {
+                        if filter == "series", seriesComplete, groupedKey == groupingKey, !seriesLoading, seriesNotice.isEmpty, seriesMatches.isEmpty {
                             Text("No TV shows match “\(normalizedQuery)”. Check the selected Xtream Codes provider and try again.")
                                 .foregroundStyle(.secondary)
                         }
@@ -91,22 +101,29 @@ struct TVSearchView: View {
                         if !seriesMatches.isEmpty {
                             Text("TV Shows").font(.title2.bold()).padding(.top, 12)
                             LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 32)], alignment: .leading, spacing: 36) {
-                                ForEach(Array(seriesMatches.prefix(limit)), id: \.scopedID) { series in
-                                    Button { openSeries(series) } label: {
+                                ForEach(Array(seriesMatches.prefix(limit))) { group in
+                                    Button { openGroup(group) } label: {
                                         VStack(alignment: .leading, spacing: 10) {
-                                            ProviderPoster(url: series.poster, kind: .movies)
+                                            ProviderPoster(url: group.preferred.poster, kind: .movies)
                                                 .frame(width: 200, height: 300)
                                                 .clipShape(RoundedRectangle(cornerRadius: TVTheme.corner))
-                                            Text(series.name).font(.headline).lineLimit(2)
-                                            Label("TV Show", systemImage: "play.tv")
+                                            Text(group.title).font(.headline).lineLimit(2)
+                                            if !group.year.isEmpty { Text(group.year).font(.caption).foregroundStyle(.secondary) }
+                                            Label(group.variants.count > 1 ? "\(group.variants.count) versions" : "TV Show", systemImage: "play.tv")
                                                 .font(.caption).foregroundStyle(.secondary)
                                         }
                                     }.buttonStyle(TVCardButtonStyle())
+                                    .accessibilityIdentifier("series-group-\(group.id)")
                                 }
                             }.padding(.vertical, 20)
+                            .focusSection()
+                            if seriesMatches.count > limit {
+                                Button("More TV show results") { limit += 60 }
+                            }
                         }
                     }
-                    if filter != "series", catalog.progress.isEmpty, results.isEmpty, seriesMatches.isEmpty, !seriesLoading {
+                    if filter != "series", completedLoadKey == loadKey, catalog.progress.isEmpty, results.isEmpty,
+                       (!includesSeries || (seriesComplete && groupedKey == groupingKey && seriesMatches.isEmpty)), !seriesLoading, seriesNotice.isEmpty {
                         Text("No matching titles in the loaded catalogs.").foregroundStyle(.secondary)
                     }
                 }
@@ -114,14 +131,41 @@ struct TVSearchView: View {
             .navigationDestination(isPresented: $showingDetail) {
                 if let item = detailItem { MovieDetailView(item: item) }
             }
+            .navigationDestination(isPresented: $showingVersions) {
+                if let selectedGroup, let store = seriesStore {
+                    let ids = Set(selectedGroup.variants.map(\.scopedID))
+                    let group = seriesGroups.first { $0.id == selectedGroup.id }
+                        ?? seriesGroups.first { $0.variants.contains { ids.contains($0.scopedID) } }
+                        ?? selectedGroup
+                    TVSeriesVersionsView(group: group, store: store, loading: seriesLoading)
+                }
+            }
             .navigationDestination(isPresented: $showingSeriesDetail) {
                 if let series = detailSeries, let store = seriesStore { TVSeriesDetailView(series: series, store: store) }
             }
             }
         }
         .background { StreamBackdrop() }
-        .task(id: "\(hasQuery)-\(filter)-\(model.libraryRevision)-\(retry)") {
+        .task(id: groupingKey) {
+            let key = groupingKey
+            do { try await Task.sleep(for: .milliseconds(120)) } catch { return }
+            let items = allSeries
+            let categories = seriesStore?.categories ?? []
+            let preferences = model.preferences
+            let term = normalizedQuery
+            let job = Task.detached(priority: .userInitiated) {
+                SeriesSearchGrouping.matches(items, query: term, categories: categories, preferences: preferences)
+            }
+            let groups = await withTaskCancellationHandler(operation: { await job.value }, onCancel: { job.cancel() })
+            guard !Task.isCancelled else { return }
+            seriesGroups = groups
+            groupedKey = key
+        }
+        .task(id: loadKey) {
+            completedLoadKey = nil
             guard hasQuery, model.providerReady else { return }
+            let key = loadKey
+            defer { if !Task.isCancelled, loadKey == key { completedLoadKey = key } }
             notices = []
             // Only load the catalogs the selected filter needs.
             let scope = filter
@@ -142,7 +186,14 @@ struct TVSearchView: View {
             limit = 60
             guard hasQuery else { results = []; return }
             do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
-            let snapshot = LibraryKind.allCases.flatMap { catalog.searchable[$0] ?? [] }.filter(model.preferences.visible)
+            let snapshot = LibraryKind.allCases.flatMap { kind in
+                let excluded = Set(catalog.knownCategories(kind: kind).filter {
+                    model.preferences.hideNonEnglishCategories && CategoryRegion.isNonEnglish($0.name)
+                }.map(\.id))
+                return (catalog.searchable[kind] ?? []).filter {
+                    model.preferences.visible($0) && !excluded.contains($0.categoryID)
+                }
+            }
             let term = normalizedQuery; let choice = filter
             let worker = Task.detached(priority: .userInitiated) { UnifiedSearch.matches(snapshot, query: term, filter: choice) }
             let found = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
@@ -159,20 +210,41 @@ struct TVSearchView: View {
         } catch { if !Task.isCancelled { notices.append("\(kind.title): \(error.localizedDescription)") } }
     }
     private func loadSeries() async {
-        if seriesStore == nil { seriesStore = SeriesStore(model: model) }
-        guard let store = seriesStore else { return }
+        // Each request owns its store. A cancelled All search must not clear
+        // the loading/results state of a newer TV Shows filter request.
+        let request = UUID()
+        seriesRequest = request
+        let store = SeriesStore(model: model)
+        seriesStore = store
+        allSeries = []
+        seriesGroups = []
+        seriesDataRevision += 1
         seriesLoading = true
+        seriesComplete = false
+        seriesProgress = ""
         seriesNotice = ""
-        defer { seriesLoading = false }
-        let items = await store.loadAllSeries()
-        guard !Task.isCancelled else { return }
+        defer { if seriesRequest == request { seriesLoading = false } }
+        let items = await store.loadAllSeries(includeNonEnglish: true) { items, progress in
+            guard !Task.isCancelled, seriesRequest == request else { return }
+            allSeries = items
+            seriesDataRevision += 1
+            seriesProgress = progress
+        }
+        guard !Task.isCancelled, seriesRequest == request else { return }
         allSeries = items
+        seriesDataRevision += 1
         seriesNotice = store.error
+        seriesComplete = true
     }
 
     private func openResult(_ item: CatalogItem) {
         if item.kind == .movies { detailItem = item; showingDetail = true }
         else { playing = item }
+    }
+
+    private func openGroup(_ group: SeriesSearchGroup) {
+        if group.variants.count == 1, !seriesLoading { openSeries(group.preferred) }
+        else { selectedGroup = group; showingVersions = true }
     }
 
     private func openSeries(_ series: SeriesItem) {

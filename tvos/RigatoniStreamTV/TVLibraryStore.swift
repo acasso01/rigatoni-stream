@@ -11,12 +11,13 @@ final class TVLibraryStore: ObservableObject {
     let kind: LibraryKind
     private let model: AppModel
 
-    @Published var categories: [CatalogCategory] = []
-    @Published var items: [CatalogItem] = []
+    @Published var categories: [CatalogCategory] = [] { didSet { contentRevision += 1 } }
+    @Published var items: [CatalogItem] = [] { didSet { contentRevision += 1 } }
     @Published var loading = false
     @Published var progress = ""
     @Published var error = ""
     @Published var revision = 0
+    @Published private(set) var contentRevision = 0
     private var categoryCache: [String: [CatalogItem]] = [:]
     private var allCache: CatalogLoadResult?
 

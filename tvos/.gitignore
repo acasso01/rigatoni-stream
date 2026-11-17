@@ -12,3 +12,8 @@ tests.log
 device-build.log
 Private/
 __pycache__/
+
+# Local recovery copies
+*.swift.working
+*.swift.backup
+*.swift.broken-backup

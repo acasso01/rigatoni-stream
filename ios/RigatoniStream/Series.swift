@@ -161,41 +161,57 @@ final class SeriesStore: ObservableObject {
     /// Loads every series for search using the same category-scoped requests
     /// as the TV Shows browser. Many Xtream providers reject an unscoped
     /// `get_series` request, so search must not depend on that optional form.
-    func loadAllSeries() async -> [SeriesItem] {
+    func loadAllSeries(includeNonEnglish: Bool = false, update: (([SeriesItem], String) -> Void)? = nil) async -> [SeriesItem] {
         error = ""
-        if let unavailableReason {
-            error = unavailableReason
-            return []
-        }
+        if let unavailableReason { error = unavailableReason; return [] }
         await loadCategories()
-        guard error.isEmpty else { return [] }
-        var seen = Set<String>()
+        guard !Task.isCancelled, error.isEmpty else { return [] }
+        // Bound provider traffic while letting results arrive from every
+        // category, including shows near the end of a large catalog.
+        let searchableCategories = categories.filter {
+            includeNonEnglish || !model.preferences.hideNonEnglishCategories || !CategoryRegion.isNonEnglish($0.name)
+        }
+        let requests = searchableCategories.enumerated().map { index, category -> (Int, String, Provider?, UUID?) in
+            if model.libraryMode == .combined,
+               let (id, raw) = CatalogItem.splitNamespaced(category.id),
+               let profile = model.vault.profiles.first(where: { $0.id == id }) {
+                return (index, raw, profile.provider, id)
+            }
+            return (index, category.id, nil, nil)
+        }
+        var batches: [Int: [SeriesItem]] = [:]
+        var failures = 0
+        var completed = 0
         var all: [SeriesItem] = []
-        var lastError: Error?
-        for category in categories {
-            do { try Task.checkCancellation() } catch { break }
-            do {
-                var owner: Provider? = nil
-                var rawID = category.id
-                var providerID: UUID? = nil
-                if model.libraryMode == .combined,
-                   let (id, raw) = CatalogItem.splitNamespaced(category.id),
-                   let profile = model.vault.profiles.first(where: { $0.id == id }) {
-                    owner = profile.provider
-                    rawID = raw
-                    providerID = id
+        await withTaskGroup(of: (Int, [SeriesItem]?).self) { group in
+            var next = 0
+            func enqueue(_ request: (Int, String, Provider?, UUID?)) {
+                group.addTask { [self] in
+                    do {
+                        try Task.checkCancellation()
+                        guard let rows = try await fetchJSON(action: "get_series", extra: ["category_id": request.1], provider: request.2) as? [[String: Any]] else {
+                            return (request.0, nil)
+                        }
+                        try Task.checkCancellation()
+                        return (request.0, Self.parseSeries(rows, providerID: request.3))
+                    } catch { return (request.0, nil) }
                 }
-                guard let rows = try await fetchJSON(action: "get_series", extra: ["category_id": rawID], provider: owner) as? [[String: Any]] else {
-                    throw AppFailure("The provider returned an invalid TV show list.")
-                }
-                for item in Self.parseSeries(rows, providerID: providerID) where seen.insert(item.scopedID).inserted {
-                    all.append(item)
-                }
-            } catch {
-                lastError = error
+            }
+            for request in requests.prefix(3) { enqueue(request); next += 1 }
+            while let (index, items) = await group.next() {
+                guard !Task.isCancelled else { group.cancelAll(); return }
+                completed += 1
+                if let items { batches[index] = items } else { failures += 1 }
+                var seen = Set<String>()
+                all = batches.keys.sorted().flatMap { batches[$0] ?? [] }.filter { seen.insert($0.scopedID).inserted }
+                update?(all, "\(completed) of \(requests.count) categories")
+                if next < requests.count { enqueue(requests[next]); next += 1 }
             }
         }
-        if all.isEmpty, let lastError { error = lastError.localizedDescription }
+        guard !Task.isCancelled else { return [] }
+        if failures > 0 {
+            error = "Could not search \(failures) TV show categor\(failures == 1 ? "y" : "ies"). Retry to include the missing results."
+        }
         return all
     }
 
@@ -290,4 +306,95 @@ final class SeriesStore: ObservableObject {
         return (seasons, episodes)
     }
 
+}
+
+// A search result represents a title; provider series IDs remain separate
+// versions so selecting one always loads that provider's seasons/episodes.
+struct SeriesSearchGroup: Identifiable {
+    let id: String
+    let title: String
+    let year: String
+    let variants: [SeriesItem]
+    var preferred: SeriesItem { variants[0] }
+}
+
+enum SeriesSearchGrouping {
+    private static let yearPattern = try! NSRegularExpression(pattern: #"\s*[\(\[]((?:19|20)\d{2})[\)\]]\s*"#)
+    private static let languageSuffix = try! NSRegularExpression(pattern: #"\s*(?:[\(\[](?:EN|ENG|ENGLISH|US|UK|AR|ES|FR|DE)[\)\]]|\b(?:EN|ENG|ENGLISH))\s*$"#, options: [.caseInsensitive])
+    private static let languagePrefix = try! NSRegularExpression(pattern: #"^(?:EN|ENG|ENGLISH)\s+"#, options: [.caseInsensitive])
+
+    private static func identity(_ item: SeriesItem) -> (title: String, key: String, year: String) {
+        var title = NameCleaner.clean(item.name)
+        var year = item.year.count >= 4 ? String(item.year.prefix(4)) : ""
+        if Int(year).map({ (1900...2099).contains($0) }) != true { year = "" }
+        if let match = yearPattern.firstMatch(in: title, range: NSRange(title.startIndex..., in: title)),
+           let range = Range(match.range(at: 1), in: title) { year = String(title[range]) }
+        title = yearPattern.stringByReplacingMatches(in: title, range: NSRange(title.startIndex..., in: title), withTemplate: " ")
+        title = languagePrefix.stringByReplacingMatches(in: title, range: NSRange(title.startIndex..., in: title), withTemplate: "")
+        for _ in 0..<2 {
+            title = languageSuffix.stringByReplacingMatches(in: title, range: NSRange(title.startIndex..., in: title), withTemplate: "")
+        }
+        title = title.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        if title.isEmpty { title = item.name }
+        let key = title.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX")).lowercased()
+        return (title, key, year)
+    }
+
+    static func label(_ item: SeriesItem, categories: [CatalogCategory]) -> String {
+        let category = categories.first { $0.id == item.categoryID }?.name ?? ""
+        let raw = item.name + " | " + category
+        var labels: [String] = []
+        for code in ["US", "UK", "CA", "AU", "AR", "ES", "FR", "DE", "IT", "PT", "IN", "TR", "RU", "NL"] {
+            if NameCleaner.hasSeparatedTag(raw, codes: code == "US" ? ["US", "USA", "U.S.", "U.S.A."] : [code]) { labels.append(code) }
+        }
+        if CategoryRegion.isEnglish(raw) { labels.append("EN · English") }
+        if !labels.isEmpty { return labels.joined(separator: " · ") }
+        return category.isEmpty ? "Available version" : category
+    }
+
+    private static func rank(_ item: SeriesItem, categories: [CatalogCategory]) -> Int {
+        let text = label(item, categories: categories)
+        if text.hasPrefix("US") { return 0 }
+        if text.contains("EN · English") { return 1 }
+        return 2
+    }
+
+    static func matches(_ items: [SeriesItem], query: String, categories: [CatalogCategory], preferences: LibraryPreferences) -> [SeriesSearchGroup] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return [] }
+        var seen = Set<String>()
+        var matched: [(item: SeriesItem, identity: (title: String, key: String, year: String))] = []
+        for item in items {
+            guard !Task.isCancelled else { return [] }
+            guard preferences.categoryVisible(item.categoryID, section: .series), seen.insert(item.scopedID).inserted,
+                  item.name.localizedStandardContains(query) else { continue }
+            matched.append((item, identity(item)))
+        }
+        var years: [String: Set<String>] = [:]
+        for entry in matched where !entry.identity.year.isEmpty { years[entry.identity.key, default: []].insert(entry.identity.year) }
+        var grouped: [String: [SeriesItem]] = [:]
+        var titles: [String: (String, String)] = [:]
+        for entry in matched {
+            let identity = entry.identity
+            // A missing year may join one known edition, but never bridges
+            // two remakes with the same name and different known years.
+            let year = identity.year.isEmpty && years[identity.key]?.count == 1 ? years[identity.key]!.first! : identity.year
+            let key = identity.key + ":" + year
+            grouped[key, default: []].append(entry.item)
+            titles[key] = (identity.title, year)
+        }
+        return grouped.compactMap { key, variants in
+            guard variants.contains(where: { preferences.acceptsSeries($0, categories: categories) }), let title = titles[key] else { return nil }
+            let sorted = variants.sorted {
+                let lhs = rank($0, categories: categories), rhs = rank($1, categories: categories)
+                if lhs != rhs { return lhs < rhs }
+                if ($0.poster != nil) != ($1.poster != nil) { return $0.poster != nil }
+                return $0.scopedID < $1.scopedID
+            }
+            return SeriesSearchGroup(id: key, title: title.0, year: title.1, variants: sorted)
+        }.sorted {
+            if $0.title != $1.title { return $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+            return $0.year < $1.year
+        }
+    }
 }

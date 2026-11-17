@@ -99,12 +99,9 @@ extension EnvironmentValues {
 enum TVColumnFocus {
     @MainActor
     static func keep<ID: Hashable>(_ binding: FocusState<ID?>.Binding, _ next: ID) {
+        // One request per press. Delayed repeats can reclaim focus after
+        // another key press or Back has already moved to a different column.
         binding.wrappedValue = next
-        Task { @MainActor in
-            binding.wrappedValue = next
-            try? await Task.sleep(for: .milliseconds(50))
-            binding.wrappedValue = next
-        }
     }
 }
 private struct TVContentEntry: ViewModifier {

@@ -1,0 +1,124 @@
+{
+  "name": "AntStreamsRegression",
+  "options": {
+    "deploymentTarget": {
+      "tvOS": "17.0"
+    }
+  },
+  "settings": {
+    "base": {
+      "SWIFT_VERSION": "5.0",
+      "GENERATE_INFOPLIST_FILE": "YES",
+      "CODE_SIGNING_ALLOWED": "NO"
+    }
+  },
+  "targets": {
+    "AntStreamsRegressionHost": {
+      "type": "application",
+      "platform": "tvOS",
+      "sources": [
+        {
+          "path": "../RigatoniStreamTV",
+          "excludes": [
+            "TVApp.swift",
+            "Assets.xcassets",
+            "*.working",
+            "*.backup",
+            "*.broken-backup"
+          ]
+        },
+        "Host",
+        {
+          "path": "../../ios/RigatoniStream/Core.swift"
+        },
+        {
+          "path": "../../ios/RigatoniStream/Library.swift"
+        },
+        {
+          "path": "../../ios/RigatoniStream/DirectProviders.swift"
+        },
+        {
+          "path": "../../ios/RigatoniStream/ProviderManagement.swift"
+        },
+        {
+          "path": "../../ios/RigatoniStream/DirectPlayback.swift"
+        },
+        {
+          "path": "../../ios/RigatoniStream/Discovery.swift"
+        },
+        {
+          "path": "../../ios/RigatoniStream/Series.swift"
+        },
+        {
+          "path": "../../ios/RigatoniStream/EPG.swift"
+        },
+        {
+          "path": "../../ios/RigatoniStream/Saved.swift"
+        },
+        {
+          "path": "../../ios/RigatoniStream/LocalProviders.swift"
+        },
+        {
+          "path": "../../ios/RigatoniStream/CatalogPresentation.swift"
+        }
+      ],
+      "settings": {
+        "base": {
+          "PRODUCT_BUNDLE_IDENTIFIER": "local.ant.AntStreamsRegressionHost",
+          "CODE_SIGNING_ALLOWED": "YES",
+          "CODE_SIGN_IDENTITY": "-",
+          "CODE_SIGN_ENTITLEMENTS": "Host/TestHost.entitlements"
+        }
+      },
+      "info": {
+        "path": "Generated/Info.plist",
+        "properties": {
+          "NSAppTransportSecurity": {
+            "NSAllowsArbitraryLoads": true
+          },
+          "UILaunchScreen": {}
+        }
+      },
+      "dependencies": [
+        {
+          "framework": "../Pods/VLCKit/VLCKit.xcframework",
+          "embed": true
+        }
+      ]
+    },
+    "AntStreamsRegressionTests": {
+      "type": "bundle.unit-test",
+      "platform": "tvOS",
+      "sources": [
+        "Tests",
+        "../../ios/RigatoniStreamTests/CatalogPresentationTests.swift"
+      ],
+      "dependencies": [
+        {
+          "target": "AntStreamsRegressionHost"
+        }
+      ],
+      "settings": {
+        "base": {
+          "PRODUCT_BUNDLE_IDENTIFIER": "local.ant.AntStreamsRegressionTests",
+          "SWIFT_ACTIVE_COMPILATION_CONDITIONS": "DEBUG REGRESSION_HOST"
+        }
+      }
+    }
+  },
+  "schemes": {
+    "AntStreamsRegression": {
+      "build": {
+        "targets": {
+          "AntStreamsRegressionHost": "all"
+        }
+      },
+      "test": {
+        "targets": [
+          "AntStreamsRegressionTests"
+        ],
+        "parallelizable": false
+      }
+    }
+  }
+}

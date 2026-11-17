@@ -1,0 +1,16 @@
+PODS:
+  - VLCKit (4.0.0a25)
+
+DEPENDENCIES:
+  - VLCKit (from `../ios/VLCKit.podspec`)
+
+EXTERNAL SOURCES:
+  VLCKit:
+    :podspec: "../ios/VLCKit.podspec"
+
+SPEC CHECKSUMS:
+  VLCKit: 60b5d34d85269d514ea72de5421ecf3bb1e441ff
+
+PODFILE CHECKSUM: ea2244b44693b08e700df9584c8e86416fe1c634
+
+COCOAPODS: 1.16.2

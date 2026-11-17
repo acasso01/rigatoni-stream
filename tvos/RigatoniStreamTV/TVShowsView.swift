@@ -298,3 +298,58 @@ struct TVSeriesDetailView: View {
         }
     }
 }
+
+// Search opens one title, then keeps each provider entry as a selectable
+// version. Country/language badges describe provider labels, not audio analysis.
+struct TVSeriesVersionsView: View {
+    let group: SeriesSearchGroup
+    @ObservedObject var store: SeriesStore
+    var loading = false
+    @Environment(\.dismiss) private var dismiss
+    @State private var selected: SeriesItem?
+    @State private var showingDetail = false
+    @FocusState private var focusedVersion: String?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                HStack {
+                    Button { dismiss() } label: { Label("Back", systemImage: "chevron.left") }
+                    Spacer()
+                }.focusSection()
+                Text(group.title).font(.largeTitle.bold())
+                Text("Choose a version").font(.title2)
+                Text("US and English versions first. Choose an entry to see its seasons and episodes.")
+                    .foregroundStyle(TVTheme.muted)
+                if loading { ProgressView("Checking other available versions…") }
+                ForEach(group.variants, id: \.scopedID) { item in
+                    Button {
+                        selected = item
+                        showingDetail = true
+                    } label: {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(SeriesSearchGrouping.label(item, categories: store.categories)).font(.title3.bold())
+                            Text(item.name).font(.headline)
+                            let category = store.categories.first { $0.id == item.categoryID }?.name ?? ""
+                            let provider = store.provider(for: item).name
+                            Text([category, provider].filter { !$0.isEmpty }.joined(separator: " · "))
+                                .font(.caption).foregroundStyle(TVTheme.muted)
+                        }
+                        .padding(22)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(TVTheme.card, in: RoundedRectangle(cornerRadius: 14))
+                    }
+                    .buttonStyle(TVCardButtonStyle())
+                    .focused($focusedVersion, equals: item.scopedID)
+                    .accessibilityIdentifier("series-version-\(item.scopedID)")
+                }
+            }.padding(60)
+        }
+        .background { StreamBackdrop() }
+        .foregroundStyle(TVTheme.text)
+        .defaultFocus($focusedVersion, group.preferred.scopedID)
+        .navigationDestination(isPresented: $showingDetail) {
+            if let selected { TVSeriesDetailView(series: selected, store: store) }
+        }
+    }
+}

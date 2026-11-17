@@ -11,7 +11,6 @@ import VLCKit
 // trademarks or copied assets.
 struct TVGuideView: View {
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var epgCache = EPGCache.shared
     @State private var store: TVLibraryStore?
     @State private var selectedCategory = "all"
     @State private var pinned: Set<String> = []
@@ -30,6 +29,9 @@ struct TVGuideView: View {
     @State private var previewNowTitle = ""
     @State private var guideVisible = false
     @State private var pinnedCatIDs: [String] = []
+    @State private var visibleCategories: [CatalogCategory] = []
+    @State private var visibleChannels: [CatalogItem] = []
+    @State private var previewClearTask: Task<Void, Never>?
     /// "All" stays first; pinned categories follow in pin order, then the rest.
     private func orderedCats(_ categories: [CatalogCategory]) -> [CatalogCategory] {
         PinnedCategories.ordered(categories, pins: pinnedCatIDs)
@@ -39,15 +41,18 @@ struct TVGuideView: View {
 
     private var selectedName: String {
         if selectedCategory == "all" { return "All Channels" }
-        guard let store else { return "Guide" }
-        return model.preferences.browseCategories(store.categories, section: .live).first { $0.id == selectedCategory }?.name ?? "Guide"
+        return visibleCategories.first { $0.id == selectedCategory }?.name ?? "Guide"
     }
 
     // Pinned channels always float to the top, in every category view.
-    private var ordered: [CatalogItem] {
-        guard let store else { return [] }
-        let visible = store.items.filter { model.preferences.accepts($0, categories: store.categories) }
-        return visible.filter { pinned.contains($0.scopedID) } + visible.filter { !pinned.contains($0.scopedID) }
+    private var ordered: [CatalogItem] { visibleChannels }
+
+    // Build once for catalog/preference changes, rather than running region
+    // matching for every channel on every focus, preview and EPG update.
+    private func refreshVisibleContent(_ store: TVLibraryStore) {
+        visibleCategories = orderedCats(model.preferences.browseCategories(store.categories, section: .live))
+        visibleChannels = TVGuideIndex.channels(store.items, categories: store.categories,
+                                               preferences: model.preferences, pinned: pinned)
     }
 
     // Current half-hour window, e.g. "Now – 11:00p" with "11:30p" next.
@@ -77,6 +82,7 @@ struct TVGuideView: View {
         }
         .onDisappear {
             guideVisible = false
+            previewClearTask?.cancel()
             previewPlayer.stop()
             previewItem = nil
         }
@@ -157,16 +163,16 @@ struct TVGuideView: View {
                         } else {
                             let pageItems = Array(ordered.dropFirst(page * pageSize).prefix(pageSize))
                             ScrollView {
-                                LazyVStack(spacing: 12) {
-                                    ForEach(Array(pageItems.enumerated()), id: \.element.scopedID) { index, channel in
+                                // One bounded page (40 rows): keep all directional
+                                // targets mounted so Down cannot target an absent lazy row.
+                                VStack(spacing: 12) {
+                                    ForEach(pageItems, id: \.scopedID) { channel in
                                         TVGuideRow(channel: channel,
                                                   refreshToken: epgReload,
                                                   isPinned: pinned.contains(channel.scopedID),
                                                   togglePin: { togglePin(channel.scopedID) },
                                                   onHover: { focused in updatePreview(channel, focused: focused) },
                                                   channelFocus: $channelFocus,
-                                                  neighborUp: index > 0 ? pageItems[index - 1].scopedID : nil,
-                                                  neighborDown: index + 1 < pageItems.count ? pageItems[index + 1].scopedID : nil,
                                                   onLeaveLeft: { catFocus = "cat-\(selectedCategory)" }) { playChannel(channel) }
                                     }
                                 }
@@ -197,6 +203,16 @@ struct TVGuideView: View {
             .foregroundStyle(TVTheme.text)
         }
         }
+        .onChange(of: store.contentRevision, initial: true) { _, _ in refreshVisibleContent(store) }
+        .onChange(of: model.libraryRevision) { _, _ in refreshVisibleContent(store) }
+        .onChange(of: pinned) { _, _ in refreshVisibleContent(store) }
+        .onChange(of: pinnedCatIDs) { _, _ in refreshVisibleContent(store) }
+        .onExitCommand {
+            previewClearTask?.cancel()
+            previewItem = nil
+            previewPlayer.stop()
+            railAction.returnToRail()
+        }
         .task(id: "\(model.libraryRevision)-\(retry)") {
             pinned = PinnedChannels.read(key: model.preferenceKey)
             pinnedCatIDs = PinnedCategories.read(key: model.pinKey)
@@ -218,21 +234,19 @@ struct TVGuideView: View {
                 do { try await Task.sleep(for: .seconds(60)) } catch { return }
             }
         }
-        .task(id: "\(previewItem?.id ?? "-")-\(model.libraryRevision)-\(guideVisible)-\(playing?.id ?? "-")") {
-            previewPlayer.stop()
-            previewPlayer.failed = false
+        .task(id: "\(previewItem?.scopedID ?? "-")-\(model.libraryRevision)-\(guideVisible)-\(playing?.scopedID ?? "-")") {
             previewNowTitle = ""
             guard let item = previewItem, model.providerReady, guideVisible, playing == nil else {
                 previewPlayer.stop()
                 return
             }
             // Debounce so fast scrolling doesn't thrash streams.
-            do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
+            do { try await Task.sleep(for: .milliseconds(450)) } catch { return }
             guard !Task.isCancelled else { return }
             do {
                 let url = try model.provider(for: item).streamURL(item: item)
                 try Task.checkCancellation()
-                guard guideVisible, playing == nil, previewItem?.id == item.id else { return }
+                guard guideVisible, playing == nil, previewItem?.scopedID == item.scopedID else { return }
                 previewPlayer.play(url: url)
                 // Best-effort "now playing" label; must not block video.
                 let progs = await EPGCache.shared.programs(streamID: item.id, provider: model.provider(for: item), scope: model.epgScope(for: item))
@@ -255,12 +269,17 @@ struct TVGuideView: View {
     private func updatePreview(_ channel: CatalogItem, focused: Bool) {
         guard guideVisible, playing == nil else { return }
         if focused {
-            guard previewItem?.id != channel.id else { return }
-            previewPlayer.stop()
+            previewClearTask?.cancel()
+            guard previewItem?.scopedID != channel.scopedID else { return }
+            // The playback task debounces before replacing the old stream.
             previewItem = channel
-        } else if previewItem?.id == channel.id {
-            previewPlayer.stop()
-            previewItem = nil
+        } else if previewItem?.scopedID == channel.scopedID {
+            previewClearTask?.cancel()
+            previewClearTask = Task { @MainActor in
+                do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
+                guard !Task.isCancelled, previewItem?.scopedID == channel.scopedID else { return }
+                previewItem = nil
+            }
         }
     }
 
@@ -280,19 +299,25 @@ struct TVGuideView: View {
     // MARK: - Category list (vertical, scrolls down like the concept)
 
     private func categoryList(_ store: TVLibraryStore) -> some View {
-        let ids = ["all"] + orderedCats(model.preferences.browseCategories(store.categories, section: .live)).map(\.id)
+        let ids = ["all"] + visibleCategories.map(\.id)
         return VStack(alignment: .leading, spacing: 12) {
             Text("Categories")
                 .font(.system(size: 22, weight: .semibold))
                 .foregroundStyle(TVTheme.muted)
                 .padding(.horizontal, 4)
             ScrollView(.vertical, showsIndicators: false) {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(Array(ids.enumerated()), id: \.element) { index, id in
-                        let name = id == "all" ? "All" : (model.preferences.browseCategories(store.categories, section: .live).first { $0.id == id }?.name ?? "Category")
-                        categoryRow(id: id, name: name,
-                                    up: ids[max(0, index - 1)],
-                                    down: ids[min(ids.count - 1, index + 1)])
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(ids, id: \.self) { id in
+                        let name = id == "all" ? "All" : (visibleCategories.first { $0.id == id }?.name ?? "Category")
+                        if id == "all" {
+                            TVEntryControl(section: .guide) {
+                                TVEntryControl(section: .live) {
+                                    categoryRow(id: id, name: name)
+                                }
+                            }
+                        } else {
+                            categoryRow(id: id, name: name)
+                        }
                     }
                 }
                 .padding(.vertical, 4)
@@ -300,16 +325,13 @@ struct TVGuideView: View {
         }
         .frame(width: 400)
         .focusSection()
-        .onAppear {
-            // Returning to the Guide with categories already loaded.
-            catFocus = "cat-\(selectedCategory)"
-        }
+        .onAppear { catFocus = "cat-\(selectedCategory)" }
         .onChange(of: selectedCategory) { _, new in
             catFocus = "cat-\(new)"
         }
     }
 
-    private func categoryRow(id: String, name: String, up: String, down: String) -> some View {
+    private func categoryRow(id: String, name: String) -> some View {
         Button { selectedCategory = id } label: {
             HStack {
                 Text((id != "all" && pinnedCatIDs.contains(id) ? "★ " : "") + name)
@@ -322,10 +344,11 @@ struct TVGuideView: View {
         }
         .buttonStyle(TVCompactButtonStyle())
         .focused($catFocus, equals: "cat-\(id)")
+        .accessibilityIdentifier("guide-category-\(id)")
         .onMoveCommand { direction in
+            // tvOS owns Up/Down. A second FocusState assignment here can
+            // move again after a physical remote has already advanced a row.
             switch direction {
-            case .up: TVColumnFocus.keep($catFocus, "cat-\(up)")
-            case .down: TVColumnFocus.keep($catFocus, "cat-\(down)")
             case .right:
                 if let first = ordered.dropFirst(page * pageSize).first {
                     TVColumnFocus.keep($channelFocus, first.scopedID)
@@ -371,8 +394,6 @@ private struct TVGuideRow: View {
     let togglePin: () -> Void
     let onHover: (Bool) -> Void
     var channelFocus: FocusState<String?>.Binding
-    var neighborUp: String?
-    var neighborDown: String?
     var onLeaveLeft: () -> Void
     @FocusState private var focusedControl: String?
     let play: () -> Void
@@ -393,8 +414,6 @@ private struct TVGuideRow: View {
             .focused($focusedControl, equals: "pin")
             .onMoveCommand { direction in
                 switch direction {
-                case .up: if let neighborUp { TVColumnFocus.keep(channelFocus, neighborUp) }
-                case .down: if let neighborDown { TVColumnFocus.keep(channelFocus, neighborDown) }
                 case .right: TVColumnFocus.keep(channelFocus, channel.scopedID)
                 case .left: onLeaveLeft()
                 default: break
@@ -406,10 +425,9 @@ private struct TVGuideRow: View {
             }
             .buttonStyle(TVCompactButtonStyle())
             .focused(channelFocus, equals: channel.scopedID)
+            .accessibilityIdentifier("guide-channel-\(channel.scopedID)")
             .onMoveCommand { direction in
                 switch direction {
-                case .up: if let neighborUp { TVColumnFocus.keep(channelFocus, neighborUp) }
-                case .down: if let neighborDown { TVColumnFocus.keep(channelFocus, neighborDown) }
                 case .left:
                     channelFocus.wrappedValue = nil
                     focusedControl = "pin"
@@ -567,13 +585,16 @@ final class TVPreviewPlayer: ObservableObject {
     @Published var playing = false
     @Published var failed = false
     private var timer: Timer?
+    private var activeURL: URL?
 
     func attach(_ view: UIView) { engine.drawable = view }
 
     func play(url: URL) {
+        guard activeURL != url else { return }
+        stop()
+        activeURL = url
         failed = false
         playing = false
-        engine.stop()
         guard let media = VLCMedia(url: url) else { failed = true; return }
         media.addOptions(ProviderHTTP.mediaOptions(cache: 1500))
         engine.media = media
@@ -595,6 +616,8 @@ final class TVPreviewPlayer: ObservableObject {
     }
 
     func stop() {
+        guard activeURL != nil else { return }
+        activeURL = nil
         timer?.invalidate()
         timer = nil
         playing = false
@@ -602,10 +625,8 @@ final class TVPreviewPlayer: ObservableObject {
     }
 
     private func fail() {
-        timer?.invalidate()
-        timer = nil
+        stop()
         failed = true
-        engine.stop()
     }
 }
 
@@ -623,4 +644,24 @@ private struct TVPreviewSurface: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: UIView, context: Context) {}
+}
+
+// Region/category decisions are evaluated once per category, not once per
+// channel per redraw. Unknown and untagged category IDs retain existing rules.
+enum TVGuideIndex {
+    static func channels(_ items: [CatalogItem], categories: [CatalogCategory],
+                         preferences: LibraryPreferences, pinned: Set<String>) -> [CatalogItem] {
+        let known = Set(categories.map(\.id))
+        let allowed = Set(categories.filter { preferences.allows($0, section: .live) }.map(\.id))
+        let nonEnglish = Set(categories.filter { preferences.hideNonEnglishCategories && CategoryRegion.isNonEnglish($0.name) }.map(\.id))
+        var first: [CatalogItem] = []
+        var rest: [CatalogItem] = []
+        for item in items where preferences.visible(item) {
+            guard !nonEnglish.contains(item.categoryID) else { continue }
+            guard item.categoryID.isEmpty || !known.contains(item.categoryID) || allowed.contains(item.categoryID)
+                    || (preferences.unitedStatesOnly && CategoryRegion.isEnglish(item.name)) else { continue }
+            if pinned.contains(item.scopedID) { first.append(item) } else { rest.append(item) }
+        }
+        return first + rest
+    }
 }
