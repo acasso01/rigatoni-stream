@@ -58,7 +58,7 @@ Provider destinations and every redirect are resolved and pinned to public IP ad
 
 ## Verify after installation
 
-- Health returns `{"ok":true,"service":"rigatoni-gateway","multi_provider":true,"downloads":true}`.
+- Health returns `{"ok":true,"service":"rigatoni-gateway","multi_provider":true,"downloads":true,"server_downloads":true}`.
 - Save an authorized provider, reload, and confirm its settings restore without connecting.
 - Add the gateway URL, connect, select a channel, and confirm video plays.
 - Browser network requests for playlists/segments should use the Pi's HTTPS `/media/` paths.
@@ -103,6 +103,23 @@ TV series work the same way: the gateway exposes `/api/series/<session>` (one ca
 ## Downloads
 
 Movies and series episodes can be downloaded to the device from the web player. The gateway exposes `GET /download/<session>/<key>?filename=<name>` (and `HEAD`, so the player can check the session before navigating), which relays the provider file with a `Content-Disposition: attachment` header so the browser saves it instead of playing it. Filenames are sanitized server-side and playlists (`.m3u8`) are refused with `409 download_not_supported`. `GET /health` reports `downloads: true`. A gateway built before download support shows no download button in the player — update with `git pull --ff-only`, then `docker compose up -d --build` from its gateway directory.
+
+### Server downloads straight to Jellyfin (Phase 2)
+
+With the library folders mounted into the gateway, the player can also save movies and episodes directly to the Pi's Jellyfin folders — the file never touches the phone. The gateway exposes `POST /api/downloads/<session>` with a JSON body `{kind: 'movie'|'episode', stream_id, container_extension, filename}` (episodes also send `show` and `season`), which returns `202 {job_id, status: 'queued', filename}` immediately, and `GET /api/downloads/<session>/<jobId>` (plus a `GET /api/downloads/<session>` list) polled for `{status: queued|downloading|done|error, bytes, total_bytes, filename, error}`. `GET /health` reports `server_downloads: true` only when the folders are configured; otherwise the player keeps the Phase 1 download-to-device behavior.
+
+Files land as `<movies>/Title (Year).ext` and `<tv>/<Show>/Season 01/<Show> - S01E01 - Episode Title.ext`. Downloads stream to a `.part` file and are renamed atomically on success, resume from the `.part` after an interruption, and refuse playlists with `download_not_supported`. At most two downloads run at once; extras queue. Jobs live in memory and are lost on gateway restart. No Jellyfin rescan is triggered — Jellyfin's scheduled scan picks new files up.
+
+Pi setup (run once, then rebuild):
+
+```bash
+sudo mkdir -p /mnt/nas/media/movies /mnt/nas/media/tv
+sudo chown -R 1000:1000 /mnt/nas/media
+cd ~/rigatoni-stream-gateway/gateway && git pull --ff-only && docker compose up -d --build
+curl http://127.0.0.1:8787/health
+```
+
+`compose.yaml` mounts the two library folders at the same host paths inside the container and sets `MOVIES_PATH=/mnt/nas/media/movies` and `TV_PATH=/mnt/nas/media/tv` (the container runs as uid 1000, so the folders must be writable by that user). The folders are also the Jellyfin libraries (`/media/movies` and `/media/tv` inside the Jellyfin container). One rebuild lights up both Phase 1 (download to device) and Phase 2 (download to Jellyfin).
 
 Movie playback failures now inspect the actual file. Compatible movie mode copies H.264/HEVC video at its original resolution and converts unsupported audio to AAC. Movie input is paced in real time and uses the existing bounded rolling HLS window; this fallback starts from the beginning and has limited seeking. Normal MP4 playback keeps byte-range seeking.
 

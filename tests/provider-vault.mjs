@@ -102,8 +102,14 @@ const mh3=await setup({providers:twoProviders,healthResponse:{ok:true,multi_prov
 mh3.element('gateway').value='https://homepi.test.ts.net:8443';
 const mh3Reply=await mh3.window.__rigatoniGatewayConnect();
 assert.equal(mh3Reply.downloadsSupported,true);
+assert.equal(mh3Reply.serverDownloadsSupported,false);
+const mh4=await setup({providers:twoProviders,healthResponse:{ok:true,multi_provider:true,downloads:true,server_downloads:true},gatewayResponse:{categories:[],channels:[],streams:{7:'/media/x/y'}}});
+mh4.element('gateway').value='https://homepi.test.ts.net:8443';
+const mh4Reply=await mh4.window.__rigatoniGatewayConnect();
+assert.equal(mh4Reply.serverDownloadsSupported,true);
 console.log('PASS gateway multi-provider connect sends provider_id on new gateway');
 console.log('PASS gateway health downloads flag is exposed on the connect result');
+console.log('PASS gateway health server_downloads flag is exposed on the connect result');
 
 // Auto-connect on sign-in: with the toggle on (the default), a saved provider and
 // gateway connect automatically; with it off, sign-in only restores the form.
