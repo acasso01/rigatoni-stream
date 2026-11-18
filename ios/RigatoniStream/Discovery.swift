@@ -18,6 +18,10 @@ final class SessionCatalog: ObservableObject {
     private var combinedCategoryLists: [LibraryKind: [CatalogCategory]] = [:]
     private var combinedCompleted: [LibraryKind: CatalogLoadResult] = [:]
     private var combinedFullJobs: [LibraryKind: Task<CatalogLoadResult, Error>] = [:]
+    /// Session memory for TV-show search. Raw provider rows, filtered when read.
+    private var fullSeries: [SeriesItem]?
+    private var seriesFullChecked = false
+    private var seriesByCategory: [String: [SeriesItem]] = [:]
 
     func knownCategories(kind: LibraryKind) -> [CatalogCategory] {
         if let combined = combinedCategoryLists[kind], !combined.isEmpty { return combined }
@@ -30,8 +34,15 @@ final class SessionCatalog: ObservableObject {
         combinedFullJobs.values.forEach { $0.cancel() }
         jobs = [:]; fullJobs = [:]; combinedFullJobs = [:]; batches = [:]; batchOrder = []
         completed = [:]; combinedCompleted = [:]; categoryLists = [:]; combinedCategoryLists = [:]
+        fullSeries = nil; seriesFullChecked = false; seriesByCategory = [:]
         searchable = [:]; progress = [:]; revision += 1
     }
+    func cachedFullSeries() -> [SeriesItem]? { fullSeries }
+    func cacheFullSeries(_ items: [SeriesItem]) { fullSeries = items }
+    func seriesFullWasChecked() -> Bool { seriesFullChecked }
+    func markSeriesFullChecked() { seriesFullChecked = true }
+    func cachedSeries(categoryID: String) -> [SeriesItem]? { seriesByCategory[categoryID] }
+    func cacheSeries(_ items: [SeriesItem], categoryID: String) { seriesByCategory[categoryID] = items }
     func categories(kind: LibraryKind, model: AppModel) async throws -> [CatalogCategory] {
         if model.libraryMode == .combined { return try await combinedCategories(kind: kind, model: model) }
         if let cached = categoryLists[kind] { return cached }
@@ -118,7 +129,7 @@ final class SessionCatalog: ObservableObject {
         for profile in model.combinedProfiles {
             try Task.checkCancellation()
             do {
-                let batch = tagCombined(try await fetchItems(kind: kind, category: nil, provider: profile.provider),
+                let batch = tagCombined(try await fetchProviderCatalog(kind: kind, provider: profile.provider),
                                         providerID: profile.id)
                 for item in batch where seen.insert(item.scopedID).inserted { merged.append(item) }
             } catch { failed += 1 }
@@ -135,6 +146,39 @@ final class SessionCatalog: ObservableObject {
             tagged.categoryID = CatalogItem.namespaced(providerID: pid, id: item.categoryID)
             return tagged
         }
+    }
+    /// One unscoped request when it actually spans the library. A payload that
+    /// only contains the category the provider last served falls back to the
+    /// same per-category requests browsing uses, including plain HTTP.
+    private func fetchProviderCatalog(kind: LibraryKind, provider: Provider) async throws -> [CatalogItem] {
+        let listed: [CatalogCategory]
+        var listedOK = true
+        do { listed = try await fetchCategories(kind: kind, provider: provider) }
+        catch is CancellationError { throw CancellationError() }
+        catch { listed = []; listedOK = false }
+        let full: [CatalogItem]?
+        do { full = try await fetchItems(kind: kind, category: nil, provider: provider) }
+        catch is CancellationError { throw CancellationError() }
+        catch { full = nil }
+        if let full, !listedOK || CatalogCoverage.isComplete(categoryIDs: full.map(\.categoryID), categoryCount: listed.count) {
+            return full
+        }
+        guard listedOK else { throw AppFailure("The provider catalog could not be loaded.") }
+        var items: [CatalogItem] = []
+        var seen = Set<String>()
+        var failed = 0
+        for category in listed {
+            try Task.checkCancellation()
+            do {
+                let batch = try await fetchItems(kind: kind, category: category.id, provider: provider)
+                for item in batch where seen.insert(item.id).inserted { items.append(item) }
+            } catch {
+                try Task.checkCancellation()
+                failed += 1
+            }
+        }
+        if items.isEmpty && (failed > 0 || full == nil) { throw AppFailure("The provider catalog could not be loaded.") }
+        return items
     }
     private func fetchItems(kind: LibraryKind, category: String?, provider: Provider) async throws -> [CatalogItem] {
         if provider.kind == .m3u {
@@ -188,7 +232,7 @@ final class SessionCatalog: ObservableObject {
             for (offset, profile) in profiles.enumerated() {
                 try Task.checkCancellation()
                 do {
-                    let batch = self.tagCombined(try await self.fetchItems(kind: kind, category: nil, provider: profile.provider),
+                    let batch = self.tagCombined(try await self.fetchProviderCatalog(kind: kind, provider: profile.provider),
                                                  providerID: profile.id)
                     try Task.checkCancellation()
                     for item in batch where seen.insert(item.scopedID).inserted { merged.append(item) }
@@ -372,6 +416,7 @@ struct GlobalSearchView: View {
     @State private var playing: CatalogItem?
     @State private var seriesStore: SeriesStore?
     @State private var allSeries: [SeriesItem] = []
+    @State private var seriesNotice = ""
     @State private var selectedSeries: SeriesItem?
     @State private var limit = 60
     @State private var retry = 0
@@ -421,7 +466,8 @@ struct GlobalSearchView: View {
                         }
                         if results.count > limit { Button("More results") { limit += 60 } }
                         if filter == "all" || filter == "series" {
-                            let seriesMatches = allSeries.filter { query.isEmpty ? false : $0.name.localizedCaseInsensitiveContains(query) }
+                            if !seriesNotice.isEmpty { Text(seriesNotice).font(.caption).foregroundStyle(.secondary) }
+                            let seriesMatches = SeriesSearchScope.matching(allSeries, query: query, categories: seriesStore?.categories ?? [], preferences: model.preferences)
                             if !seriesMatches.isEmpty {
                                 Text("TV Shows").font(.title3.bold()).padding(.top, 8)
                                 ForEach(Array(seriesMatches.prefix(limit))) { series in
@@ -490,9 +536,13 @@ struct GlobalSearchView: View {
     private func loadSeries() async {
         if seriesStore == nil { seriesStore = SeriesStore(model: model) }
         guard let store = seriesStore else { return }
-        let items = await store.loadAllSeries()
+        let items = await store.loadAllSeries { items, _ in
+            guard !Task.isCancelled else { return }
+            allSeries = items
+        }
         guard !Task.isCancelled else { return }
         allSeries = items
+        seriesNotice = store.searchNotice
     }
 }
 

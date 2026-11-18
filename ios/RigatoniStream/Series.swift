@@ -39,6 +39,9 @@ final class SeriesStore: ObservableObject {
     @Published var progress = ""
     @Published var error = ""
     @Published var detailError = ""
+    /// Partial TV-show search failures. Kept off `error` so browsing a category
+    /// is not replaced by a search notice.
+    @Published var searchNotice = ""
 
     init(model: AppModel) { self.model = model }
 
@@ -151,76 +154,123 @@ final class SeriesStore: ObservableObject {
                 throw AppFailure("The provider returned an invalid series list.")
             }
             try Task.checkCancellation()
-            series = Self.parseSeries(rows, providerID: tag)
+            series = Self.parseSeries(rows, providerID: tag, fallbackCategoryID: categoryID)
         } catch {
             guard !Task.isCancelled else { return }
             self.error = error.localizedDescription
         }
     }
 
-    /// Loads every series for search using the same category-scoped requests
-    /// as the TV Shows browser. Many Xtream providers reject an unscoped
-    /// `get_series` request, so search must not depend on that optional form.
-    func loadAllSeries(includeNonEnglish: Bool = false, update: (([SeriesItem], String) -> Void)? = nil) async -> [SeriesItem] {
-        error = ""
-        if let unavailableReason { error = unavailableReason; return [] }
-        await loadCategories()
-        guard !Task.isCancelled, error.isEmpty else { return [] }
-        // Bound provider traffic while letting results arrive from every
-        // category, including shows near the end of a large catalog.
-        let searchableCategories = categories.filter {
-            includeNonEnglish || !model.preferences.hideNonEnglishCategories || !CategoryRegion.isNonEnglish($0.name)
+    /// Loads every visible TV-show category for search. An unscoped `get_series`
+    /// request is used once per session when the provider actually returns more
+    /// than one category; many providers reject that form or echo only the
+    /// category last browsed, so search then uses the same category-scoped
+    /// requests as the browser. Results stay in the session catalog so repeat
+    /// searches do not hammer the provider. Plain HTTP uses the same API URL.
+    func loadAllSeries(update: (([SeriesItem], String) -> Void)? = nil) async -> [SeriesItem] {
+        searchNotice = ""
+        if let unavailableReason { searchNotice = unavailableReason; return [] }
+        if categories.isEmpty {
+            await loadCategories()
+            guard !Task.isCancelled else { return [] }
+            if !error.isEmpty { searchNotice = error; return [] }
         }
-        let requests = searchableCategories.enumerated().map { index, category -> (Int, String, Provider?, UUID?) in
+        guard !Task.isCancelled else { return [] }
+        let allowed = SeriesSearchScope.categories(categories, preferences: model.preferences)
+        if allowed.isEmpty {
+            update?([], "")
+            return []
+        }
+        if let full = model.catalog.cachedFullSeries() {
+            let items = SeriesSearchScope.visible(full, categories: categories, preferences: model.preferences)
+            update?(items, "")
+            return items
+        }
+        if model.libraryMode != .combined && !model.catalog.seriesFullWasChecked() {
+            let rows: [[String: Any]]?
+            do {
+                rows = try await fetchJSON(action: "get_series") as? [[String: Any]]
+            } catch is CancellationError {
+                return []
+            } catch {
+                rows = nil
+            }
+            guard !Task.isCancelled else { return [] }
+            model.catalog.markSeriesFullChecked()
+            if let rows, !rows.isEmpty {
+                let parsed = Self.parseSeries(rows)
+                if CatalogCoverage.isComplete(categoryIDs: parsed.map(\.categoryID), categoryCount: categories.count) {
+                    model.catalog.cacheFullSeries(parsed)
+                    let items = SeriesSearchScope.visible(parsed, categories: categories, preferences: model.preferences)
+                    update?(items, "")
+                    return items
+                }
+            }
+        }
+        var batches: [Int: [SeriesItem]] = [:]
+        var missing: [(Int, CatalogCategory)] = []
+        for (index, category) in allowed.enumerated() {
+            if let cached = model.catalog.cachedSeries(categoryID: category.id) {
+                batches[index] = cached
+            } else {
+                missing.append((index, category))
+            }
+        }
+        func merged() -> [SeriesItem] {
+            SeriesSearchScope.visible(SeriesSearchScope.merge(batches.keys.sorted().compactMap { batches[$0] }),
+                                     categories: categories, preferences: model.preferences)
+        }
+        var completed = allowed.count - missing.count
+        update?(merged(), "\(completed) of \(allowed.count) categories")
+        if missing.isEmpty { return merged() }
+        let requests: [(Int, String, String, Provider?, UUID?)] = missing.map { index, category in
             if model.libraryMode == .combined,
                let (id, raw) = CatalogItem.splitNamespaced(category.id),
                let profile = model.vault.profiles.first(where: { $0.id == id }) {
-                return (index, raw, profile.provider, id)
+                return (index, category.id, raw, profile.provider, id)
             }
-            return (index, category.id, nil, nil)
+            return (index, category.id, category.id, nil, nil)
         }
-        var batches: [Int: [SeriesItem]] = [:]
         var failures = 0
-        var completed = 0
-        var all: [SeriesItem] = []
-        await withTaskGroup(of: (Int, [SeriesItem]?).self) { group in
+        await withTaskGroup(of: (Int, String, [SeriesItem]?).self) { group in
             var next = 0
-            func enqueue(_ request: (Int, String, Provider?, UUID?)) {
+            func enqueue(_ request: (Int, String, String, Provider?, UUID?)) {
                 group.addTask { [self] in
                     do {
                         try Task.checkCancellation()
-                        guard let rows = try await fetchJSON(action: "get_series", extra: ["category_id": request.1], provider: request.2) as? [[String: Any]] else {
-                            return (request.0, nil)
+                        guard let rows = try await fetchJSON(action: "get_series", extra: ["category_id": request.2], provider: request.3) as? [[String: Any]] else {
+                            return (request.0, request.1, nil)
                         }
                         try Task.checkCancellation()
-                        return (request.0, Self.parseSeries(rows, providerID: request.3))
-                    } catch { return (request.0, nil) }
+                        return (request.0, request.1, Self.parseSeries(rows, providerID: request.4, fallbackCategoryID: request.1))
+                    } catch { return (request.0, request.1, nil) }
                 }
             }
             for request in requests.prefix(3) { enqueue(request); next += 1 }
-            while let (index, items) = await group.next() {
+            while let (index, categoryID, items) = await group.next() {
                 guard !Task.isCancelled else { group.cancelAll(); return }
                 completed += 1
-                if let items { batches[index] = items } else { failures += 1 }
-                var seen = Set<String>()
-                all = batches.keys.sorted().flatMap { batches[$0] ?? [] }.filter { seen.insert($0.scopedID).inserted }
-                update?(all, "\(completed) of \(requests.count) categories")
+                if let items {
+                    batches[index] = items
+                    model.catalog.cacheSeries(items, categoryID: categoryID)
+                } else { failures += 1 }
+                update?(merged(), "\(completed) of \(allowed.count) categories")
                 if next < requests.count { enqueue(requests[next]); next += 1 }
             }
         }
         guard !Task.isCancelled else { return [] }
         if failures > 0 {
-            error = "Could not search \(failures) TV show categor\(failures == 1 ? "y" : "ies"). Retry to include the missing results."
+            searchNotice = "Could not search \(failures) TV show categor\(failures == 1 ? "y" : "ies"). Retry to include the missing results."
         }
-        return all
+        return merged()
     }
 
-    nonisolated static func parseSeries(_ rows: [[String: Any]], providerID: UUID? = nil) -> [SeriesItem] {
+    nonisolated static func parseSeries(_ rows: [[String: Any]], providerID: UUID? = nil, fallbackCategoryID: String = "") -> [SeriesItem] {
         rows.compactMap { row in
             let id = row["series_id"].map { String(describing: $0) } ?? ""
             guard !id.isEmpty, id.allSatisfy(\.isNumber) else { return nil }
             let rawCategory = ProviderFields.text(row["category_id"])
-            let categoryID = rawCategory.isEmpty ? "" : CatalogItem.namespaced(providerID: providerID, id: rawCategory)
+            let categoryID = rawCategory.isEmpty ? fallbackCategoryID : CatalogItem.namespaced(providerID: providerID, id: rawCategory)
             return SeriesItem(id: id,
                             name: row["name"] as? String ?? "Untitled",
                             poster: validURL(row["cover"] as? String),
@@ -306,6 +356,40 @@ final class SeriesStore: ObservableObject {
         return (seasons, episodes)
     }
 
+}
+
+/// Which TV-show categories a search may request, and which titles match.
+/// Manually hidden categories, non-English categories (when that toggle is on)
+/// and categories tagged for another country (when U.S. only is on) are not
+/// requested, so they cannot leak into results. That matches the category
+/// toggles: U.S. only hides a category such as "UK|", it does not keep the
+/// category in search because one title is tagged English.
+enum SeriesSearchScope {
+    static func categories(_ categories: [CatalogCategory], preferences: LibraryPreferences) -> [CatalogCategory] {
+        categories.filter { preferences.allows($0, section: .series) }
+    }
+
+    static func merge(_ batches: [[SeriesItem]]) -> [SeriesItem] {
+        var seen = Set<String>()
+        return batches.flatMap { $0 }.filter { seen.insert($0.scopedID).inserted }
+    }
+
+    static func visible(_ items: [SeriesItem], categories: [CatalogCategory], preferences: LibraryPreferences) -> [SeriesItem] {
+        let allowed = Set(self.categories(categories, preferences: preferences).map(\.id))
+        return merge([items.filter { item in
+            if item.categoryID.isEmpty { return preferences.acceptsSeries(item, categories: categories) }
+            return allowed.contains(item.categoryID)
+        }])
+    }
+
+    static func matching(_ items: [SeriesItem], query: String, categories: [CatalogCategory], preferences: LibraryPreferences) -> [SeriesItem] {
+        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !term.isEmpty else { return [] }
+        return visible(items, categories: categories, preferences: preferences).filter { item in
+            let title = preferences.seriesTitle(item)
+            return item.name.localizedCaseInsensitiveContains(term) || title.localizedCaseInsensitiveContains(term)
+        }
+    }
 }
 
 // A search result represents a title; provider series IDs remain separate

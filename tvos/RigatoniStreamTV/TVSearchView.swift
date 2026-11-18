@@ -187,11 +187,9 @@ struct TVSearchView: View {
             guard hasQuery else { results = []; return }
             do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
             let snapshot = LibraryKind.allCases.flatMap { kind in
-                let excluded = Set(catalog.knownCategories(kind: kind).filter {
-                    model.preferences.hideNonEnglishCategories && CategoryRegion.isNonEnglish($0.name)
-                }.map(\.id))
+                let categories = catalog.knownCategories(kind: kind)
                 return (catalog.searchable[kind] ?? []).filter {
-                    model.preferences.visible($0) && !excluded.contains($0.categoryID)
+                    model.preferences.accepts($0, categories: categories)
                 }
             }
             let term = normalizedQuery; let choice = filter
@@ -224,7 +222,7 @@ struct TVSearchView: View {
         seriesProgress = ""
         seriesNotice = ""
         defer { if seriesRequest == request { seriesLoading = false } }
-        let items = await store.loadAllSeries(includeNonEnglish: true) { items, progress in
+        let items = await store.loadAllSeries { items, progress in
             guard !Task.isCancelled, seriesRequest == request else { return }
             allSeries = items
             seriesDataRevision += 1
@@ -233,7 +231,7 @@ struct TVSearchView: View {
         guard !Task.isCancelled, seriesRequest == request else { return }
         allSeries = items
         seriesDataRevision += 1
-        seriesNotice = store.error
+        seriesNotice = store.searchNotice
         seriesComplete = true
     }
 

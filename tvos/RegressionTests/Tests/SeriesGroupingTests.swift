@@ -2,6 +2,23 @@ import XCTest
 @testable import AntStreamsRegressionHost
 
 final class SeriesGroupingTests: XCTestCase {
+    func testSeriesSearchReturnsShowsFromEveryVisibleCategory() {
+        let categories = [
+            CatalogCategory(id: "1", name: "US| Drama"),
+            CatalogCategory(id: "2", name: "US| Comedy"),
+            CatalogCategory(id: "3", name: "UK| Drama"),
+            CatalogCategory(id: "4", name: "Sports")
+        ]
+        var preferences = LibraryPreferences()
+        preferences.hiddenSeriesCategories = ["4"]
+        XCTAssertEqual(SeriesSearchScope.categories(categories, preferences: preferences).map(\.id), ["1", "2"])
+        let drama = SeriesItem(id: "10", name: "The Bear", poster: nil, categoryID: "1")
+        let comedy = SeriesItem(id: "11", name: "The Bear Extra", poster: nil, categoryID: "2")
+        let uk = SeriesItem(id: "12", name: "The Bear UK", poster: nil, categoryID: "3")
+        let hidden = SeriesItem(id: "14", name: "The Bear Sports", poster: nil, categoryID: "4")
+        XCTAssertEqual(SeriesSearchScope.matching([drama, comedy, uk, hidden], query: "bear", categories: categories, preferences: preferences).map(\.id), ["10", "11"])
+    }
+
     func testSeriesVersionsGroupAcrossCountriesAndKeepEnglishFirst() {
         let categories = [CatalogCategory(id: "us", name: "US| Drama"), CatalogCategory(id: "en", name: "EN Shows"), CatalogCategory(id: "ar", name: "العربية")]
         let us = SeriesItem(id: "1", name: "US| From (2022) HD", poster: nil, categoryID: "us", year: "2022")

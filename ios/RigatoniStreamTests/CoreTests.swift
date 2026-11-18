@@ -434,6 +434,48 @@ final class CoreTests: XCTestCase {
         XCTAssertNil(ChannelNavigation.adjacent(in: channels, currentID: "3", offset: 1))
         XCTAssertNil(ChannelNavigation.adjacent(in: [], currentID: "1", offset: 1))
     }
+    func testSingleCategoryPayloadIsNotTreatedAsTheWholeLibrary() {
+        XCTAssertFalse(CatalogCoverage.isComplete(categoryIDs: ["4", "4"], categoryCount: 6))
+        XCTAssertTrue(CatalogCoverage.isComplete(categoryIDs: ["4", "9"], categoryCount: 6))
+        XCTAssertTrue(CatalogCoverage.isComplete(categoryIDs: ["", ""], categoryCount: 6))
+        XCTAssertTrue(CatalogCoverage.isComplete(categoryIDs: ["4"], categoryCount: 1))
+    }
+    @MainActor func testUnscopedSingleCategoryFallsBackToEveryCategory() async throws {
+        var calls: [String?] = []
+        let result = try await CatalogLoader.load(categoryIDs: ["10", "20"], preferFullCatalog: true, fetch: { category in
+            calls.append(category)
+            let id = category ?? "10"
+            return [CatalogItem(id: id, name: "Movie \(id)", kind: .movies, fileExtension: "mkv", poster: nil, categoryID: id)]
+        }, progress: { _, _ in })
+        XCTAssertEqual(calls, [nil, "10", "20"])
+        XCTAssertEqual(result.items.map(\.categoryID), ["10", "20"])
+    }
+    @MainActor func testUnscopedCatalogSpanningCategoriesStaysOneRequest() async throws {
+        var calls: [String?] = []
+        let result = try await CatalogLoader.load(categoryIDs: ["10", "20"], preferFullCatalog: true, fetch: { category in
+            calls.append(category)
+            return [
+                CatalogItem(id: "1", name: "One", kind: .movies, fileExtension: "mkv", poster: nil, categoryID: "10"),
+                CatalogItem(id: "2", name: "Two", kind: .live, fileExtension: "ts", poster: nil, categoryID: "20")
+            ]
+        }, progress: { _, _ in })
+        XCTAssertEqual(calls, [nil])
+        XCTAssertEqual(Set(result.items.map(\.categoryID)), ["10", "20"])
+    }
+    @MainActor func testSeriesSearchCacheClearsWhenTheCatalogResets() {
+        let catalog = SessionCatalog()
+        let show = SeriesItem(id: "1", name: "Show", poster: nil, categoryID: "9")
+        catalog.cacheSeries([show], categoryID: "9")
+        catalog.cacheFullSeries([show])
+        catalog.markSeriesFullChecked()
+        XCTAssertEqual(catalog.cachedSeries(categoryID: "9")?.map(\.id), ["1"])
+        XCTAssertEqual(catalog.cachedFullSeries()?.map(\.id), ["1"])
+        XCTAssertTrue(catalog.seriesFullWasChecked())
+        catalog.reset()
+        XCTAssertNil(catalog.cachedSeries(categoryID: "9"))
+        XCTAssertNil(catalog.cachedFullSeries())
+        XCTAssertFalse(catalog.seriesFullWasChecked())
+    }
     @MainActor func testFullCatalogSearchUsesOneRequest() async throws {
         let movie = CatalogItem(id: "1", name: "Movie", kind: .movies, fileExtension: "mkv", poster: nil)
         var calls: [String?] = []

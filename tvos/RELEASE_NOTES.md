@@ -1,3 +1,7 @@
+# Ant Streams TV 1.0 (10)
+
+- TV show search covers every visible series category, not only the category on screen. Movie and live search do the same when a provider's unscoped catalog is only one category. Results stay in memory for the session. Hidden categories, U.S.-only, and hide-non-English still apply.
+
 # Ant Streams TV 1.0 (8)
 
 - Improved player focus, play/pause, touch timeline scrubbing and timeline shuttle controls.

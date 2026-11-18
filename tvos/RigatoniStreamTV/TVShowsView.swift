@@ -25,6 +25,19 @@ private struct TVSeriesBrowser: View {
     @State private var selectedSeries: SeriesItem?
     @State private var showingSeriesDetail = false
     @State private var visibleCount = 60
+    @State private var query = ""
+    @State private var searchItems: [SeriesItem] = []
+    @State private var searching = false
+    @State private var searchProgress = ""
+    @State private var searchNotice = ""
+    @State private var searchRetry = 0
+    @FocusState private var searchFocused: Bool
+
+    private var trimmedQuery: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var searchingCatalog: Bool { trimmedQuery.count >= 2 }
+    private var searchMatches: [SeriesItem] {
+        SeriesSearchScope.matching(searchItems, query: trimmedQuery, categories: store.categories, preferences: model.preferences)
+    }
 
     var body: some View {
         NavigationStack {
@@ -44,11 +57,43 @@ private struct TVSeriesBrowser: View {
                 visibleCount = 60
                 await store.loadSeries(categoryID: selectedCategory)
             }
+            .task(id: "\(model.libraryRevision)-\(searchRetry)-\(searchingCatalog)") {
+                guard searchingCatalog else { searchItems = []; searchProgress = ""; searchNotice = ""; return }
+                searching = true
+                searchNotice = ""
+                defer { searching = false }
+                let items = await store.loadAllSeries { items, progress in
+                    guard !Task.isCancelled else { return }
+                    searchItems = items
+                    searchProgress = progress
+                }
+                guard !Task.isCancelled else { return }
+                searchItems = items
+                searchProgress = ""
+                searchNotice = store.searchNotice
+            }
+            .onChange(of: query) { _, _ in visibleCount = 60 }
     }
 
     private func openSeries(_ series: SeriesItem) {
         selectedSeries = series
         showingSeriesDetail = true
+    }
+
+    private func seriesCard(_ item: SeriesItem) -> some View {
+        Button { openSeries(item) } label: {
+            VStack(alignment: .leading, spacing: 10) {
+                TVSeriesPoster(series: item)
+                TVFocusTitle(title: model.preferences.seriesTitle(item))
+                    .font(.headline)
+                    .lineLimit(2)
+                    .frame(width: 200, alignment: .leading)
+            }
+        }
+        .buttonStyle(TVCardButtonStyle())
+        .contextMenu {
+            Button(TVFavorites.contains(id: item.id, kind: "series", providerID: item.providerID, model: model) ? "Remove from Saved" : "Save to Favorites") { TVFavorites.toggleSeries(item, model: model) }
+        }
     }
 
     @ViewBuilder private var content: some View {
@@ -72,6 +117,16 @@ private struct TVSeriesBrowser: View {
                         .padding(.top, 40)
                         .tvLanding(for: .shows, when: store.categories.isEmpty)
 
+                    TextField("Search all TV shows", text: $query)
+                        .font(.system(size: 26))
+                        .frame(maxWidth: 720, minHeight: 64)
+                        .focused($searchFocused)
+                        .tvContentEntry()
+                        .accessibilityLabel("Search all TV shows")
+                    Text(searchingCatalog ? "Searching every TV show category." : "Select the search field to look across every category.")
+                        .font(.system(size: 20))
+                        .foregroundStyle(TVTheme.muted)
+
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 16) {
                             ForEach(Array(model.preferences.browseCategories(store.categories, section: .series).enumerated()), id: \.element.id) { index, category in
@@ -93,7 +148,34 @@ private struct TVSeriesBrowser: View {
                         .padding(.vertical, 8)
                     }
 
-                    if store.loading {
+                    if !trimmedQuery.isEmpty && !searchingCatalog {
+                        Text("Enter at least two characters to search every TV show category.")
+                            .foregroundStyle(TVTheme.muted)
+                    } else if searchingCatalog {
+                        if searching { ProgressView(searchProgress.isEmpty ? "Searching TV shows…" : "Searching TV shows: \(searchProgress)") }
+                        if !searchNotice.isEmpty {
+                            Text(searchNotice).foregroundStyle(TVTheme.muted)
+                            Button("Retry TV show search") { searchRetry += 1 }.buttonStyle(TVCardButtonStyle())
+                        }
+                        if searchMatches.isEmpty && !(searching && searchItems.isEmpty) {
+                            Text("No matching TV shows.").foregroundStyle(TVTheme.muted)
+                        } else if !searchMatches.isEmpty {
+                            LazyVGrid(
+                                columns: [GridItem(.adaptive(minimum: 220), spacing: 28)],
+                                spacing: 32
+                            ) {
+                                ForEach(Array(searchMatches.prefix(visibleCount)), id: \.scopedID) { item in
+                                    seriesCard(item)
+                                }
+                            }
+                            if searchMatches.count > visibleCount {
+                                Button("Show more") { visibleCount += 60 }.buttonStyle(.bordered)
+                            }
+                            Text("\(searchMatches.count) shows")
+                                .font(.caption)
+                                .foregroundStyle(TVTheme.muted)
+                        }
+                    } else if store.loading {
                         ProgressView("Loading…")
                     } else if !store.error.isEmpty {
                         VStack(alignment: .leading, spacing: 12) {
@@ -117,19 +199,7 @@ private struct TVSeriesBrowser: View {
                             spacing: 32
                         ) {
                             ForEach(Array(store.series.prefix(visibleCount)), id: \.scopedID) { item in
-                                Button { openSeries(item) } label: {
-                                    VStack(alignment: .leading, spacing: 10) {
-                                        TVSeriesPoster(series: item)
-                                        TVFocusTitle(title: model.preferences.seriesTitle(item))
-                                            .font(.headline)
-                                            .lineLimit(2)
-                                            .frame(width: 200, alignment: .leading)
-                                    }
-                                }
-                                .buttonStyle(TVCardButtonStyle())
-                                .contextMenu {
-                                    Button(TVFavorites.contains(id: item.id, kind: "series", providerID: item.providerID, model: model) ? "Remove from Saved" : "Save to Favorites") { TVFavorites.toggleSeries(item, model: model) }
-                                }
+                                seriesCard(item)
                             }
                         }
                         if store.series.count > visibleCount {

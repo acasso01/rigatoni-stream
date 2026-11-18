@@ -223,6 +223,20 @@ struct CatalogLoadResult {
     let notice: String
 }
 
+/// An unscoped provider response is the whole library only when it is not
+/// confined to a single category while the provider lists more than one.
+/// Items that omit category ids stay on the fast path; a one-category payload
+/// falls back to category requests so search is not stuck on the category
+/// the provider last returned.
+enum CatalogCoverage {
+    static func isComplete(categoryIDs: [String], categoryCount: Int) -> Bool {
+        if categoryCount <= 1 { return true }
+        let ids = Set(categoryIDs.filter { !$0.isEmpty })
+        if ids.isEmpty { return true }
+        return ids.count > 1
+    }
+}
+
 // One bounded full-catalog request is the fast path. Category fallback remains cancellable
 // and publishes results as each category arrives, without creating more concurrent requests.
 @MainActor
@@ -236,10 +250,15 @@ enum CatalogLoader {
             do {
                 let batch = try await fetch(nil)
                 try Task.checkCancellation()
-                guard !batch.isEmpty || categoryIDs.isEmpty else { throw AppFailure("Full catalog unavailable.") }
-                var index = CatalogIndex()
-                try index.append(batch)
-                return CatalogLoadResult(items: index.items, notice: "")
+                if !batch.isEmpty && CatalogCoverage.isComplete(categoryIDs: batch.map(\.categoryID), categoryCount: categoryIDs.count) {
+                    var index = CatalogIndex()
+                    try index.append(batch)
+                    return CatalogLoadResult(items: index.items, notice: "")
+                }
+                if batch.isEmpty && categoryIDs.isEmpty {
+                    return CatalogLoadResult(items: [], notice: "")
+                }
+                // Empty or single-category payload. Fall back to per-category requests.
             } catch {
                 try Task.checkCancellation()
                 // Some providers reject the unfiltered API or exceed the memory bounds.
