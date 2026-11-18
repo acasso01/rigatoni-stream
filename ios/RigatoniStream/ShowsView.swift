@@ -95,18 +95,28 @@ private struct ShowsBrowser: View {
                     Text(reason).foregroundStyle(.secondary).padding()
                     Button("Provider settings") { model.settingsVisible = true }.padding(.horizontal)
                 } else {
-                    ScrollView(.horizontal, showsIndicators: true) {
-                        LazyHStack(spacing: 10) {
+                    Menu {
+                        Picker("TV show category", selection: $category) {
                             ForEach(visibleCategories) { entry in
-                                Button { category = entry.id } label: {
-                                    Text(entry.name).font(.subheadline.weight(.semibold)).lineLimit(1)
-                                        .padding(.horizontal, 18).frame(height: 54)
-                                        .background(category == entry.id ? AnyShapeStyle(StreamTheme.accentFill) : AnyShapeStyle(StreamTheme.panel), in: Capsule())
-                                        .foregroundStyle(category == entry.id ? StreamTheme.onAccent : StreamTheme.text)
-                                }.buttonStyle(.plain).fixedSize(horizontal: true, vertical: false)
+                                Text(entry.name).tag(entry.id)
                             }
-                        }.padding(.horizontal).padding(.vertical, 8)
-                    }.frame(height: 74).scrollClipDisabled()
+                        }
+                    } label: {
+                        HStack {
+                            Text(visibleCategories.first { $0.id == category }?.name ?? "Categories")
+                                .lineLimit(1)
+                            Spacer()
+                            Image(systemName: "chevron.down")
+                        }
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 16).frame(minHeight: 54)
+                        .foregroundStyle(StreamTheme.text)
+                        .background(StreamTheme.panel, in: RoundedRectangle(cornerRadius: 12))
+                    }
+                    .disabled(visibleCategories.isEmpty)
+                    .accessibilityLabel("TV show category")
+                    .accessibilityValue(visibleCategories.first { $0.id == category }?.name ?? "No categories")
+                    .padding(.horizontal)
                     if !trimmedQuery.isEmpty && !searchingCatalog {
                         Text("Enter at least two characters to search every TV show category.")
                             .foregroundStyle(.secondary).padding(.horizontal)
