@@ -215,6 +215,41 @@ final class CatalogPresentationTests: XCTestCase {
         XCTAssertEqual(series.first?.year, "2024")
     }
 
+    func testSeriesSearchCoversEveryVisibleCategory() {
+        let categories = [
+            CatalogCategory(id: "1", name: "US| Drama"),
+            CatalogCategory(id: "2", name: "US| Comedy"),
+            CatalogCategory(id: "3", name: "UK| Drama"),
+            CatalogCategory(id: "4", name: "العربية"),
+            CatalogCategory(id: "5", name: "Sports"),
+            CatalogCategory(id: "6", name: "Classics")
+        ]
+        var preferences = LibraryPreferences()
+        preferences.hiddenSeriesCategories = ["5"]
+        XCTAssertEqual(SeriesSearchScope.categories(categories, preferences: preferences).map(\.id), ["1", "2", "6"])
+        let drama = SeriesItem(id: "10", name: "The Bear", poster: nil, categoryID: "1")
+        let comedy = SeriesItem(id: "11", name: "The Bear Extra", poster: nil, categoryID: "2")
+        let uk = SeriesItem(id: "12", name: "The Bear UK", poster: nil, categoryID: "3")
+        let englishUK = SeriesItem(id: "15", name: "The Bear EN", poster: nil, categoryID: "3")
+        let arabic = SeriesItem(id: "13", name: "The Bear AR", poster: nil, categoryID: "4")
+        let hidden = SeriesItem(id: "14", name: "The Bear Sports", poster: nil, categoryID: "5")
+        let classic = SeriesItem(id: "16", name: "The Bear Classic", poster: nil, categoryID: "6")
+        let hits = SeriesSearchScope.matching([drama, comedy, uk, englishUK, arabic, hidden, classic], query: "bear", categories: categories, preferences: preferences)
+        XCTAssertEqual(hits.map(\.id), ["10", "11", "16"])
+        preferences.unitedStatesOnly = false
+        preferences.hideNonEnglishCategories = false
+        XCTAssertEqual(SeriesSearchScope.categories(categories, preferences: preferences).map(\.id), ["1", "2", "3", "4", "6"])
+        XCTAssertEqual(SeriesSearchScope.matching([uk, englishUK], query: "bear", categories: categories, preferences: preferences).map(\.id), ["12", "15"])
+        let merged = SeriesSearchScope.merge([[drama], [comedy, drama]])
+        XCTAssertEqual(merged.map(\.id), ["10", "11"])
+        XCTAssertEqual(Set(merged.map(\.categoryID)), ["1", "2"])
+    }
+    func testSeriesParseStampsTheRequestedCategoryWhenTheRowOmitsIt() {
+        let stamped = SeriesStore.parseSeries([["series_id": "5", "name": "Show"]], fallbackCategoryID: "42")
+        XCTAssertEqual(stamped.first?.categoryID, "42")
+        let explicit = SeriesStore.parseSeries([["series_id": "6", "name": "Show", "category_id": 7]], fallbackCategoryID: "42")
+        XCTAssertEqual(explicit.first?.categoryID, "7")
+    }
     func testItemRenameUsesScopedIdentity() {
         var preferences = LibraryPreferences()
         let item = CatalogItem(id: "7", name: "US| ESPN RAW 60fps", kind: .live, fileExtension: "ts", poster: nil, categoryID: "2")

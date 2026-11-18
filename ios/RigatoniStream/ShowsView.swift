@@ -28,6 +28,10 @@ private struct ShowsBrowser: View {
     @EnvironmentObject private var model: AppModel
     @State private var category = ""
     @State private var query = ""
+    @State private var searchItems: [SeriesItem] = []
+    @State private var searching = false
+    @State private var searchProgress = ""
+    @State private var searchNotice = ""
     @State private var visibleCount = 60
     @State private var retry = 0
     @State private var loadedRevision: Int?
@@ -35,15 +39,38 @@ private struct ShowsBrowser: View {
     @State private var loadedCategory = ""
     @AppStorage("rigatoni-appearance") private var appearance = "dark"
 
+    private var trimmedQuery: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var searchingCatalog: Bool { trimmedQuery.count >= 2 }
     private var visibleCategories: [CatalogCategory] {
         model.preferences.browseCategories(store.categories, section: .series)
     }
     private var matches: [SeriesItem] {
-        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !term.isEmpty else { return store.series }
-        return store.series.filter {
-            $0.name.localizedCaseInsensitiveContains(term) || model.preferences.seriesTitle($0).localizedCaseInsensitiveContains(term)
+        guard searchingCatalog else { return store.series }
+        return SeriesSearchScope.matching(searchItems, query: trimmedQuery, categories: store.categories, preferences: model.preferences)
+    }
+
+    @ViewBuilder private func showGrid(_ items: [SeriesItem], featured: Bool) -> some View {
+        if featured, let first = items.first {
+            NavigationLink { ShowDetailView(series: first, store: store) } label: {
+                MobileHero(title: model.preferences.seriesTitle(first), poster: first.poster, badge: "TV SHOWS")
+            }.buttonStyle(.plain).padding(.horizontal)
         }
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 14)], spacing: 20) {
+            ForEach(Array(items.prefix(visibleCount)), id: \.scopedID) { series in
+                NavigationLink { ShowDetailView(series: series, store: store) } label: {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ProviderPoster(url: series.poster, kind: .movies).aspectRatio(2 / 3, contentMode: .fit)
+                        Text(model.preferences.seriesTitle(series)).font(.subheadline.weight(.semibold)).lineLimit(2)
+                            .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).padding(10)
+                    }
+                    .foregroundStyle(StreamTheme.text).background(StreamTheme.card)
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                }.buttonStyle(.plain).contextMenu {
+                    MobileSaveButton(record: SavedRecord(kind: "series", itemID: series.id, name: series.name, ext: "", categoryID: series.categoryID.isEmpty ? category : series.categoryID, addedAt: Date(), providerID: series.providerID))
+                }
+            }
+        }.padding(.horizontal)
+        if items.count > visibleCount { Button("Show more") { visibleCount += 60 }.padding() }
     }
 
     var body: some View {
@@ -80,37 +107,30 @@ private struct ShowsBrowser: View {
                             }
                         }.padding(.horizontal).padding(.vertical, 8)
                     }.frame(height: 74).scrollClipDisabled()
-                    if store.loading { ProgressView("Loading shows…").frame(maxWidth: .infinity).padding(30) }
+                    if !trimmedQuery.isEmpty && !searchingCatalog {
+                        Text("Enter at least two characters to search every TV show category.")
+                            .foregroundStyle(.secondary).padding(.horizontal)
+                    } else if searchingCatalog {
+                        if searching { ProgressView(searchProgress.isEmpty ? "Searching TV shows…" : "Searching TV shows: \(searchProgress)").frame(maxWidth: .infinity).padding(30) }
+                        if !searchNotice.isEmpty {
+                            Text(searchNotice).font(.caption).foregroundStyle(.secondary).padding(.horizontal)
+                            Button("Retry TV show search") { retry += 1 }.padding(.horizontal)
+                        }
+                        if matches.isEmpty && !(searching && searchItems.isEmpty) {
+                            Text("No matching TV shows.").foregroundStyle(.secondary).padding()
+                        } else if !matches.isEmpty {
+                            showGrid(matches, featured: false)
+                        }
+                    } else if store.loading { ProgressView("Loading shows…").frame(maxWidth: .infinity).padding(30) }
                     else if !store.error.isEmpty {
                         VStack(alignment: .leading, spacing: 12) {
                             Text(store.error).foregroundStyle(.secondary)
                             Button("Retry") { retry += 1 }
                         }.padding()
                     } else if matches.isEmpty {
-                        Text(query.isEmpty ? "No TV shows in this category." : "No matching shows in this category.")
-                            .foregroundStyle(.secondary).padding()
+                        Text("No TV shows in this category.").foregroundStyle(.secondary).padding()
                     } else {
-                        if query.isEmpty, let featured = matches.first {
-                            NavigationLink { ShowDetailView(series: featured, store: store) } label: {
-                                MobileHero(title: model.preferences.seriesTitle(featured), poster: featured.poster, badge: "TV SHOWS")
-                            }.buttonStyle(.plain).padding(.horizontal)
-                        }
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 14)], spacing: 20) {
-                            ForEach(Array(matches.prefix(visibleCount)), id: \.scopedID) { series in
-                                NavigationLink { ShowDetailView(series: series, store: store) } label: {
-                                    VStack(alignment: .leading, spacing: 0) {
-                                        ProviderPoster(url: series.poster, kind: .movies).aspectRatio(2 / 3, contentMode: .fit)
-                                        Text(model.preferences.seriesTitle(series)).font(.subheadline.weight(.semibold)).lineLimit(2)
-                                            .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).padding(10)
-                                    }
-                                    .foregroundStyle(StreamTheme.text).background(StreamTheme.card)
-                                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                                }.buttonStyle(.plain).contextMenu {
-                                    MobileSaveButton(record: SavedRecord(kind: "series", itemID: series.id, name: series.name, ext: "", categoryID: category, addedAt: Date(), providerID: series.providerID))
-                                }
-                            }
-                        }.padding(.horizontal)
-                        if matches.count > visibleCount { Button("Show more") { visibleCount += 60 }.padding() }
+                        showGrid(matches, featured: true)
                     }
                 }
             }.padding(.bottom, 24)
@@ -118,6 +138,21 @@ private struct ShowsBrowser: View {
         .background { StreamBackdrop() }
         .foregroundStyle(StreamTheme.text(for: AppAppearance(rawValue: appearance) ?? .dark))
         .onChange(of: query) { _, _ in visibleCount = 60 }
+        .task(id: "\(model.libraryRevision)-\(retry)-\(searchingCatalog)") {
+            guard searchingCatalog else { searchItems = []; searchProgress = ""; searchNotice = ""; return }
+            searching = true
+            searchNotice = ""
+            defer { searching = false }
+            let items = await store.loadAllSeries { items, progress in
+                guard !Task.isCancelled else { return }
+                searchItems = items
+                searchProgress = progress
+            }
+            guard !Task.isCancelled else { return }
+            searchItems = items
+            searchProgress = ""
+            searchNotice = store.searchNotice
+        }
         .task(id: "\(model.libraryRevision)-\(retry)-\(category)") {
             if loadedRevision != model.libraryRevision || loadedRetry != retry {
                 await store.loadCategories()
@@ -130,7 +165,7 @@ private struct ShowsBrowser: View {
                 return
             }
             guard !category.isEmpty, loadedCategory != category else { return }
-            visibleCount = 60; query = ""
+            visibleCount = 60
             await store.loadSeries(categoryID: category)
             if !Task.isCancelled, store.error.isEmpty { loadedCategory = category }
         }
