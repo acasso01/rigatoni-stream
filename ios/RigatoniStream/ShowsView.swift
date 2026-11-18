@@ -112,11 +112,13 @@ private struct ShowsBrowser: View {
                         .padding(.horizontal, 16).frame(minHeight: 54)
                         .foregroundStyle(StreamTheme.text)
                         .background(StreamTheme.panel, in: RoundedRectangle(cornerRadius: 12))
+                        .contentShape(Rectangle())
                     }
                     .disabled(visibleCategories.isEmpty)
                     .accessibilityLabel("TV show category")
                     .accessibilityValue(visibleCategories.first { $0.id == category }?.name ?? "No categories")
                     .padding(.horizontal)
+                    .zIndex(1)
                     if !trimmedQuery.isEmpty && !searchingCatalog {
                         Text("Enter at least two characters to search every TV show category.")
                             .foregroundStyle(.secondary).padding(.horizontal)

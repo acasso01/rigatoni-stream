@@ -122,7 +122,9 @@ struct MobileHero: View {
                     .padding(.horizontal, 16).padding(.vertical, 10)
                     .foregroundStyle(.black).background(.white, in: Capsule())
             }.padding(22).foregroundStyle(.white)
-        }.frame(height: 290).clipShape(RoundedRectangle(cornerRadius: 24))
+        }.frame(height: 290)
+            .clipShape(RoundedRectangle(cornerRadius: 24))
+            .contentShape(RoundedRectangle(cornerRadius: 24))
     }
 }
 
