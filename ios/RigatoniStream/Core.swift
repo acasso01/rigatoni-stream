@@ -538,7 +538,11 @@ final class AccountAPI {
         resetCatalog()
         if providerReady { preload() }
     }
-    func savePreferences() { preferences.write(key: preferenceKey); libraryRevision += 1 }
+    func savePreferences(invalidateVisibilitySearch: Bool = false) {
+        preferences.write(key: preferenceKey)
+        if invalidateVisibilitySearch { catalog.invalidateVisibilitySearch() }
+        libraryRevision += 1
+    }
     func saveProgress(id: String, seconds: Double, duration: Double) {
         guard preferenceKey != nil, seconds.isFinite, duration.isFinite, seconds >= 10, duration > 0 else { return }
         if seconds >= duration - 20 { preferences.progress[id] = nil }
@@ -896,12 +900,12 @@ final class AccountAPI {
         guard libraryMode == .separate else { return }
         let source = provider; let revision = libraryRevision
         warmup = Task { @MainActor in
-            // Load category indexes automatically, fetch large catalogs only when opened/searched.
+            // Warm category indexes only. Content and poster work begins when
+            // a section or category is opened, keeping provider startup light.
             for kind in LibraryKind.allCases {
                 guard !Task.isCancelled else { return }
                 do {
-                    let categories = try await catalog.categories(kind: kind, model: self)
-                    if let first = categories.first { _ = try await catalog.items(kind: kind, category: first.id, model: self) }
+                    _ = try await catalog.categories(kind: kind, model: self)
                 } catch { if !Task.isCancelled, revision == libraryRevision { notice = "Provider saved. Some catalogs could not be loaded; open the section to retry." } }
             }
             if source.kind == .xtream, !Task.isCancelled { _ = try? await DirectCatalog.rows(provider: source, action: "get_series_categories") }

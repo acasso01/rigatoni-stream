@@ -15,6 +15,7 @@ struct RigatoniStreamTVApp: App {
             TVRootView()
                 .environmentObject(model)
                 .environmentObject(model.catalog)
+                .monitorAutomaticEPGRefresh()
                 .tint((AppAppearance(rawValue: appearance) ?? .dark).accent)
                 .foregroundStyle(StreamTheme.text(for: AppAppearance(rawValue: appearance) ?? .dark))
             .environment(\.colorScheme, (AppAppearance(rawValue: appearance) ?? .dark).scheme)

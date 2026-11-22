@@ -105,6 +105,9 @@ final class VaultTests: XCTestCase {
         XCTAssertFalse(PlaybackRouting.usesApple(extension: "mkv", preference: "auto"))
         XCTAssertFalse(PlaybackRouting.usesApple(extension: "ts", preference: "auto"))
         XCTAssertFalse(PlaybackRouting.usesApple(extension: "m3u8", preference: "vlc"))
+        XCTAssertFalse(PlaybackRouting.usesApple(extension: "m3u8", preference: "auto", kind: .live))
+        XCTAssertTrue(PlaybackRouting.usesApple(extension: "m3u8", preference: "apple", kind: .live))
+        XCTAssertTrue(PlaybackRouting.usesApple(extension: "m3u8", preference: "auto", kind: .movies))
     }
 
     @MainActor func testSecureSaveReloadDeleteWithoutProviderConnection() async throws {

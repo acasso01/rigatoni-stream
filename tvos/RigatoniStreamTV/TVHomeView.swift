@@ -85,7 +85,7 @@ private struct TVHomeBody: View {
         .background { StreamBackdrop() }
         .task(id: "\(model.libraryRevision)-\(tmdbKey.hashValue)") {
             await store.loadCategories()
-            await shelves.load(model: model, tmdbKey: tmdbKey)
+            await shelves.load(model: model, tmdbKey: tmdbKey, previewCategoryLimit: 3)
         }
         .navigationDestination(isPresented: $showDetail) {
             if let openedShow {

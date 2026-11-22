@@ -550,6 +550,7 @@ extension LibraryPreferences {
         displayName(raw: item.name, key: Self.renameKey(section: .series, role: "item", id: item.scopedID))
     }
     mutating func setSection(_ id: String, section: CatalogSection, visible: Bool) {
+        customizedCategorySections.insert(section.rawValue)
         switch section {
         case .live: setCategory(id, kind: .live, visible: visible)
         case .movies: setCategory(id, kind: .movies, visible: visible)
@@ -589,17 +590,45 @@ final class HomeShelfLoader: ObservableObject {
     @Published var recent: [ShelfPoster] = []
     @Published var loading = false
 
-    func load(model: AppModel, tmdbKey: String) async {
+    func load(model: AppModel, tmdbKey: String, previewCategoryLimit: Int? = nil) async {
         guard model.providerReady else {
             trendingMovies = []; trendingShows = []; recent = []; loading = false
             return
         }
         loading = true
         defer { loading = false }
-        async let movieTask = loadMovies(model)
-        async let showTask = loadShows(model)
-        let (movies, shows) = await (movieTask, showTask)
+        async let movieTask = loadMovies(model, categoryLimit: previewCategoryLimit) { [weak self] partial in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let categories = model.catalog.knownCategories(kind: .movies)
+                let visible = partial.filter { model.preferences.accepts($0, categories: categories) }
+                self.trendingMovies = self.rankMovies(visible, tmdb: [], recent: false, model: model)
+                self.recent = self.rankMovies(visible, tmdb: [], recent: true, model: model)
+            }
+        }
+        async let showTask = loadShows(model, categoryLimit: previewCategoryLimit) { [weak self] partial in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let store = SeriesStore(model: model)
+                let visible = partial.filter { model.preferences.acceptsSeries($0, categories: store.categories) }
+                self.trendingShows = self.rankShows(visible, tmdb: [], recent: false, model: model)
+                let recentShows = self.rankShows(visible, tmdb: [], recent: true, model: model)
+                self.recent = (self.recent + recentShows).sorted { $0.added > $1.added }.prefix(18).map { $0 }
+            }
+        }
+        let movies = await movieTask
         if Task.isCancelled { return }
+        trendingMovies = rankMovies(movies, tmdb: [], recent: false, model: model)
+        recent = rankMovies(movies, tmdb: [], recent: true, model: model)
+        let shows = await showTask
+        if Task.isCancelled { return }
+        trendingShows = rankShows(shows, tmdb: [], recent: false, model: model)
+        let rankedRecentMovies = rankMovies(movies, tmdb: [], recent: true, model: model)
+        let rankedRecentShows = rankShows(shows, tmdb: [], recent: true, model: model)
+        recent = (rankedRecentMovies + rankedRecentShows).sorted { $0.added > $1.added }.prefix(18).map { $0 }
+        // tvOS landing screens should show provider-backed rows immediately;
+        // optional external ranking must not delay the first useful content.
+        guard previewCategoryLimit == nil else { return }
         async let tmdbMovies = TMDBClient.trendingNames(apiKey: tmdbKey, media: "movie")
         async let tmdbShows = TMDBClient.trendingNames(apiKey: tmdbKey, media: "tv")
         let (movieNames, showNames) = await (tmdbMovies, tmdbShows)
@@ -611,33 +640,42 @@ final class HomeShelfLoader: ObservableObject {
         recent = (recentMovies + recentShows).sorted { $0.added > $1.added }.prefix(18).map { $0 }
     }
 
-    private func loadMovies(_ model: AppModel) async -> [CatalogItem] {
+    private func loadMovies(_ model: AppModel, categoryLimit: Int? = nil,
+                            update: (([CatalogItem]) -> Void)? = nil) async -> [CatalogItem] {
         let categories: [CatalogCategory]
         do { categories = try await model.catalog.categories(kind: .movies, model: model) }
         catch { return [] }
         let allowed = model.preferences.presented(categories, section: .movies)
         var items: [CatalogItem] = []
-        if let full = try? await model.catalog.items(kind: .movies, category: nil, model: model), !full.isEmpty {
+        if categoryLimit == nil, let full = try? await model.catalog.items(kind: .movies, category: nil, model: model), !full.isEmpty {
             items = full
         }
         if items.isEmpty {
-            for category in allowed.prefix(4) {
+            for category in allowed.prefix(categoryLimit ?? 4) {
                 if Task.isCancelled { return [] }
                 if let batch = try? await model.catalog.items(kind: .movies, category: category.id, model: model) {
                     items.append(contentsOf: batch)
                 }
-                if items.count > 500 { break }
+                let partial = items.filter { model.preferences.accepts($0, categories: categories) }
+                update?(partial)
+                if items.count > (categoryLimit == nil ? 500 : 1_500) { break }
             }
         }
         return items.filter { model.preferences.accepts($0, categories: categories) }
     }
 
-    private func loadShows(_ model: AppModel) async -> [SeriesItem] {
+    private func loadShows(_ model: AppModel, categoryLimit: Int? = nil,
+                           update: (([SeriesItem]) -> Void)? = nil) async -> [SeriesItem] {
         let store = SeriesStore(model: model)
         guard store.unavailableReason == nil else { return [] }
         await store.loadCategories()
         if Task.isCancelled { return [] }
-        let items = await store.loadAllSeries()
+        let items: [SeriesItem]
+        if let categoryLimit {
+            items = await store.loadPreviewSeries(categoryLimit: categoryLimit) { partial, _ in update?(partial) }
+        } else {
+            items = await store.loadAllSeries()
+        }
         return items.filter { model.preferences.acceptsSeries($0, categories: store.categories) }
     }
 
@@ -727,13 +765,13 @@ struct LibraryFilterToggles: View {
         Group {
         Toggle(model.preferences.unitedStatesOnly ? "U.S. only" : "Include foreign categories", isOn: Binding(
             get: { model.preferences.unitedStatesOnly },
-            set: { model.preferences.unitedStatesOnly = $0; model.savePreferences() }
+            set: { model.preferences.unitedStatesOnly = $0; model.savePreferences(invalidateVisibilitySearch: true) }
         ))
         Text("Hides categories tagged for other countries, such as UK| or Spanish. Categories with no country tag stay visible.")
             .font(.footnote).foregroundStyle(.secondary)
         Toggle("Hide non-English categories", isOn: Binding(
             get: { model.preferences.hideNonEnglishCategories },
-            set: { model.preferences.hideNonEnglishCategories = $0; model.savePreferences() }
+            set: { model.preferences.hideNonEnglishCategories = $0; model.savePreferences(invalidateVisibilitySearch: true) }
         ))
         .accessibilityIdentifier("hide-non-english-categories")
         Text("On by default. Hides categories marked Arabic and other non-English languages, including Arabic-script names. EN, ENG, English and untagged categories remain available.")

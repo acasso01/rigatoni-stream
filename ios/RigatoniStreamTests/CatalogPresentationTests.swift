@@ -8,6 +8,32 @@ import XCTest
 #endif
 
 final class CatalogPresentationTests: XCTestCase {
+    func testPersistentSeriesIndexSurvivesSnapshotAndScopesSearch() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let index = PersistentCatalogIndex(databaseURL: directory.appendingPathComponent("catalog.sqlite"))
+        var provider = Provider()
+        provider.server = "http://provider.example:8080"
+        provider.username = "demo-user"
+        provider.password = "do-not-persist"
+        let first = SeriesItem(id: "101", name: "Café Aurora", poster: URL(string: "https://images.example/aurora.jpg"), categoryID: "series-1", year: "2024")
+        let second = SeriesItem(id: "102", name: "Café Aurora", poster: nil, categoryID: "series-2", year: "2024")
+
+        await index.storeSeries([first], scope: "profile-a", categoryID: "series-1", provider: provider)
+        await index.storeSeries([second], scope: "profile-a", categoryID: "series-2", provider: provider)
+        await index.markSeriesSnapshot([first, second], scope: "profile-a", categoryIDs: ["series-1", "series-2"], provider: provider)
+
+        let restored = await index.loadSeriesSnapshot(scope: "profile-a", categoryIDs: ["series-2", "series-1"])
+        let category = await index.loadSeries(scope: "profile-a", categoryID: "series-1")
+        let matches = await index.searchSeries(scope: "profile-a", query: "cafe", categoryIDs: ["series-2"])
+        let isolated = await index.loadSeriesSnapshot(scope: "another-profile", categoryIDs: ["series-1", "series-2"])
+        XCTAssertEqual(Set(restored?.map(\.scopedID) ?? []), Set([first.scopedID, second.scopedID]))
+        XCTAssertEqual(category?.first?.id, "101")
+        XCTAssertEqual(matches.map(\.id), ["102"])
+        XCTAssertNil(isolated)
+    }
+
     func testCleanNamesMatchProviderSamples() {
         let samples: [(String, String)] = [
             ("US| TUBI RAW 60fps", "Tubi"),
@@ -183,6 +209,27 @@ final class CatalogPresentationTests: XCTestCase {
         XCTAssertEqual(LibraryPreferences.read(key: key).progress["7"]?.seconds, 125)
     }
 
+    func testCategorySelectionsArePerSectionAndNewCategoriesDefaultHiddenAfterCustomization() throws {
+        var preferences = LibraryPreferences()
+        preferences.observeCategories([CatalogCategory(id: "old", name: "News")], section: .live)
+        preferences.setSection("old", section: .live, visible: false)
+        preferences.setSection("movie", section: .movies, visible: false)
+        XCTAssertFalse(preferences.categoryVisible("old", section: .live))
+        XCTAssertTrue(preferences.categoryVisible("new", section: .live))
+        preferences.observeCategories([
+            CatalogCategory(id: "old", name: "News"),
+            CatalogCategory(id: "new", name: "Sports")
+        ], section: .live)
+        XCTAssertFalse(preferences.categoryVisible("new", section: .live))
+        XCTAssertTrue(preferences.categoryVisible("new", section: .movies))
+        let restored = try JSONDecoder().decode(LibraryPreferences.self, from: JSONEncoder().encode(preferences))
+        XCTAssertFalse(restored.categoryVisible("new", section: .live))
+        XCTAssertFalse(restored.categoryVisible("old", section: .live))
+        preferences.resetCategorySection(.live)
+        XCTAssertTrue(preferences.categoryVisible("new", section: .live))
+        XCTAssertFalse(preferences.categoryVisible("movie", section: .movies))
+    }
+
     func testShelfRankingUsesAddedRatingsAndTMDBMatches() {
         let items = [
             ShelfRanking.Candidate(index: 0, name: "Old Movie", added: 10, rating: 9, hasPoster: true),
@@ -207,12 +254,13 @@ final class CatalogPresentationTests: XCTestCase {
         XCTAssertEqual(item?.poster?.host, "cdn.example")
         let series = SeriesStore.parseSeries([[
             "series_id": 4, "name": "US| SHOW RAW", "cover": "https://cdn.example/cover.jpg",
-            "category_id": 8, "last_modified": 180, "rating": 7.5, "releaseDate": "2024-05-01"
+            "category_id": 8, "last_modified": 180, "rating": 7.5, "releaseDate": "2024-05-01", "imdb": "tt1234567"
         ]])
         XCTAssertEqual(series.first?.categoryID, "8")
         XCTAssertEqual(series.first?.added, 180)
         XCTAssertEqual(series.first?.rating, 7.5)
         XCTAssertEqual(series.first?.year, "2024")
+        XCTAssertEqual(series.first?.externalID, "imdb:tt1234567")
     }
 
     func testSeriesSearchCoversEveryVisibleCategory() {
@@ -249,6 +297,96 @@ final class CatalogPresentationTests: XCTestCase {
         XCTAssertEqual(stamped.first?.categoryID, "42")
         let explicit = SeriesStore.parseSeries([["series_id": "6", "name": "Show", "category_id": 7]], fallbackCategoryID: "42")
         XCTAssertEqual(explicit.first?.categoryID, "7")
+    }
+
+    func testUnifiedSeriesGroupingCombinesLanguageCopiesAndHonorsMetadataIDs() {
+        let categories = [CatalogCategory(id: "en", name: "English"), CatalogCategory(id: "es", name: "Spanish")]
+        let english = SeriesItem(id: "1", name: "American Horror Story", poster: nil, categoryID: "en", year: "2011", externalID: "imdb:tt1844624")
+        let spanish = SeriesItem(id: "2", name: "Historia de horror americana", poster: nil, categoryID: "es", externalID: "imdb:tt1844624")
+
+        var preferences = LibraryPreferences()
+        preferences.hideNonEnglishCategories = false
+        preferences.unitedStatesOnly = false
+        let groups = SeriesSearchGrouping.matches([english, spanish], query: "horror", categories: categories, preferences: preferences)
+
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(Set(groups[0].variants.map(\.id)), ["1", "2"])
+    }
+
+    func testSeriesSearchRanksExactAndYearlessTitlesBeforeLooseMatches() {
+        let category = [CatalogCategory(id: "shows", name: "Shows")]
+        let items = [
+            SeriesItem(id: "1", name: "From Another Life", poster: nil, categoryID: "shows"),
+            SeriesItem(id: "2", name: "From (2022)", poster: nil, categoryID: "shows", year: "2022"),
+            SeriesItem(id: "3", name: "Breaking Bad", poster: nil, categoryID: "shows"),
+            SeriesItem(id: "4", name: "The Office (2005)", poster: nil, categoryID: "shows", year: "2005"),
+            SeriesItem(id: "5", name: "Lost in Space", poster: nil, categoryID: "shows"),
+            SeriesItem(id: "6", name: "Lost", poster: nil, categoryID: "shows")
+        ]
+        let preferences = LibraryPreferences()
+        let from = SeriesSearchGrouping.matches(items, query: "from", categories: category, preferences: preferences)
+        XCTAssertEqual(from.first?.title, "From")
+        XCTAssertEqual(from.first?.year, "2022")
+        XCTAssertEqual(from.first?.preferred.id, "2")
+        XCTAssertEqual(SeriesSearchGrouping.matches(items, query: "breaking bad", categories: category, preferences: preferences).first?.title, "Breaking Bad")
+        XCTAssertEqual(SeriesSearchGrouping.matches(items, query: "the office", categories: category, preferences: preferences).first?.title, "The Office")
+        XCTAssertEqual(SeriesSearchGrouping.matches(items, query: "lost", categories: category, preferences: preferences).first?.title, "Lost")
+        XCTAssertEqual(SeriesSearchGrouping.matches(items, query: "cafe", categories: category, preferences: preferences).count, 0)
+    }
+
+    func testWarmSeriesIndexSearchAcross154Categories() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let index = PersistentCatalogIndex(databaseURL: directory.appendingPathComponent("catalog.sqlite"))
+        var provider = Provider()
+        provider.server = "http://provider.example:8080"
+        provider.username = "demo-user"
+        provider.password = "do-not-persist"
+        let categoryIDs = (0..<154).map { "cat-\($0)" }
+
+        for (categoryNumber, categoryID) in categoryIDs.enumerated() {
+            let batch = (0..<650).map { row -> SeriesItem in
+                let isMatch = row == 0
+                let title = categoryNumber == 153 && isMatch ? "From (2022)" : (isMatch ? "From Another Life \(categoryNumber)" : "Catalog Drama \(categoryNumber)-\(row)")
+                return SeriesItem(id: "\(categoryNumber)-\(row)", name: title, poster: nil, categoryID: categoryID)
+            }
+            await index.storeSeries(batch, scope: "perf-profile", categoryID: categoryID, provider: provider)
+        }
+
+        let start = ProcessInfo.processInfo.systemUptime
+        let matches = await index.searchSeries(scope: "perf-profile", query: "from", categoryIDs: categoryIDs, limit: 1000)
+        let elapsed = ProcessInfo.processInfo.systemUptime - start
+        NSLog("Warm indexed search: 100,100 rows / 154 categories / %.3f seconds", elapsed)
+        XCTAssertEqual(matches.count, 154)
+        XCTAssertEqual(matches.first?.name, "From (2022)")
+    }
+
+    func testUnifiedSeriesGroupingKeepsRemakesAndUnknownYearsSeparate() {
+        let categories = [CatalogCategory(id: "1", name: "Shows")]
+        let original = SeriesItem(id: "1", name: "The Office (2001)", poster: nil, categoryID: "1")
+        let remake = SeriesItem(id: "2", name: "The Office (2005)", poster: nil, categoryID: "1")
+        let unknownYear = SeriesItem(id: "3", name: "The Office", poster: nil, categoryID: "1")
+
+        let groups = SeriesSearchGrouping.groups([original, remake, unknownYear], categories: categories, preferences: LibraryPreferences())
+
+        XCTAssertEqual(groups.count, 3)
+        XCTAssertEqual(Set(groups.map(\.year)), ["", "2001", "2005"])
+    }
+
+    func testUnifiedEpisodeMapsTheSameEpisodeNumberToEveryProviderSource() {
+        let providerA = SeriesItem(id: "100", name: "Show", poster: nil, providerID: UUID(), categoryID: "a")
+        let providerB = SeriesItem(id: "200", name: "Show ES", poster: nil, providerID: UUID(), categoryID: "b")
+        let season = [SeriesSeason(number: 1, name: "Season 1")]
+        let first = SeriesShowDetails(seasons: season, episodes: [1: [SeriesEpisode(id: "501", number: 1, title: "Pilot", ext: "mp4")]], synopsis: "", genre: "", year: "", rating: "", contentRating: "", backdrop: nil)
+        let second = SeriesShowDetails(seasons: season, episodes: [1: [SeriesEpisode(id: "901", number: 1, title: "Piloto", ext: "mkv")]], synopsis: "", genre: "", year: "", rating: "", contentRating: "", backdrop: nil)
+
+        let merged = SeriesEpisodeGrouping.merge([(providerA, first), (providerB, second)])
+
+        XCTAssertEqual(merged[1]?.count, 1)
+        XCTAssertEqual(Set(merged[1]?.first?.sources.map(\.episode.id) ?? []), ["501", "901"])
+        XCTAssertEqual(Set(merged[1]?.first?.sources.map(\.series.providerID) ?? []), [providerA.providerID, providerB.providerID])
+        XCTAssertNotEqual(merged[1]?.first?.sources[0].progressID, merged[1]?.first?.sources[1].progressID)
     }
     func testItemRenameUsesScopedIdentity() {
         var preferences = LibraryPreferences()

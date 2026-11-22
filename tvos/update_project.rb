@@ -1,7 +1,12 @@
 # Refresh Apple TV sources and branding while preserving signing and bundle identity.
 require 'xcodeproj'
+require 'yaml'
 Dir.chdir(__dir__)
 project = Xcodeproj::Project.open('RigatoniStreamTV.xcodeproj')
+release = YAML.load_file('project.yml').fetch('targets').fetch('RigatoniStreamTV').fetch('settings').fetch('base')
+version = release.fetch('CURRENT_PROJECT_VERSION').to_s
+marketing_version = release.fetch('MARKETING_VERSION').to_s
+team = YAML.load_file('project.yml').fetch('settings').fetch('base').fetch('DEVELOPMENT_TEAM')
 target = project.targets.find { |candidate| candidate.name == 'RigatoniStreamTV' }
 abort 'Apple TV target missing' unless target
 group = project.main_group.children.find { |candidate| candidate.respond_to?(:path) && candidate.path == 'RigatoniStreamTV' }
@@ -21,18 +26,19 @@ asset = group.files.find { |candidate| candidate.path == 'Assets.xcassets' } || 
 target.resources_build_phase.add_file_reference(asset) unless target.resources_build_phase.files_references.include?(asset)
 target.build_configurations.each do |config|
   config.build_settings['ASSETCATALOG_COMPILER_APPICON_NAME'] = 'AppIcon'
+  config.build_settings['DEVELOPMENT_TEAM'] = team
   config.build_settings['INFOPLIST_KEY_CFBundleDisplayName'] = 'Ant Streams'
-  config.build_settings['MARKETING_VERSION'] = '1.0'
-  config.build_settings['CURRENT_PROJECT_VERSION'] = '8'
+  config.build_settings['MARKETING_VERSION'] = marketing_version
+  config.build_settings['CURRENT_PROJECT_VERSION'] = version
   path = config.build_settings['INFOPLIST_FILE']
   abort 'Expected a local generated Info.plist' unless path && !path.include?('$')
   info = Xcodeproj::Plist.read_from_path(path)
   info['NSAppTransportSecurity'] = { 'NSAllowsArbitraryLoads' => true }
   info['CFBundleDisplayName'] = 'Ant Streams'
   info['CFBundleName'] = 'Ant Streams'
-  info['CFBundleShortVersionString'] = '1.0'
-  info['CFBundleVersion'] = '8'
+  info['CFBundleShortVersionString'] = marketing_version
+  info['CFBundleVersion'] = version
   Xcodeproj::Plist.write_to_path(info, path)
 end
 project.save
-puts 'Updated Ant Streams TV sources and logo; enabled standalone/direct HTTP provider support; preserved signing; set release version 1.0 (8).'
+puts "Updated Ant Streams TV sources and logo; enabled standalone/direct HTTP provider support; preserved signing; set release version #{marketing_version} (#{version})."

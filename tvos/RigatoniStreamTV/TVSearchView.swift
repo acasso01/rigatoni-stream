@@ -137,7 +137,7 @@ struct TVSearchView: View {
                     let group = seriesGroups.first { $0.id == selectedGroup.id }
                         ?? seriesGroups.first { $0.variants.contains { ids.contains($0.scopedID) } }
                         ?? selectedGroup
-                    TVSeriesVersionsView(group: group, store: store, loading: seriesLoading)
+                    TVSeriesDetailView(series: group.preferred, store: store, variants: group.variants, groupID: group.id)
                 }
             }
             .navigationDestination(isPresented: $showingSeriesDetail) {

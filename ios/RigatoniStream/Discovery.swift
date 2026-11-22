@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 // Memory-only catalogs shared by browsing and global search. Scoped to the account or the on-device provider.
 @MainActor
@@ -22,6 +23,9 @@ final class SessionCatalog: ObservableObject {
     private var fullSeries: [SeriesItem]?
     private var seriesFullChecked = false
     private var seriesByCategory: [String: [SeriesItem]] = [:]
+    private var seriesCategoryOrder: [String] = []
+    private var cachedSeriesCount = 0
+    private let maximumCachedSeriesItems = 60_000
 
     func knownCategories(kind: LibraryKind) -> [CatalogCategory] {
         if let combined = combinedCategoryLists[kind], !combined.isEmpty { return combined }
@@ -34,22 +38,69 @@ final class SessionCatalog: ObservableObject {
         combinedFullJobs.values.forEach { $0.cancel() }
         jobs = [:]; fullJobs = [:]; combinedFullJobs = [:]; batches = [:]; batchOrder = []
         completed = [:]; combinedCompleted = [:]; categoryLists = [:]; combinedCategoryLists = [:]
-        fullSeries = nil; seriesFullChecked = false; seriesByCategory = [:]
+        fullSeries = nil; seriesFullChecked = false; clearSeriesCache()
+        searchable = [:]; progress = [:]; revision += 1
+    }
+    /// Full-catalog search results depend on category visibility. Keep the
+    /// reusable per-category catalog cache, but discard search aggregates so
+    /// enabling a category later fetches it instead of reusing a stale subset.
+    func invalidateVisibilitySearch() {
+        fullJobs.values.forEach { $0.cancel() }
+        combinedFullJobs.values.forEach { $0.cancel() }
+        fullJobs = [:]; combinedFullJobs = [:]
+        completed = [:]; combinedCompleted = [:]
+        fullSeries = nil; seriesFullChecked = false; clearSeriesCache()
         searchable = [:]; progress = [:]; revision += 1
     }
     func cachedFullSeries() -> [SeriesItem]? { fullSeries }
-    func cacheFullSeries(_ items: [SeriesItem]) { fullSeries = items }
+    func cacheFullSeries(_ items: [SeriesItem]) {
+        fullSeries = items
+    }
     func seriesFullWasChecked() -> Bool { seriesFullChecked }
     func markSeriesFullChecked() { seriesFullChecked = true }
-    func cachedSeries(categoryID: String) -> [SeriesItem]? { seriesByCategory[categoryID] }
-    func cacheSeries(_ items: [SeriesItem], categoryID: String) { seriesByCategory[categoryID] = items }
+    func cachedSeries(categoryID: String) -> [SeriesItem]? {
+        guard let items = seriesByCategory[categoryID] else { return nil }
+        seriesCategoryOrder.removeAll { $0 == categoryID }
+        seriesCategoryOrder.append(categoryID)
+        return items
+    }
+    func cacheSeries(_ items: [SeriesItem], categoryID: String) {
+        if let old = seriesByCategory.removeValue(forKey: categoryID) { cachedSeriesCount -= old.count }
+        seriesCategoryOrder.removeAll { $0 == categoryID }
+        guard items.count <= maximumCachedSeriesItems else { return }
+        while cachedSeriesCount + items.count > maximumCachedSeriesItems, let oldest = seriesCategoryOrder.first {
+            seriesCategoryOrder.removeFirst()
+            if let removed = seriesByCategory.removeValue(forKey: oldest) { cachedSeriesCount -= removed.count }
+        }
+        seriesByCategory[categoryID] = items
+        seriesCategoryOrder.append(categoryID)
+        cachedSeriesCount += items.count
+    }
+    private func clearSeriesCache() {
+        seriesByCategory.removeAll(keepingCapacity: false)
+        seriesCategoryOrder.removeAll(keepingCapacity: false)
+        cachedSeriesCount = 0
+    }
     func categories(kind: LibraryKind, model: AppModel) async throws -> [CatalogCategory] {
-        if model.libraryMode == .combined { return try await combinedCategories(kind: kind, model: model) }
+        if model.libraryMode == .combined {
+            let result = try await combinedCategories(kind: kind, model: model)
+            if model.preferences.observeCategories(result, section: CatalogSection(kind)) { model.savePreferences() }
+            return result
+        }
         if let cached = categoryLists[kind] { return cached }
         let epoch = generation
+        if model.provider.kind == .xtream,
+           let cached = await PersistentCatalogIndex.shared.loadCategories(scope: model.catalogCacheScope, kind: kind.rawValue) {
+            categoryLists[kind] = cached
+            return cached
+        }
         let result = try await fetchCategories(kind: kind, provider: model.provider)
         guard epoch == generation else { throw CancellationError() }
+        if model.preferences.observeCategories(result, section: CatalogSection(kind)) { model.savePreferences() }
         categoryLists[kind] = result
+        if model.provider.kind == .xtream {
+            await PersistentCatalogIndex.shared.storeCategories(result, scope: model.catalogCacheScope, kind: kind.rawValue)
+        }
         return result
     }
     /// Categories for every saved provider, merged. IDs are namespaced
@@ -95,10 +146,43 @@ final class SessionCatalog: ObservableObject {
         let key = "\(kind.rawValue):\(category ?? "all")"
         if let cached = batches[key] { return cached }
         if category == nil, let cached = completed[kind] { return cached.items }
+        if model.libraryMode == .separate, model.provider.kind == .xtream {
+            if let category, let disk = await PersistentCatalogIndex.shared.loadItems(scope: model.catalogCacheScope, kind: kind, categoryID: category) {
+                batches[key] = disk
+                batchOrder.removeAll { $0 == key }; batchOrder.append(key)
+                return disk
+            }
+            if category == nil {
+                let categories = try await self.categories(kind: kind, model: model)
+                let enabledIDs = categories.filter { model.preferences.allows($0, section: CatalogSection(kind)) }.map(\.id)
+                if let disk = await PersistentCatalogIndex.shared.loadSnapshot(scope: model.catalogCacheScope, kind: kind, categoryIDs: enabledIDs) {
+                    completed[kind] = CatalogLoadResult(items: disk, notice: "")
+                    searchable[kind] = disk
+                    revision += 1
+                    return disk
+                }
+            }
+        }
         if let job = jobs[key] { return try await job.value }
         let epoch = generation
         let task = Task { @MainActor in
-            try await self.fetchItems(kind: kind, category: category, provider: model.provider)
+            if category == nil {
+                let categories = try await self.categories(kind: kind, model: model)
+                let enabled = categories.filter { model.preferences.allows($0, section: CatalogSection(kind)) }
+                guard !enabled.isEmpty else { return [CatalogItem]() }
+                if enabled.count < categories.count {
+                    var result: [CatalogItem] = []
+                    var seen = Set<String>()
+                    for entry in enabled {
+                        try Task.checkCancellation()
+                        for item in try await self.fetchItems(kind: kind, category: entry.id, provider: model.provider) where seen.insert(item.id).inserted {
+                            result.append(item)
+                        }
+                    }
+                    return result
+                }
+            }
+            return try await self.fetchItems(kind: kind, category: category, provider: model.provider)
         }
         jobs[key] = task
         do {
@@ -109,6 +193,9 @@ final class SessionCatalog: ObservableObject {
             if category != nil {
                 batches[key] = result; batchOrder.removeAll { $0 == key }; batchOrder.append(key)
                 while batchOrder.count > 1 && (batchOrder.count > 6 || batches.values.reduce(0, { $0 + $1.count }) > CatalogIndex.maximumItems) { batches[batchOrder.removeFirst()] = nil }
+                if model.libraryMode == .separate, model.provider.kind == .xtream, let category {
+                    await PersistentCatalogIndex.shared.storeItems(result, scope: model.catalogCacheScope, kind: kind, categoryID: category, provider: model.provider)
+                }
             }
             return result
         } catch { if epoch == generation { jobs[key] = nil }; throw error }
@@ -129,7 +216,8 @@ final class SessionCatalog: ObservableObject {
         for profile in model.combinedProfiles {
             try Task.checkCancellation()
             do {
-                let batch = tagCombined(try await fetchProviderCatalog(kind: kind, provider: profile.provider),
+                let batch = tagCombined(try await fetchProviderCatalog(kind: kind, provider: profile.provider,
+                                                                       preferences: model.preferences, providerID: profile.id),
                                         providerID: profile.id)
                 for item in batch where seen.insert(item.scopedID).inserted { merged.append(item) }
             } catch { failed += 1 }
@@ -150,14 +238,22 @@ final class SessionCatalog: ObservableObject {
     /// One unscoped request when it actually spans the library. A payload that
     /// only contains the category the provider last served falls back to the
     /// same per-category requests browsing uses, including plain HTTP.
-    private func fetchProviderCatalog(kind: LibraryKind, provider: Provider) async throws -> [CatalogItem] {
+    private func fetchProviderCatalog(kind: LibraryKind, provider: Provider,
+                                      preferences: LibraryPreferences? = nil, providerID: UUID? = nil) async throws -> [CatalogItem] {
         let listed: [CatalogCategory]
         var listedOK = true
         do { listed = try await fetchCategories(kind: kind, provider: provider) }
         catch is CancellationError { throw CancellationError() }
         catch { listed = []; listedOK = false }
+        guard listedOK else { throw AppFailure("The provider catalog could not be loaded.") }
+        let allowed = listed.filter { category in
+            guard let preferences else { return true }
+            let id = providerID.map { CatalogItem.namespaced(providerID: $0, id: category.id) } ?? category.id
+            return preferences.allows(CatalogCategory(id: id, name: category.name), section: CatalogSection(kind))
+        }
+        guard !allowed.isEmpty else { return [] }
         let full: [CatalogItem]?
-        do { full = try await fetchItems(kind: kind, category: nil, provider: provider) }
+        do { full = allowed.count == listed.count ? try await fetchItems(kind: kind, category: nil, provider: provider) : nil }
         catch is CancellationError { throw CancellationError() }
         catch { full = nil }
         if let full, !listedOK || CatalogCoverage.isComplete(categoryIDs: full.map(\.categoryID), categoryCount: listed.count) {
@@ -167,7 +263,7 @@ final class SessionCatalog: ObservableObject {
         var items: [CatalogItem] = []
         var seen = Set<String>()
         var failed = 0
-        for category in listed {
+        for category in allowed {
             try Task.checkCancellation()
             do {
                 let batch = try await fetchItems(kind: kind, category: category.id, provider: provider)
@@ -196,11 +292,22 @@ final class SessionCatalog: ObservableObject {
     func loadAll(kind: LibraryKind, model: AppModel) async throws -> CatalogLoadResult {
         if model.libraryMode == .combined { return try await combinedLoadAll(kind: kind, model: model) }
         if let cached = completed[kind] { return cached }
+        if model.provider.kind == .xtream {
+            let categories = try await self.categories(kind: kind, model: model)
+            let enabledIDs = categories.filter { model.preferences.allows($0, section: CatalogSection(kind)) }.map(\.id)
+            if let disk = await PersistentCatalogIndex.shared.loadSnapshot(scope: model.catalogCacheScope, kind: kind, categoryIDs: enabledIDs) {
+                let result = CatalogLoadResult(items: disk, notice: "")
+                completed[kind] = result; searchable[kind] = disk; progress[kind] = nil; revision += 1
+                return result
+            }
+        }
         if let job = fullJobs[kind] { return try await job.value }
         let epoch = generation
         let task = Task { @MainActor in
             let categories = try await self.categories(kind: kind, model: model)
-            return try await CatalogLoader.load(categoryIDs: categories.map(\.id), preferFullCatalog: true, fetch: { category in
+            let enabled = categories.filter { model.preferences.allows($0, section: CatalogSection(kind)) }
+            guard !enabled.isEmpty else { return CatalogLoadResult(items: [], notice: "") }
+            return try await CatalogLoader.load(categoryIDs: enabled.map(\.id), preferFullCatalog: enabled.count == categories.count, fetch: { category in
                 try await self.items(kind: kind, category: category, model: model)
             }, progress: { partial, message in
                 guard epoch == self.generation else { return }
@@ -213,7 +320,14 @@ final class SessionCatalog: ObservableObject {
             guard epoch == generation else { throw CancellationError() }
             fullJobs[kind] = nil; searchable[kind] = result.items; progress[kind] = nil; revision += 1
             // Partial failures remain retryable; do not mislabel them as complete.
-            if result.notice.isEmpty { completed[kind] = result }
+            if result.notice.isEmpty {
+                completed[kind] = result
+                if model.libraryMode == .separate, model.provider.kind == .xtream {
+                    let categories = categoryLists[kind] ?? []
+                    let enabledIDs = categories.filter { model.preferences.allows($0, section: CatalogSection(kind)) }.map(\.id)
+                    await PersistentCatalogIndex.shared.markSnapshot(scope: model.catalogCacheScope, kind: kind, categoryIDs: enabledIDs, items: result.items, provider: model.provider)
+                }
+            }
             return result
         } catch { if epoch == generation { fullJobs[kind] = nil; progress[kind] = nil }; throw error }
     }
@@ -232,7 +346,8 @@ final class SessionCatalog: ObservableObject {
             for (offset, profile) in profiles.enumerated() {
                 try Task.checkCancellation()
                 do {
-                    let batch = self.tagCombined(try await self.fetchProviderCatalog(kind: kind, provider: profile.provider),
+                let batch = self.tagCombined(try await self.fetchProviderCatalog(kind: kind, provider: profile.provider,
+                                                                                 preferences: model.preferences, providerID: profile.id),
                                                  providerID: profile.id)
                     try Task.checkCancellation()
                     for item in batch where seen.insert(item.scopedID).inserted { merged.append(item) }
@@ -559,6 +674,10 @@ struct LibraryPreferences: Codable {
     var hiddenLiveCategories: Set<String> = []
     var hiddenMovieCategories: Set<String> = []
     var hiddenSeriesCategories: Set<String> = []
+    /// Sections become opt-in for newly discovered IDs only after the user
+    /// changes that section. Legacy hidden-ID preferences remain compatible.
+    var customizedCategorySections: Set<String> = []
+    var knownCategoryIDs: [String: Set<String>] = [:]
     var hiddenChannels: Set<String> = []
     var progress: [String: MovieProgress] = [:]
     var categoryOrder: [String: [String]] = [:]
@@ -573,13 +692,15 @@ struct LibraryPreferences: Codable {
     init() {}
 
     enum CodingKeys: String, CodingKey {
-        case hiddenLiveCategories, hiddenMovieCategories, hiddenSeriesCategories, hiddenChannels, progress, categoryOrder, renames, unitedStatesOnly, hideNonEnglishCategories, cleanNames
+        case hiddenLiveCategories, hiddenMovieCategories, hiddenSeriesCategories, customizedCategorySections, knownCategoryIDs, hiddenChannels, progress, categoryOrder, renames, unitedStatesOnly, hideNonEnglishCategories, cleanNames
     }
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         hiddenLiveCategories = try container.decodeIfPresent(Set<String>.self, forKey: .hiddenLiveCategories) ?? []
         hiddenMovieCategories = try container.decodeIfPresent(Set<String>.self, forKey: .hiddenMovieCategories) ?? []
         hiddenSeriesCategories = try container.decodeIfPresent(Set<String>.self, forKey: .hiddenSeriesCategories) ?? []
+        customizedCategorySections = try container.decodeIfPresent(Set<String>.self, forKey: .customizedCategorySections) ?? []
+        knownCategoryIDs = try container.decodeIfPresent([String: Set<String>].self, forKey: .knownCategoryIDs) ?? [:]
         hiddenChannels = try container.decodeIfPresent(Set<String>.self, forKey: .hiddenChannels) ?? []
         progress = try container.decodeIfPresent([String: MovieProgress].self, forKey: .progress) ?? [:]
         categoryOrder = try container.decodeIfPresent([String: [String]].self, forKey: .categoryOrder) ?? [:]
@@ -593,6 +714,8 @@ struct LibraryPreferences: Codable {
         try container.encode(hiddenLiveCategories, forKey: .hiddenLiveCategories)
         try container.encode(hiddenMovieCategories, forKey: .hiddenMovieCategories)
         try container.encode(hiddenSeriesCategories, forKey: .hiddenSeriesCategories)
+        try container.encode(customizedCategorySections, forKey: .customizedCategorySections)
+        try container.encode(knownCategoryIDs, forKey: .knownCategoryIDs)
         try container.encode(hiddenChannels, forKey: .hiddenChannels)
         try container.encode(progress, forKey: .progress)
         try container.encode(categoryOrder, forKey: .categoryOrder)
@@ -616,8 +739,42 @@ struct LibraryPreferences: Codable {
         categoryVisible(item.categoryID, kind: item.kind) && (item.kind != .live || !hiddenChannels.contains(item.scopedID))
     }
     mutating func setCategory(_ id: String, kind: LibraryKind, visible: Bool) {
+        let section = CatalogSection(kind)
+        customizedCategorySections.insert(section.rawValue)
         if kind == .live { if visible { hiddenLiveCategories.remove(id) } else { hiddenLiveCategories.insert(id) } }
         else { if visible { hiddenMovieCategories.remove(id) } else { hiddenMovieCategories.insert(id) } }
+    }
+    mutating func resetCategorySection(_ section: CatalogSection) {
+        customizedCategorySections.remove(section.rawValue)
+        switch section {
+        case .live: hiddenLiveCategories = []
+        case .movies: hiddenMovieCategories = []
+        case .series: hiddenSeriesCategories = []
+        }
+    }
+    mutating func setCategories(_ ids: Set<String>, section: CatalogSection, visible: Bool) {
+        customizedCategorySections.insert(section.rawValue)
+        switch section {
+        case .live: if visible { hiddenLiveCategories.subtract(ids) } else { hiddenLiveCategories.formUnion(ids) }
+        case .movies: if visible { hiddenMovieCategories.subtract(ids) } else { hiddenMovieCategories.formUnion(ids) }
+        case .series: if visible { hiddenSeriesCategories.subtract(ids) } else { hiddenSeriesCategories.formUnion(ids) }
+        }
+    }
+    @discardableResult mutating func observeCategories(_ categories: [CatalogCategory], section: CatalogSection) -> Bool {
+        let current = Set(categories.map(\.id))
+        let previous = knownCategoryIDs[section.rawValue] ?? []
+        var changed = current != previous
+        if customizedCategorySections.contains(section.rawValue) {
+            let newlyDiscovered = current.subtracting(previous)
+            changed = changed || !newlyDiscovered.isEmpty
+            switch section {
+            case .live: hiddenLiveCategories.formUnion(newlyDiscovered)
+            case .movies: hiddenMovieCategories.formUnion(newlyDiscovered)
+            case .series: hiddenSeriesCategories.formUnion(newlyDiscovered)
+            }
+        }
+        knownCategoryIDs[section.rawValue] = current
+        return changed
     }
 }
 enum AppAppearance: String, CaseIterable, Identifiable {
@@ -637,6 +794,18 @@ enum AppAppearance: String, CaseIterable, Identifiable {
     }
 }
 
+#if os(iOS)
+/// Drag and drop delivers enter events as a long-press gesture crosses each
+/// row, while the surrounding ScrollView retains native edge auto-scrolling.
+private struct CategorySelectionDropDelegate: DropDelegate {
+    let entered: () -> Void
+    let dropped: () -> Bool
+    func dropEntered(info: DropInfo) { entered() }
+    func performDrop(info: DropInfo) -> Bool { dropped() }
+    func validateDrop(info: DropInfo) -> Bool { true }
+}
+#endif
+
 struct LibraryCustomizationView: View {
     @EnvironmentObject private var model: AppModel
     @AppStorage("rigatoni-appearance") private var appearance = AppAppearance.dark.rawValue
@@ -649,6 +818,10 @@ struct LibraryCustomizationView: View {
     @State private var loading = false
     @State private var limit = 100
     @State private var drafts: [String: String] = [:]
+    @State private var multiSelecting = false
+    @State private var selectedCategoryIDs: Set<String> = []
+    @State private var categoryDragActive = false
+    @State private var dragSelectionVisible = true
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
@@ -662,19 +835,37 @@ struct LibraryCustomizationView: View {
                 TextField("Find category or channel", text: $query)
                 Text("Categories").font(.title2.bold())
                 Text("Hide a category to remove it from browsing, the guide and Home. Move changes the order. A custom name replaces the automatic cleanup for that item only.").foregroundStyle(.secondary)
-                HStack {
-                    Button("Show all categories & channels") {
-                        model.preferences.hiddenLiveCategories = []
-                        model.preferences.hiddenMovieCategories = []
-                        model.preferences.hiddenSeriesCategories = []
-                        model.preferences.hiddenChannels = []
-                        model.savePreferences()
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Button("Select All") { setCategories(categories, visible: true) }
+                        Button("Deselect All") { setCategories(categories, visible: false) }
+                        Button("Reset to Defaults") {
+                            model.preferences.resetCategorySection(section)
+                            if section == .live { model.preferences.hiddenChannels = [] }
+                            model.savePreferences(invalidateVisibilitySearch: true)
+                        }
                     }
-                    Button("Reset order") {
-                        model.preferences.categoryOrder[section.rawValue] = nil
-                        model.savePreferences()
+                    HStack {
+                        Button("Select Filtered") { setCategories(filteredCategories, visible: true) }
+                        Button("Hide Filtered") { setCategories(filteredCategories, visible: false) }
+                        Button(multiSelecting ? "Done Selecting" : "Multi-Select") {
+                            multiSelecting.toggle(); selectedCategoryIDs = []
+                        }
+                        Button("Reset order") {
+                            model.preferences.categoryOrder[section.rawValue] = nil
+                            model.savePreferences()
+                        }
                     }
-                }
+                    if multiSelecting {
+                        HStack {
+                            Text("\(selectedCategoryIDs.count) selected")
+                            Button("Show Selected") { setSelectedCategories(visible: true) }
+                            Button("Hide Selected") { setSelectedCategories(visible: false) }
+                            Button("Select Visible") { selectedCategoryIDs = Set(listedCategories.map(\.id)) }
+                            Button("Clear Selection") { selectedCategoryIDs = [] }
+                        }.buttonStyle(.bordered)
+                    }
+                }.buttonStyle(.bordered)
                 if loading { ProgressView("Loading…") }
                 if !error.isEmpty { Text(error).foregroundStyle(.secondary); Button("Retry") { Task { await load() } } }
                 LazyVStack(alignment: .leading, spacing: 16) {
@@ -704,8 +895,33 @@ struct LibraryCustomizationView: View {
     }
     private var listedCategories: [CatalogCategory] {
         model.preferences.managedOrder(categories, section: section).filter { category in
-            query.isEmpty || category.name.localizedCaseInsensitiveContains(query) || model.preferences.categoryTitle(category, section: section).localizedCaseInsensitiveContains(query)
+            query.isEmpty || searchText(for: category).localizedCaseInsensitiveContains(query)
         }
+    }
+    private var filteredCategories: [CatalogCategory] { listedCategories }
+    private func searchText(for category: CatalogCategory) -> String {
+        let providerNames = model.libraryMode == .combined ? model.combinedProfiles.map { $0.provider.name } : [model.provider.name]
+        return ([category.name, model.preferences.categoryTitle(category, section: section)] + providerNames).joined(separator: " ")
+    }
+    private func setCategories(_ categories: [CatalogCategory], visible: Bool) {
+        guard !categories.isEmpty else { return }
+        model.preferences.setCategories(Set(categories.map(\.id)), section: section, visible: visible)
+        model.savePreferences(invalidateVisibilitySearch: true)
+    }
+    private func setSelectedCategories(visible: Bool) {
+        let ids = selectedCategoryIDs
+        guard !ids.isEmpty else { return }
+        model.preferences.setCategories(ids, section: section, visible: visible)
+        model.savePreferences(invalidateVisibilitySearch: true); selectedCategoryIDs = []
+    }
+    private func finishCategoryDrag() {
+        guard categoryDragActive else { return }
+        let ids = selectedCategoryIDs
+        if !ids.isEmpty {
+            model.preferences.setCategories(ids, section: section, visible: dragSelectionVisible)
+            model.savePreferences(invalidateVisibilitySearch: true)
+        }
+        categoryDragActive = false
     }
     private var listedChannels: [CatalogItem] {
         channels.filter { item in
@@ -716,9 +932,20 @@ struct LibraryCustomizationView: View {
         let key = LibraryPreferences.renameKey(section: section, role: "category", id: category.id)
         let title = model.preferences.categoryTitle(category, section: section)
         return VStack(alignment: .leading, spacing: 8) {
-            Toggle(title, isOn: Binding(get: { model.preferences.categoryVisible(category.id, section: section) }, set: {
-                model.preferences.setSection(category.id, section: section, visible: $0); model.savePreferences()
-            }))
+            HStack {
+                if multiSelecting {
+                    Button {
+                        if selectedCategoryIDs.contains(category.id) { selectedCategoryIDs.remove(category.id) }
+                        else { selectedCategoryIDs.insert(category.id) }
+                    } label: {
+                        Image(systemName: selectedCategoryIDs.contains(category.id) ? "checkmark.circle.fill" : "circle")
+                            .font(.title3)
+                    }.accessibilityLabel(selectedCategoryIDs.contains(category.id) ? "Deselect category" : "Select category")
+                }
+                Toggle(title, isOn: Binding(get: { model.preferences.categoryVisible(category.id, section: section) }, set: {
+                model.preferences.setSection(category.id, section: section, visible: $0); model.savePreferences(invalidateVisibilitySearch: true)
+                }))
+            }
             if title != category.name { Text(category.name).font(.caption).foregroundStyle(.secondary) }
             if model.preferences.hideNonEnglishCategories && CategoryRegion.isNonEnglish(category.name) {
                 Text("Hidden while Hide non-English categories is on").font(.caption).foregroundStyle(.secondary)
@@ -739,6 +966,30 @@ struct LibraryCustomizationView: View {
                 }.buttonStyle(.bordered)
             }
         }
+        #if os(iOS)
+        .onLongPressGesture(minimumDuration: 0.45) {
+            multiSelecting = true
+            selectedCategoryIDs.insert(category.id)
+        }
+        .onDrag {
+            multiSelecting = true
+            categoryDragActive = true
+            selectedCategoryIDs = [category.id]
+            dragSelectionVisible = !model.preferences.categoryVisible(category.id, section: section)
+            return NSItemProvider(object: category.id as NSString)
+        }
+        .onDrop(of: [UTType.text], delegate: CategorySelectionDropDelegate(
+            entered: {
+                if categoryDragActive { selectedCategoryIDs.insert(category.id) }
+            },
+            dropped: {
+                guard categoryDragActive else { return false }
+                selectedCategoryIDs.insert(category.id)
+                finishCategoryDrag()
+                return true
+            }
+        ))
+        #endif
     }
     private func channelRow(_ item: CatalogItem) -> some View {
         let key = LibraryPreferences.renameKey(section: .live, role: "item", id: item.scopedID)
@@ -814,6 +1065,13 @@ struct MovieDetailView: View {
     @State private var metadataNotice = ""
     @State private var playing = false
     @State private var resumeSeconds = 0.0
+#if os(tvOS)
+    @State private var movieSources: [CatalogItem] = []
+    @State private var selectedMovieSource: CatalogItem?
+    @State private var movieSourcesLoading = false
+    @State private var movieSourcesProgress = ""
+    @State private var movieSourcesNotice = ""
+#endif
     // Shared bindings identify the detail actions; tvOS also needs a directional
     // focus section because the poster separates Back from the action column.
     @FocusState private var detailFocus: String?
@@ -846,6 +1104,41 @@ struct MovieDetailView: View {
                             Button { resumeSeconds = 0; playing = true } label: { Label("Play movie", systemImage: "play.fill") }.buttonStyle(.borderedProminent).foregroundStyle(StreamTheme.onAccent)
                                 .focused($detailFocus, equals: "play")
                         }
+#if os(tvOS)
+                        Button {
+                            Task { await findMovieSources() }
+                        } label: {
+                            Label("Choose Stream", systemImage: "play.tv")
+                        }
+                        .buttonStyle(.bordered)
+                        .focused($detailFocus, equals: "sources")
+                        if movieSourcesLoading {
+                            ProgressView(movieSourcesProgress.isEmpty ? "Finding enabled sources…" : movieSourcesProgress)
+                        }
+                        if !movieSourcesNotice.isEmpty {
+                            Text(movieSourcesNotice).font(.footnote).foregroundStyle(.secondary)
+                        }
+                        if !movieSources.isEmpty {
+                            Text("AVAILABLE STREAMS").font(.caption.weight(.semibold)).tracking(2).foregroundStyle(.secondary)
+                            ForEach(movieSources, id: \.scopedID) { source in
+                                Button {
+                                    selectedMovieSource = source
+                                    resumeSeconds = model.preferences.progress[source.scopedID]?.seconds ?? 0
+                                    playing = true
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(model.preferences.itemTitle(source)).font(.headline).lineLimit(1)
+                                        Text(movieSourceLabel(source)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 18).padding(.vertical, 12)
+                                    .background(StreamTheme.panel, in: RoundedRectangle(cornerRadius: 14))
+                                }
+                                .buttonStyle(.bordered)
+                                .accessibilityIdentifier("movie-source-\(source.scopedID)")
+                            }
+                        }
+#endif
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
                 #if os(tvOS)
@@ -882,9 +1175,76 @@ struct MovieDetailView: View {
             } catch { if !Task.isCancelled { metadataNotice = error.localizedDescription } }
         }
         .fullScreenCover(isPresented: $playing) {
-            DirectPlayerView(item: item, provider: model.provider(for: item), startSeconds: resumeSeconds)
+#if os(tvOS)
+            let selected = selectedMovieSource ?? item
+#else
+            let selected = item
+#endif
+            DirectPlayerView(item: selected, provider: model.provider(for: selected), startSeconds: resumeSeconds)
         }
     }
+#if os(tvOS)
+    private func findMovieSources() async {
+        guard !movieSourcesLoading else { return }
+        movieSourcesLoading = true
+        movieSourcesNotice = ""
+        movieSourcesProgress = ""
+        defer { if !Task.isCancelled { movieSourcesLoading = false; movieSourcesProgress = "" } }
+        do {
+            let categories = try await model.catalog.categories(kind: .movies, model: model)
+            let enabled = model.preferences.browseCategories(categories, section: .movies)
+            var matches: [CatalogItem] = [item]
+            let target = normalizedMovieSourceTitle(item.name)
+            let pending = enabled.filter { $0.id != item.categoryID }
+            var completed = 0
+            await withTaskGroup(of: (String, [CatalogItem]?).self) { group in
+                var next = 0
+                func enqueue(_ categoryID: String) {
+                    group.addTask {
+                        do { return (categoryID, try await model.catalog.items(kind: .movies, category: categoryID, model: model)) }
+                        catch { return (categoryID, nil) }
+                    }
+                }
+                for category in pending.prefix(4) { enqueue(category.id); next += 1 }
+                while let (_, entries) = await group.next() {
+                    guard !Task.isCancelled else { group.cancelAll(); return }
+                    completed += 1
+                    if let entries {
+                        for candidate in entries where normalizedMovieSourceTitle(candidate.name) == target {
+                            if !item.year.isEmpty, !candidate.year.isEmpty, item.year != candidate.year { continue }
+                            if !matches.contains(where: { $0.scopedID == candidate.scopedID }) { matches.append(candidate) }
+                        }
+                        movieSources = matches
+                    }
+                    movieSourcesProgress = "Checked \(completed) of \(pending.count) categories…"
+                    if next < pending.count { enqueue(pending[next].id); next += 1 }
+                }
+            }
+            try Task.checkCancellation()
+            movieSources = matches
+            if matches.count == 1 { movieSourcesNotice = "No other matching streams were found in enabled categories." }
+        } catch is CancellationError {
+            return
+        } catch {
+            movieSourcesNotice = "Could not check other enabled categories. The selected stream is still available."
+        }
+    }
+
+    private func movieSourceLabel(_ source: CatalogItem) -> String {
+        let categories = model.catalog.knownCategories(kind: .movies)
+        let categoryName = categories.first { $0.id == source.categoryID }?.name ?? "Category"
+        let providerName = source.providerID.flatMap { id in model.vault.profiles.first { $0.id == id }?.provider.name }
+            ?? model.provider.name
+        return [source.year, categoryName, providerName].filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
+    private func normalizedMovieSourceTitle(_ raw: String) -> String {
+        let cleaned = NameCleaner.clean(raw)
+            .replacingOccurrences(of: #"\b(?:19|20)\d{2}\b"#, with: "", options: .regularExpression)
+            .folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+        return cleaned.filter { $0.isLetter || $0.isNumber }
+    }
+#endif
     private var posterWidth: CGFloat {
         #if os(tvOS)
         return 300

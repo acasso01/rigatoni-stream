@@ -15,6 +15,8 @@ struct TVWatchedRecord: Codable, Identifiable {
     let watchedAt: Date
     /// Owning provider in combined-library mode. Nil for older records.
     var providerID: UUID? = nil
+    /// Explicit per-source progress key for episode streams; nil for legacy records.
+    var progressID: String? = nil
 }
 
 @MainActor
@@ -25,7 +27,7 @@ enum TVLastWatched {
         model.preferenceKey.map { $0 + "-last-watched" }
     }
 
-    static func record(kind: String, item: CatalogItem, model: AppModel) {
+    static func record(kind: String, item: CatalogItem, progressID: String? = nil, model: AppModel) {
         guard let key = key(model: model) else { return }
         let entry = TVWatchedRecord(
             kind: kind,
@@ -34,7 +36,8 @@ enum TVLastWatched {
             ext: item.fileExtension,
             categoryID: item.categoryID,
             watchedAt: Date(),
-            providerID: item.providerID
+            providerID: item.providerID,
+            progressID: progressID
         )
         var items = items(model: model).filter { $0.id != entry.id }
         items.insert(entry, at: 0)

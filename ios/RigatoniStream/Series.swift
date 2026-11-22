@@ -12,6 +12,9 @@ struct SeriesItem: Identifiable {
     var added: Int = 0
     var rating: Double = 0
     var year: String = ""
+    /// Provider-supplied IMDb/TMDB identifier, when present. These IDs take
+    /// precedence over title heuristics when combining language/provider copies.
+    var externalID: String? = nil
     var scopedID: String { CatalogItem.namespaced(providerID: providerID, id: id) }
 }
 
@@ -27,6 +30,69 @@ struct SeriesEpisode: Identifiable {
     let number: Int
     let title: String
     let ext: String
+    var thumbnail: URL? = nil
+    var synopsis: String = ""
+    var durationSeconds: Int = 0
+}
+
+enum SeriesSearchBudget {
+    static let maximumItems = 100_000
+}
+
+struct SeriesShowDetails {
+    let seasons: [SeriesSeason]
+    let episodes: [Int: [SeriesEpisode]]
+    let synopsis: String
+    let genre: String
+    let year: String
+    let rating: String
+    let contentRating: String
+    let backdrop: URL?
+}
+
+struct SeriesEpisodeSource: Identifiable {
+    let series: SeriesItem
+    let episode: SeriesEpisode
+    var id: String { series.scopedID + ":" + episode.id }
+    var progressID: String {
+        series.providerID == nil ? episode.progressID : "series-\(series.scopedID)-\(episode.id)"
+    }
+}
+
+struct UnifiedSeriesEpisode: Identifiable {
+    let season: Int
+    let number: Int
+    let title: String
+    let sources: [SeriesEpisodeSource]
+    var id: String { "\(season):\(number):\(title.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current))" }
+}
+
+enum SeriesEpisodeGrouping {
+    static func merge(_ entries: [(SeriesItem, SeriesShowDetails)]) -> [Int: [UnifiedSeriesEpisode]] {
+        var grouped: [Int: [String: [SeriesEpisodeSource]]] = [:]
+        var titles: [Int: [String: String]] = [:]
+        for (series, details) in entries {
+            for (season, episodes) in details.episodes {
+                for episode in episodes {
+                    let normalizedTitle = episode.title.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+                    let key = episode.number > 0 ? "number:\(episode.number)" : "title:\(normalizedTitle)"
+                    grouped[season, default: [:]][key, default: []].append(SeriesEpisodeSource(series: series, episode: episode))
+                    if titles[season]?[key] == nil { titles[season, default: [:]][key] = episode.title }
+                }
+            }
+        }
+        var result: [Int: [UnifiedSeriesEpisode]] = [:]
+        for (season, byKey) in grouped {
+            result[season] = byKey.map { key, sources in
+                let number = Int(key.replacingOccurrences(of: "number:", with: "")) ?? 0
+                return UnifiedSeriesEpisode(season: season, number: number, title: titles[season]?[key] ?? "Episode \(number)", sources: sources.sorted { $0.series.scopedID < $1.series.scopedID })
+            }.sorted {
+                if $0.number != $1.number { return $0.number < $1.number }
+                return $0.title.localizedStandardCompare($1.title) == .orderedAscending
+            }
+        }
+        return result
+    }
 }
 
 @MainActor
@@ -130,6 +196,7 @@ final class SeriesStore: ObservableObject {
                     return CatalogCategory(id: id, name: row["category_name"] as? String ?? "Category")
                 }
             }
+            if model.preferences.observeCategories(categories, section: .series) { model.savePreferences() }
         } catch {
             guard !Task.isCancelled else { return }
             self.error = error.localizedDescription
@@ -139,6 +206,16 @@ final class SeriesStore: ObservableObject {
     func loadSeries(categoryID: String) async {
         series = []; error = ""
         guard unavailableReason == nil, !categoryID.isEmpty else { return }
+        if let cached = model.catalog.cachedSeries(categoryID: categoryID) {
+            series = SeriesSearchScope.visible(cached, categories: categories, preferences: model.preferences)
+            return
+        }
+        if model.libraryMode == .separate, model.provider.kind == .xtream,
+           let cached = await PersistentCatalogIndex.shared.loadSeries(scope: model.catalogCacheScope, categoryID: categoryID) {
+            model.catalog.cacheSeries(cached, categoryID: categoryID)
+            series = SeriesSearchScope.visible(cached, categories: categories, preferences: model.preferences)
+            return
+        }
         loading = true
         defer { loading = false }
         do {
@@ -155,10 +232,94 @@ final class SeriesStore: ObservableObject {
             }
             try Task.checkCancellation()
             series = Self.parseSeries(rows, providerID: tag, fallbackCategoryID: categoryID)
+            model.catalog.cacheSeries(series, categoryID: categoryID)
+            if model.libraryMode == .separate, model.provider.kind == .xtream {
+                await PersistentCatalogIndex.shared.storeSeries(series, scope: model.catalogCacheScope, categoryID: categoryID, provider: model.provider)
+            }
         } catch {
             guard !Task.isCancelled else { return }
             self.error = error.localizedDescription
         }
+    }
+
+    /// Fast first-screen preview: fetch only a few enabled categories and
+    /// publish as each finishes. Global search remains the only operation
+    /// that deliberately walks the complete enabled catalog.
+    func loadPreviewSeries(categoryLimit: Int = 3,
+                           update: (([SeriesItem], String) -> Void)? = nil) async -> [SeriesItem] {
+        searchNotice = ""
+        if let unavailableReason { searchNotice = unavailableReason; update?([], ""); return [] }
+        if categories.isEmpty {
+            await loadCategories()
+            guard !Task.isCancelled else { return [] }
+        }
+        let allowed = SeriesSearchScope.categories(categories, preferences: model.preferences)
+        let selected = Array(allowed.prefix(max(1, categoryLimit)))
+        guard !selected.isEmpty else { update?([], ""); return [] }
+
+        loading = true
+        defer { if !Task.isCancelled { loading = false } }
+        var batches: [Int: [SeriesItem]] = [:]
+        var missing: [(Int, CatalogCategory)] = []
+        for (index, category) in selected.enumerated() {
+            if let cached = model.catalog.cachedSeries(categoryID: category.id) { batches[index] = cached }
+            else if model.libraryMode == .separate, model.provider.kind == .xtream,
+                    let cached = await PersistentCatalogIndex.shared.loadSeries(scope: model.catalogCacheScope, categoryID: category.id) {
+                model.catalog.cacheSeries(cached, categoryID: category.id)
+                batches[index] = cached
+            } else { missing.append((index, category)) }
+        }
+        func merged() -> [SeriesItem] {
+            var seen = Set<String>()
+            let flattened = batches.keys.sorted().flatMap { batches[$0] ?? [] }.filter { seen.insert($0.scopedID).inserted }
+            return SeriesSearchScope.visible(flattened, categories: categories, preferences: model.preferences)
+        }
+        var completed = selected.count - missing.count
+        update?(merged(), "\(completed) of \(selected.count) preview categories")
+        guard !missing.isEmpty else { series = merged(); return series }
+
+        let requests: [(Int, String, String, Provider?, UUID?)] = missing.map { index, category in
+            if model.libraryMode == .combined,
+               let (id, raw) = CatalogItem.splitNamespaced(category.id),
+               let profile = model.vault.profiles.first(where: { $0.id == id }) {
+                return (index, category.id, raw, profile.provider, id)
+            }
+            return (index, category.id, category.id, nil, nil)
+        }
+        await withTaskGroup(of: (Int, String, [SeriesItem]?).self) { group in
+            var next = 0
+            func enqueue(_ request: (Int, String, String, Provider?, UUID?)) {
+                group.addTask { [self] in
+                    do {
+                        try Task.checkCancellation()
+                        guard let rows = try await fetchJSON(action: "get_series", extra: ["category_id": request.2], provider: request.3) as? [[String: Any]] else {
+                            return (request.0, request.1, nil)
+                        }
+                        try Task.checkCancellation()
+                        return (request.0, request.1, Self.parseSeries(rows, providerID: request.4, fallbackCategoryID: request.1))
+                    } catch { return (request.0, request.1, nil) }
+                }
+            }
+            for request in requests.prefix(2) { enqueue(request); next += 1 }
+            while let (index, categoryID, items) = await group.next() {
+                guard !Task.isCancelled else { group.cancelAll(); return }
+                completed += 1
+                if let items {
+                    batches[index] = items
+                    model.catalog.cacheSeries(items, categoryID: categoryID)
+                    if model.libraryMode == .separate, model.provider.kind == .xtream {
+                        await PersistentCatalogIndex.shared.storeSeries(items, scope: model.catalogCacheScope, categoryID: categoryID, provider: model.provider)
+                    }
+                }
+                let partial = merged()
+                series = partial
+                update?(partial, "\(completed) of \(selected.count) preview categories")
+                if next < requests.count { enqueue(requests[next]); next += 1 }
+            }
+        }
+        guard !Task.isCancelled else { return [] }
+        series = merged()
+        return series
     }
 
     /// Loads every visible TV-show category for search. An unscoped `get_series`
@@ -186,7 +347,18 @@ final class SeriesStore: ObservableObject {
             update?(items, "")
             return items
         }
-        if model.libraryMode != .combined && !model.catalog.seriesFullWasChecked() {
+        if model.libraryMode == .separate, model.provider.kind == .xtream,
+           let cached = await PersistentCatalogIndex.shared.loadSeriesSnapshot(scope: model.catalogCacheScope, categoryIDs: allowed.map(\.id)) {
+            model.catalog.cacheFullSeries(cached)
+            for category in allowed {
+                let batch = cached.filter { $0.categoryID == category.id }
+                model.catalog.cacheSeries(batch, categoryID: category.id)
+            }
+            let items = SeriesSearchScope.visible(cached, categories: categories, preferences: model.preferences)
+            update?(items, "")
+            return items
+        }
+        if model.libraryMode != .combined && allowed.count == categories.count && !model.catalog.seriesFullWasChecked() {
             let rows: [[String: Any]]?
             do {
                 rows = try await fetchJSON(action: "get_series") as? [[String: Any]]
@@ -201,6 +373,9 @@ final class SeriesStore: ObservableObject {
                 let parsed = Self.parseSeries(rows)
                 if CatalogCoverage.isComplete(categoryIDs: parsed.map(\.categoryID), categoryCount: categories.count) {
                     model.catalog.cacheFullSeries(parsed)
+                    if model.libraryMode == .separate, model.provider.kind == .xtream {
+                        await PersistentCatalogIndex.shared.markSeriesSnapshot(parsed, scope: model.catalogCacheScope, categoryIDs: allowed.map(\.id), provider: model.provider)
+                    }
                     let items = SeriesSearchScope.visible(parsed, categories: categories, preferences: model.preferences)
                     update?(items, "")
                     return items
@@ -208,17 +383,31 @@ final class SeriesStore: ObservableObject {
             }
         }
         var batches: [Int: [SeriesItem]] = [:]
+        var reachedLimit = false
         var missing: [(Int, CatalogCategory)] = []
         for (index, category) in allowed.enumerated() {
             if let cached = model.catalog.cachedSeries(categoryID: category.id) {
                 batches[index] = cached
+            } else if model.libraryMode == .separate, model.provider.kind == .xtream,
+                      let cached = await PersistentCatalogIndex.shared.loadSeries(scope: model.catalogCacheScope, categoryID: category.id) {
+                // Reuse independently persisted categories after an interrupted
+                // or partial index build instead of refetching the whole catalog.
+                batches[index] = cached
+                model.catalog.cacheSeries(cached, categoryID: category.id)
             } else {
                 missing.append((index, category))
             }
         }
         func merged() -> [SeriesItem] {
-            SeriesSearchScope.visible(SeriesSearchScope.merge(batches.keys.sorted().compactMap { batches[$0] }),
-                                     categories: categories, preferences: model.preferences)
+            var items: [SeriesItem] = []
+            var seen = Set<String>()
+            outer: for key in batches.keys.sorted() {
+                for item in batches[key] ?? [] where seen.insert(item.scopedID).inserted {
+                    if items.count == SeriesSearchBudget.maximumItems { reachedLimit = true; break outer }
+                    items.append(item)
+                }
+            }
+            return SeriesSearchScope.visible(items, categories: categories, preferences: model.preferences)
         }
         var completed = allowed.count - missing.count
         update?(merged(), "\(completed) of \(allowed.count) categories")
@@ -246,31 +435,74 @@ final class SeriesStore: ObservableObject {
                     } catch { return (request.0, request.1, nil) }
                 }
             }
-            for request in requests.prefix(3) { enqueue(request); next += 1 }
+            for request in requests.prefix(2) { enqueue(request); next += 1 }
             while let (index, categoryID, items) = await group.next() {
                 guard !Task.isCancelled else { group.cancelAll(); return }
                 completed += 1
                 if let items {
                     batches[index] = items
                     model.catalog.cacheSeries(items, categoryID: categoryID)
+                    if model.libraryMode == .separate, model.provider.kind == .xtream {
+                        await PersistentCatalogIndex.shared.storeSeries(items, scope: model.catalogCacheScope, categoryID: categoryID, provider: model.provider)
+                    }
                 } else { failures += 1 }
-                update?(merged(), "\(completed) of \(allowed.count) categories")
+                let partial = merged()
+                update?(partial, "\(completed) of \(allowed.count) categories")
+                if reachedLimit {
+                    group.cancelAll()
+                    break
+                }
                 if next < requests.count { enqueue(requests[next]); next += 1 }
             }
         }
         guard !Task.isCancelled else { return [] }
-        if failures > 0 {
-            searchNotice = "Could not search \(failures) TV show categor\(failures == 1 ? "y" : "ies"). Retry to include the missing results."
+        if reachedLimit {
+            searchNotice = "Search reached its 100,000-show session limit. Narrow the categories in Settings to search a smaller catalog."
         }
-        return merged()
+        if failures > 0 {
+            let failure = "Could not search \(failures) TV show categor\(failures == 1 ? "y" : "ies"). Retry to include the missing results."
+            searchNotice = [searchNotice, failure].filter { !$0.isEmpty }.joined(separator: " ")
+        }
+        let result = merged()
+        if failures == 0, !reachedLimit, model.libraryMode == .separate, model.provider.kind == .xtream {
+            await PersistentCatalogIndex.shared.markSeriesSnapshot(result, scope: model.catalogCacheScope, categoryIDs: allowed.map(\.id), provider: model.provider)
+        }
+        return result
+    }
+
+    /// Searches the persistent provider index first so warm global searches
+    /// decode only matches instead of restoring a complete 100k-item array.
+    /// On the first search, loadAllSeries builds the index from provider data.
+    func searchSeries(_ query: String, update: (([SeriesItem], String) -> Void)? = nil) async -> [SeriesItem] {
+        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard term.count >= 2 else { return [] }
+        if categories.isEmpty {
+            await loadCategories()
+            guard !Task.isCancelled else { return [] }
+        }
+        let allowed = SeriesSearchScope.categories(categories, preferences: model.preferences)
+        if model.libraryMode == .separate, model.provider.kind == .xtream,
+           await PersistentCatalogIndex.shared.hasSeriesSnapshot(scope: model.catalogCacheScope, categoryIDs: allowed.map(\.id)) {
+            let matches = await PersistentCatalogIndex.shared.searchSeries(scope: model.catalogCacheScope, query: term, categoryIDs: allowed.map(\.id), limit: 1000)
+            let visible = SeriesSearchScope.visible(matches, categories: categories, preferences: model.preferences)
+            update?(visible, "")
+            return visible
+        }
+        let all = await loadAllSeries(update: update)
+        guard !Task.isCancelled else { return [] }
+        return SeriesSearchScope.matching(all, query: term, categories: categories, preferences: model.preferences)
     }
 
     nonisolated static func parseSeries(_ rows: [[String: Any]], providerID: UUID? = nil, fallbackCategoryID: String = "") -> [SeriesItem] {
-        rows.compactMap { row in
+        rows.prefix(SeriesSearchBudget.maximumItems).compactMap { row in
             let id = row["series_id"].map { String(describing: $0) } ?? ""
             guard !id.isEmpty, id.allSatisfy(\.isNumber) else { return nil }
             let rawCategory = ProviderFields.text(row["category_id"])
             let categoryID = rawCategory.isEmpty ? fallbackCategoryID : CatalogItem.namespaced(providerID: providerID, id: rawCategory)
+            let info = row["info"] as? [String: Any]
+            let imdb = ProviderFields.text(row["imdb_id"] ?? row["imdb"] ?? info?["imdb_id"] ?? info?["imdb"])
+            let tmdb = ProviderFields.text(row["tmdb_id"] ?? row["tmdb"] ?? info?["tmdb_id"] ?? info?["tmdb"])
+            let externalID = !imdb.isEmpty ? "imdb:\(imdb.lowercased())" : (!tmdb.isEmpty ? "tmdb:\(tmdb)" : nil)
             return SeriesItem(id: id,
                             name: row["name"] as? String ?? "Untitled",
                             poster: validURL(row["cover"] as? String),
@@ -278,7 +510,8 @@ final class SeriesStore: ObservableObject {
                             categoryID: categoryID,
                             added: ProviderFields.added(from: row),
                             rating: ProviderFields.rating(from: row),
-                            year: ProviderFields.year(from: row))
+                            year: ProviderFields.year(from: row),
+                            externalID: externalID)
         }
     }
 
@@ -317,6 +550,59 @@ final class SeriesStore: ObservableObject {
             return ([], [:])
         }
     }
+
+    func loadShowDetails(series: SeriesItem) async -> SeriesShowDetails? {
+        detailError = ""
+        do {
+            guard let root = try await fetchJSON(action: "get_series_info", extra: ["series_id": series.id], provider: provider(for: series)) as? [String: Any] else {
+                throw AppFailure("The provider returned invalid series details.")
+            }
+            try Task.checkCancellation()
+            let parsed = Self.parseDetail(root)
+            let info = root["info"] as? [String: Any] ?? [:]
+            let backdropValue = info["backdrop_path"] ?? info["backdrop"]
+            let backdropString = (backdropValue as? [String])?.first ?? ProviderFields.text(backdropValue)
+            let backdrop = URL(string: backdropString).flatMap { ["http", "https"].contains($0.scheme?.lowercased() ?? "") ? $0 : nil }
+            let rawRating = ProviderFields.text(info["rating"] ?? info["rating_5based"])
+            let rating = Double(rawRating).map { String(format: "%.1f", $0) }
+                .map { "\($0) / 10" } ?? ""
+            return SeriesShowDetails(
+                seasons: parsed.seasons,
+                episodes: parsed.episodes,
+                synopsis: ProviderFields.text(info["plot"] ?? info["description"]),
+                genre: ProviderFields.text(info["genre"]),
+                year: ProviderFields.year(from: info),
+                rating: rating,
+                contentRating: ProviderFields.text(info["mpaa_rating"] ?? info["content_rating"] ?? info["age_rating"]),
+                backdrop: backdrop
+            )
+        } catch {
+            if !Task.isCancelled { detailError = error.localizedDescription }
+            return nil
+        }
+    }
+
+    func loadShowDetails(variants: [SeriesItem], progress: ((Int, Int) -> Void)? = nil) async -> [(SeriesItem, SeriesShowDetails)] {
+        guard !variants.isEmpty else { return [] }
+        var loaded: [Int: (SeriesItem, SeriesShowDetails)] = [:]
+        var completed = 0
+        await withTaskGroup(of: (Int, SeriesItem, SeriesShowDetails?).self) { group in
+            var next = 0
+            func enqueue(_ index: Int) {
+                let series = variants[index]
+                group.addTask { [self] in (index, series, await loadShowDetails(series: series)) }
+            }
+            while next < min(3, variants.count) { enqueue(next); next += 1 }
+            while let (index, series, details) = await group.next() {
+                guard !Task.isCancelled else { group.cancelAll(); return }
+                completed += 1
+                if let details { loaded[index] = (series, details) }
+                progress?(completed, variants.count)
+                if next < variants.count { enqueue(next); next += 1 }
+            }
+        }
+        return loaded.keys.sorted().compactMap { loaded[$0] }
+    }
     static func parseDetail(_ root: [String: Any]) -> (seasons: [SeriesSeason], episodes: [Int: [SeriesEpisode]]) {
         var seasons: [SeriesSeason] = []
         if let rawSeasons = root["seasons"] as? [[String: Any]] {
@@ -342,10 +628,16 @@ final class SeriesStore: ObservableObject {
                     let info = row["info"] as? [String: Any]
                     let ext = ((row["container_extension"] as? String) ?? (info?["container_extension"] as? String) ?? "mp4").lowercased()
                     let allowed = ["mp4", "mkv", "avi", "mov", "m4v", "webm", "ts", "m3u8"]
+                    let rawDuration = ProviderFields.text(info?["duration_secs"] ?? row["duration_secs"])
+                    let duration = Int(rawDuration) ?? Self.durationSeconds(ProviderFields.text(info?["duration"] ?? row["duration"]))
+                    let thumbnail = validURL(ProviderFields.text(info?["movie_image"] ?? info?["cover_big"] ?? row["movie_image"]))
                     list.append(SeriesEpisode(id: id,
                                           number: number,
                                           title: row["title"] as? String ?? "Episode \(number)",
-                                          ext: allowed.contains(ext) ? ext : "mp4"))
+                                          ext: allowed.contains(ext) ? ext : "mp4",
+                                          thumbnail: thumbnail,
+                                          synopsis: ProviderFields.text(info?["plot"] ?? info?["description"]),
+                                          durationSeconds: max(0, duration)))
                 }
                 episodes[seasonNumber] = list.sorted { $0.number < $1.number }
             }
@@ -354,6 +646,12 @@ final class SeriesStore: ObservableObject {
             seasons = episodes.keys.sorted().map { SeriesSeason(number: $0, name: "Season \($0)") }
         }
         return (seasons, episodes)
+    }
+
+    private static func durationSeconds(_ value: String) -> Int {
+        let components = value.split(separator: ":").compactMap { Int($0) }
+        guard !components.isEmpty else { return 0 }
+        return components.suffix(3).reduce(0) { $0 * 60 + $1 }
     }
 
 }
@@ -407,7 +705,7 @@ enum SeriesSearchGrouping {
     private static let languageSuffix = try! NSRegularExpression(pattern: #"\s*(?:[\(\[](?:EN|ENG|ENGLISH|US|UK|AR|ES|FR|DE)[\)\]]|\b(?:EN|ENG|ENGLISH))\s*$"#, options: [.caseInsensitive])
     private static let languagePrefix = try! NSRegularExpression(pattern: #"^(?:EN|ENG|ENGLISH)\s+"#, options: [.caseInsensitive])
 
-    private static func identity(_ item: SeriesItem) -> (title: String, key: String, year: String) {
+    private static func identity(_ item: SeriesItem) -> (title: String, key: String, year: String, normalized: String) {
         var title = NameCleaner.clean(item.name)
         var year = item.year.count >= 4 ? String(item.year.prefix(4)) : ""
         if Int(year).map({ (1900...2099).contains($0) }) != true { year = "" }
@@ -420,8 +718,39 @@ enum SeriesSearchGrouping {
         }
         title = title.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         if title.isEmpty { title = item.name }
-        let key = title.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX")).lowercased()
-        return (title, key, year)
+        let normalized = title.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX")).lowercased()
+        // A verified provider metadata ID can group differently localized titles.
+        // Otherwise keep unknown-year and known-year shows separate so an
+        // unlabelled remake cannot be incorrectly merged with a dated one.
+        let key = item.externalID.map { "external:\($0.lowercased())" } ?? "title:\(normalized):\(year)"
+        return (title, key, year, normalized)
+    }
+
+    static func identityKey(_ item: SeriesItem) -> String { identity(item).key }
+
+    /// Resolves every enabled catalog entry for a show. Unknown-year entries
+    /// join a dated version only when the catalog has one unambiguous year for
+    /// that title; conflicting provider metadata IDs are never merged.
+    static func relatedVariants(to target: SeriesItem, among items: [SeriesItem]) -> [SeriesItem] {
+        let targetIdentity = identity(target)
+        let candidates = items.filter { identity($0).normalized == targetIdentity.normalized }
+        let knownYears = Set(candidates.compactMap { candidate -> String? in
+            let value = identity(candidate)
+            return value.year.isEmpty ? nil : value.year
+        })
+        let canJoinUnknownYear = knownYears.count == 1
+        let matches = candidates.filter { candidate in
+            let value = identity(candidate)
+            if let targetID = target.externalID, let candidateID = candidate.externalID,
+               targetID.caseInsensitiveCompare(candidateID) != .orderedSame { return false }
+            if !targetIdentity.year.isEmpty && !value.year.isEmpty {
+                return targetIdentity.year == value.year
+            }
+            return canJoinUnknownYear
+        }
+        var seen = Set<String>()
+        let result = matches.filter { seen.insert($0.scopedID).inserted }
+        return result.isEmpty ? [target] : result
     }
 
     static func label(_ item: SeriesItem, categories: [CatalogCategory]) -> String {
@@ -443,42 +772,94 @@ enum SeriesSearchGrouping {
         return 2
     }
 
-    static func matches(_ items: [SeriesItem], query: String, categories: [CatalogCategory], preferences: LibraryPreferences) -> [SeriesSearchGroup] {
-        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return [] }
+    static func groups(_ items: [SeriesItem], categories: [CatalogCategory], preferences: LibraryPreferences) -> [SeriesSearchGroup] {
         var seen = Set<String>()
-        var matched: [(item: SeriesItem, identity: (title: String, key: String, year: String))] = []
+        var matched: [(item: SeriesItem, identity: (title: String, key: String, year: String, normalized: String))] = []
         for item in items {
             guard !Task.isCancelled else { return [] }
-            guard preferences.categoryVisible(item.categoryID, section: .series), seen.insert(item.scopedID).inserted,
-                  item.name.localizedStandardContains(query) else { continue }
+            guard preferences.acceptsSeries(item, categories: categories), seen.insert(item.scopedID).inserted else { continue }
             matched.append((item, identity(item)))
         }
-        var years: [String: Set<String>] = [:]
-        for entry in matched where !entry.identity.year.isEmpty { years[entry.identity.key, default: []].insert(entry.identity.year) }
         var grouped: [String: [SeriesItem]] = [:]
-        var titles: [String: (String, String)] = [:]
         for entry in matched {
             let identity = entry.identity
-            // A missing year may join one known edition, but never bridges
-            // two remakes with the same name and different known years.
-            let year = identity.year.isEmpty && years[identity.key]?.count == 1 ? years[identity.key]!.first! : identity.year
-            let key = identity.key + ":" + year
-            grouped[key, default: []].append(entry.item)
-            titles[key] = (identity.title, year)
+            grouped[identity.key, default: []].append(entry.item)
         }
         return grouped.compactMap { key, variants in
-            guard variants.contains(where: { preferences.acceptsSeries($0, categories: categories) }), let title = titles[key] else { return nil }
             let sorted = variants.sorted {
                 let lhs = rank($0, categories: categories), rhs = rank($1, categories: categories)
                 if lhs != rhs { return lhs < rhs }
                 if ($0.poster != nil) != ($1.poster != nil) { return $0.poster != nil }
                 return $0.scopedID < $1.scopedID
             }
-            return SeriesSearchGroup(id: key, title: title.0, year: title.1, variants: sorted)
+            guard let preferred = sorted.first else { return nil }
+            let preferredIdentity = identity(preferred)
+            let year = sorted.compactMap { identity($0).year.isEmpty ? nil : identity($0).year }.first ?? preferredIdentity.year
+            return SeriesSearchGroup(id: key, title: preferredIdentity.title, year: year, variants: sorted)
         }.sorted {
             if $0.title != $1.title { return $0.title.localizedStandardCompare($1.title) == .orderedAscending }
-            return $0.year < $1.year
+            if $0.year != $1.year { return $0.year < $1.year }
+            return $0.id < $1.id
         }
+    }
+
+    static func matches(_ items: [SeriesItem], query: String, categories: [CatalogCategory], preferences: LibraryPreferences) -> [SeriesSearchGroup] {
+        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !term.isEmpty else { return [] }
+        let normalizedQuery = searchNormalize(term)
+        guard !normalizedQuery.isEmpty else { return [] }
+        return groups(items, categories: categories, preferences: preferences)
+            .compactMap { group -> (SeriesSearchGroup, Int)? in
+                let titles = [group.title] + group.variants.map(\.name)
+                let ranks = titles.map { searchRank($0, query: normalizedQuery) }
+                guard let rank = ranks.min(), rank < 6 else { return nil }
+                return (group, rank)
+            }
+            .sorted {
+                if $0.1 != $1.1 { return $0.1 < $1.1 }
+                let lhs = identity($0.0.preferred)
+                let rhs = identity($1.0.preferred)
+                if lhs.year != rhs.year { return lhs.year > rhs.year }
+                return $0.0.title.localizedStandardCompare($1.0.title) == .orderedAscending
+            }
+            .map(\.0)
+    }
+
+    private static func searchNormalize(_ value: String) -> String {
+        let title = value.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+        let scalars = title.unicodeScalars.map { CharacterSet.alphanumerics.contains($0) ? Character($0) : " " }
+        return String(scalars).split(whereSeparator: \.isWhitespace).joined(separator: " ").lowercased()
+    }
+
+    /// Lower score is better: exact title, yearless exact, prefix, whole word,
+    /// partial phrase, then conservative single-edit fuzzy matching.
+    private static func searchRank(_ rawTitle: String, query: String) -> Int {
+        let title = searchNormalize(rawTitle)
+        guard !title.isEmpty else { return Int.max }
+        if title == query { return 0 }
+        let yearless = searchNormalize(yearPattern.stringByReplacingMatches(in: rawTitle, range: NSRange(rawTitle.startIndex..., in: rawTitle), withTemplate: " "))
+        if yearless == query { return 1 }
+        if title.hasPrefix(query + " ") || yearless.hasPrefix(query + " ") { return 2 }
+        let words = (title + " " + yearless).split(separator: " ").map(String.init)
+        if words.contains(query) { return 3 }
+        if title.contains(query) || yearless.contains(query) { return 4 }
+        guard query.count >= 5 else { return Int.max }
+        return words.contains(where: { editDistanceAtMostOne($0, query) }) ? 5 : Int.max
+    }
+
+    private static func editDistanceAtMostOne(_ lhs: String, _ rhs: String) -> Bool {
+        let a = Array(lhs), b = Array(rhs)
+        guard abs(a.count - b.count) <= 1 else { return false }
+        var i = 0, j = 0, edits = 0
+        while i < a.count && j < b.count {
+            if a[i] == b[j] { i += 1; j += 1; continue }
+            edits += 1
+            if edits > 1 { return false }
+            if a.count > b.count { i += 1 }
+            else if b.count > a.count { j += 1 }
+            else { i += 1; j += 1 }
+        }
+        if i < a.count || j < b.count { edits += 1 }
+        return edits <= 1
     }
 }

@@ -8,7 +8,7 @@ settings:
   base:
     SWIFT_VERSION: '5.0'
     CODE_SIGN_STYLE: Automatic
-    DEVELOPMENT_TEAM: ''
+    DEVELOPMENT_TEAM: '9YK6QV7566'
     ENABLE_USER_SCRIPT_SANDBOXING: NO
 targets:
   RigatoniStreamTV:
@@ -53,13 +53,14 @@ targets:
         INFOPLIST_KEY_NSHumanReadableCopyright: 'Ant Streams; VLCKit licensed under LGPL 2.1'
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         MARKETING_VERSION: '1.0'
-        CURRENT_PROJECT_VERSION: '10'
+        CURRENT_PROJECT_VERSION: '16'
   RigatoniStreamTVTests:
     type: bundle.unit-test
     platform: tvOS
     sources:
       - ../ios/RigatoniStreamTests/VaultTests.swift
       - ../ios/RigatoniStreamTests/DirectConnectionTests.swift
+      - ../ios/RigatoniStreamTests/CatalogPresentationTests.swift
     dependencies:
       - target: RigatoniStreamTV
     settings:

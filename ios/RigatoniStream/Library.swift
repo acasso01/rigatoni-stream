@@ -2,6 +2,406 @@ import Foundation
 import ImageIO
 import SwiftUI
 import CryptoKit
+import SQLite3
+
+/// A rebuildable, provider-scoped cache for catalog metadata. Credentials and
+/// playback URLs are deliberately excluded; only titles, category IDs and
+/// artwork references needed to render/search the library are persisted.
+actor PersistentCatalogIndex {
+    static let shared = PersistentCatalogIndex()
+
+    private var db: OpaquePointer?
+    private let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+    private let cacheLifetime: TimeInterval = 4 * 60 * 60
+
+    init(databaseURL: URL? = nil) {
+        let url: URL
+        if let databaseURL { url = databaseURL }
+        else {
+            let root = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+            url = root.appendingPathComponent("AntStreamsCatalog.sqlite")
+        }
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        guard sqlite3_open_v2(url.path, &db, SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK else {
+            db = nil
+            return
+        }
+        sqlite3_busy_timeout(db, 4_000)
+        _ = run("PRAGMA journal_mode=WAL")
+        _ = run("PRAGMA synchronous=NORMAL")
+        _ = run("CREATE TABLE IF NOT EXISTS catalog_categories (scope TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL, name TEXT NOT NULL, PRIMARY KEY(scope,kind,id))")
+        _ = run("CREATE TABLE IF NOT EXISTS catalog_category_state (scope TEXT NOT NULL, kind TEXT NOT NULL, category_id TEXT NOT NULL, item_count INTEGER NOT NULL, PRIMARY KEY(scope,kind,category_id))")
+        _ = run("CREATE TABLE IF NOT EXISTS catalog_items (scope TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL, year TEXT NOT NULL, category_id TEXT NOT NULL, poster TEXT, ext TEXT NOT NULL, number TEXT NOT NULL, added INTEGER NOT NULL, rating REAL NOT NULL, provider_id TEXT, PRIMARY KEY(scope,kind,id))")
+        _ = run("CREATE INDEX IF NOT EXISTS catalog_items_category ON catalog_items(scope,kind,category_id)")
+        _ = run("CREATE VIRTUAL TABLE IF NOT EXISTS catalog_fts USING fts5(scope UNINDEXED, kind UNINDEXED, item_id UNINDEXED, title, category, tokenize='unicode61 remove_diacritics 2')")
+        _ = run("CREATE TABLE IF NOT EXISTS catalog_snapshots (scope TEXT NOT NULL, kind TEXT NOT NULL, signature TEXT NOT NULL, updated REAL NOT NULL, PRIMARY KEY(scope,kind))")
+        _ = run("CREATE TABLE IF NOT EXISTS series_items (scope TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL, year TEXT NOT NULL, category_id TEXT NOT NULL, poster TEXT, added INTEGER NOT NULL, rating REAL NOT NULL, external_id TEXT, provider_id TEXT, PRIMARY KEY(scope,id))")
+        _ = run("CREATE INDEX IF NOT EXISTS series_items_category ON series_items(scope,category_id)")
+        _ = run("CREATE VIRTUAL TABLE IF NOT EXISTS series_fts USING fts5(scope UNINDEXED, item_id UNINDEXED, title, category, tokenize='unicode61 remove_diacritics 2')")
+        _ = run("CREATE TABLE IF NOT EXISTS series_category_state (scope TEXT NOT NULL, category_id TEXT NOT NULL, item_count INTEGER NOT NULL, PRIMARY KEY(scope,category_id))")
+        _ = run("CREATE TABLE IF NOT EXISTS series_snapshots (scope TEXT PRIMARY KEY, signature TEXT NOT NULL, updated REAL NOT NULL)")
+        // Best-effort schema upgrades for caches created by older app builds.
+        _ = run("ALTER TABLE catalog_categories ADD COLUMN updated REAL NOT NULL DEFAULT 0")
+        _ = run("ALTER TABLE catalog_category_state ADD COLUMN updated REAL NOT NULL DEFAULT 0")
+        _ = run("ALTER TABLE series_category_state ADD COLUMN updated REAL NOT NULL DEFAULT 0")
+    }
+
+    deinit { sqlite3_close(db) }
+
+    private func run(_ sql: String) -> Bool {
+        guard let db else { return false }
+        return sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK
+    }
+
+    private func statement(_ sql: String) -> OpaquePointer? {
+        guard let db else { return nil }
+        var value: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &value, nil) == SQLITE_OK else { return nil }
+        return value
+    }
+
+    private func text(_ value: String?, at index: Int32, in statement: OpaquePointer) {
+        guard let value else { sqlite3_bind_null(statement, index); return }
+        sqlite3_bind_text(statement, index, value, -1, transient)
+    }
+
+    private func string(_ statement: OpaquePointer, _ index: Int32) -> String {
+        guard let value = sqlite3_column_text(statement, index) else { return "" }
+        return String(cString: value)
+    }
+
+    private func isFresh(_ timestamp: Double) -> Bool {
+        timestamp > 0 && Date().timeIntervalSince1970 - timestamp < cacheLifetime
+    }
+
+    static func signature(_ ids: [String]) -> String {
+        let source = ids.sorted().joined(separator: "\u{1f}")
+        return SHA256.hash(data: Data(source.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    func loadCategories(scope: String, kind: String) -> [CatalogCategory]? {
+        guard let statement = statement("SELECT id,name,updated FROM catalog_categories WHERE scope=? AND kind=? ORDER BY rowid") else { return nil }
+        defer { sqlite3_finalize(statement) }
+        text(scope, at: 1, in: statement); text(kind, at: 2, in: statement)
+        var result: [CatalogCategory] = []; var fresh = true
+        while sqlite3_step(statement) == SQLITE_ROW {
+            fresh = fresh && isFresh(sqlite3_column_double(statement, 2))
+            result.append(CatalogCategory(id: string(statement, 0), name: string(statement, 1)))
+        }
+        return result.isEmpty || !fresh ? nil : result
+    }
+
+    func storeCategories(_ categories: [CatalogCategory], scope: String, kind: String) {
+        guard run("BEGIN IMMEDIATE") else { return }
+        defer { _ = run("COMMIT") }
+        guard let remove = statement("DELETE FROM catalog_categories WHERE scope=? AND kind=?") else { return }
+        text(scope, at: 1, in: remove); text(kind, at: 2, in: remove); _ = sqlite3_step(remove); sqlite3_finalize(remove)
+        guard let insert = statement("INSERT OR REPLACE INTO catalog_categories(scope,kind,id,name,updated) VALUES(?,?,?,?,?)") else { return }
+        defer { sqlite3_finalize(insert) }
+        for category in categories {
+            sqlite3_reset(insert); sqlite3_clear_bindings(insert)
+            text(scope, at: 1, in: insert); text(kind, at: 2, in: insert)
+            text(category.id, at: 3, in: insert); text(category.name, at: 4, in: insert)
+            sqlite3_bind_double(insert, 5, Date().timeIntervalSince1970)
+            _ = sqlite3_step(insert)
+        }
+    }
+
+    func hasCategory(scope: String, kind: String, id: String) -> Bool {
+        guard let statement = statement("SELECT updated FROM catalog_category_state WHERE scope=? AND kind=? AND category_id=? LIMIT 1") else { return false }
+        defer { sqlite3_finalize(statement) }
+        text(scope, at: 1, in: statement); text(kind, at: 2, in: statement); text(id, at: 3, in: statement)
+        return sqlite3_step(statement) == SQLITE_ROW && isFresh(sqlite3_column_double(statement, 0))
+    }
+
+    func loadItems(scope: String, kind: LibraryKind, categoryID: String) -> [CatalogItem]? {
+        guard hasCategory(scope: scope, kind: kind.rawValue, id: categoryID),
+              let statement = statement("SELECT id,title,year,category_id,poster,ext,number,added,rating,provider_id FROM catalog_items WHERE scope=? AND kind=? AND category_id=?") else { return nil }
+        defer { sqlite3_finalize(statement) }
+        text(scope, at: 1, in: statement); text(kind.rawValue, at: 2, in: statement); text(categoryID, at: 3, in: statement)
+        return readItems(statement, kind: kind)
+    }
+
+    func loadSnapshot(scope: String, kind: LibraryKind, categoryIDs: [String]) -> [CatalogItem]? {
+        let sig = Self.signature(categoryIDs)
+        guard let state = statement("SELECT signature,updated FROM catalog_snapshots WHERE scope=? AND kind=?") else { return nil }
+        text(scope, at: 1, in: state); text(kind.rawValue, at: 2, in: state)
+        let matches = sqlite3_step(state) == SQLITE_ROW && string(state, 0) == sig && isFresh(sqlite3_column_double(state, 1))
+        sqlite3_finalize(state)
+        guard matches else { return nil }
+        guard !categoryIDs.isEmpty else { return [] }
+        let placeholders = Array(repeating: "?", count: categoryIDs.count).joined(separator: ",")
+        guard let query = statement("SELECT id,title,year,category_id,poster,ext,number,added,rating,provider_id FROM catalog_items WHERE scope=? AND kind=? AND category_id IN (\(placeholders))") else { return nil }
+        defer { sqlite3_finalize(query) }
+        text(scope, at: 1, in: query); text(kind.rawValue, at: 2, in: query)
+        for (offset, id) in categoryIDs.enumerated() { text(id, at: Int32(offset + 3), in: query) }
+        return readItems(query, kind: kind)
+    }
+
+    private func readItems(_ query: OpaquePointer, kind: LibraryKind) -> [CatalogItem] {
+        var items: [CatalogItem] = []
+        while sqlite3_step(query) == SQLITE_ROW {
+            let provider = UUID(uuidString: string(query, 9))
+            let poster = URL(string: string(query, 4)).flatMap { ["http", "https"].contains($0.scheme?.lowercased() ?? "") ? $0 : nil }
+            items.append(CatalogItem(id: string(query, 0), name: string(query, 1), kind: kind,
+                fileExtension: string(query, 5), poster: poster, playbackURL: nil,
+                categoryID: string(query, 3), number: string(query, 6), added: Int(sqlite3_column_int64(query, 7)),
+                rating: sqlite3_column_double(query, 8), year: string(query, 2), providerID: provider))
+        }
+        return items
+    }
+
+    func storeItems(_ items: [CatalogItem], scope: String, kind: LibraryKind, categoryID: String?, provider: Provider) {
+        guard let db, run("BEGIN IMMEDIATE") else { return }
+        defer { _ = run("COMMIT") }
+        if let categoryID, let removal = statement("SELECT id FROM catalog_items WHERE scope=? AND kind=? AND category_id=?") {
+            text(scope, at: 1, in: removal); text(kind.rawValue, at: 2, in: removal); text(categoryID, at: 3, in: removal)
+            var ids: [String] = []; while sqlite3_step(removal) == SQLITE_ROW { ids.append(string(removal, 0)) }
+            sqlite3_finalize(removal)
+            for id in ids { deleteFTS(table: "catalog_fts", scope: scope, kind: kind.rawValue, id: id) }
+            if let delete = statement("DELETE FROM catalog_items WHERE scope=? AND kind=? AND category_id=?") {
+                text(scope, at: 1, in: delete); text(kind.rawValue, at: 2, in: delete); text(categoryID, at: 3, in: delete); _ = sqlite3_step(delete); sqlite3_finalize(delete)
+            }
+        }
+        guard let insert = statement("INSERT OR REPLACE INTO catalog_items(scope,kind,id,title,year,category_id,poster,ext,number,added,rating,provider_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)") else { return }
+        defer { sqlite3_finalize(insert) }
+        for item in items.prefix(CatalogIndex.maximumItems) {
+            deleteFTS(table: "catalog_fts", scope: scope, kind: kind.rawValue, id: item.scopedID)
+            sqlite3_reset(insert); sqlite3_clear_bindings(insert)
+            text(scope, at: 1, in: insert); text(kind.rawValue, at: 2, in: insert); text(item.scopedID, at: 3, in: insert)
+            text(item.name, at: 4, in: insert); text(item.year, at: 5, in: insert); text(item.categoryID, at: 6, in: insert)
+            text(safePoster(item.poster, provider: provider), at: 7, in: insert); text(item.fileExtension, at: 8, in: insert)
+            text(item.number, at: 9, in: insert); sqlite3_bind_int64(insert, 10, Int64(item.added)); sqlite3_bind_double(insert, 11, item.rating)
+            text(item.providerID?.uuidString, at: 12, in: insert); _ = sqlite3_step(insert)
+            insertFTS(table: "catalog_fts", scope: scope, kind: kind.rawValue, id: item.scopedID, title: item.name, category: "")
+        }
+        if let categoryID, let state = statement("INSERT OR REPLACE INTO catalog_category_state(scope,kind,category_id,item_count,updated) VALUES(?,?,?,?,?)") {
+            text(scope, at: 1, in: state); text(kind.rawValue, at: 2, in: state); text(categoryID, at: 3, in: state)
+            sqlite3_bind_int64(state, 4, Int64(items.count)); sqlite3_bind_double(state, 5, Date().timeIntervalSince1970); _ = sqlite3_step(state); sqlite3_finalize(state)
+        }
+        _ = db
+    }
+
+    func markSnapshot(scope: String, kind: LibraryKind, categoryIDs: [String], items: [CatalogItem], provider: Provider) {
+        if let rows = statement("SELECT id FROM catalog_items WHERE scope=? AND kind=?") {
+            text(scope, at: 1, in: rows); text(kind.rawValue, at: 2, in: rows)
+            var oldIDs: [String] = []; while sqlite3_step(rows) == SQLITE_ROW { oldIDs.append(string(rows, 0)) }
+            sqlite3_finalize(rows)
+            for id in oldIDs { deleteFTS(table: "catalog_fts", scope: scope, kind: kind.rawValue, id: id) }
+        }
+        if let rows = statement("DELETE FROM catalog_items WHERE scope=? AND kind=?") {
+            text(scope, at: 1, in: rows); text(kind.rawValue, at: 2, in: rows); _ = sqlite3_step(rows); sqlite3_finalize(rows)
+        }
+        if let rows = statement("DELETE FROM catalog_category_state WHERE scope=? AND kind=?") {
+            text(scope, at: 1, in: rows); text(kind.rawValue, at: 2, in: rows); _ = sqlite3_step(rows); sqlite3_finalize(rows)
+        }
+        storeItems(items, scope: scope, kind: kind, categoryID: nil, provider: provider)
+        var counts: [String: Int] = [:]
+        for item in items { counts[item.categoryID, default: 0] += 1 }
+        if let state = statement("INSERT OR REPLACE INTO catalog_category_state(scope,kind,category_id,item_count,updated) VALUES(?,?,?,?,?)") {
+            defer { sqlite3_finalize(state) }
+            for (categoryID, count) in counts {
+                sqlite3_reset(state); sqlite3_clear_bindings(state)
+                text(scope, at: 1, in: state); text(kind.rawValue, at: 2, in: state); text(categoryID, at: 3, in: state)
+                sqlite3_bind_int64(state, 4, Int64(count)); sqlite3_bind_double(state, 5, Date().timeIntervalSince1970); _ = sqlite3_step(state)
+            }
+        }
+        guard let statement = statement("INSERT OR REPLACE INTO catalog_snapshots(scope,kind,signature,updated) VALUES(?,?,?,?)") else { return }
+        text(scope, at: 1, in: statement); text(kind.rawValue, at: 2, in: statement); text(Self.signature(categoryIDs), at: 3, in: statement)
+        sqlite3_bind_double(statement, 4, Date().timeIntervalSince1970); _ = sqlite3_step(statement); sqlite3_finalize(statement)
+    }
+
+    func searchItems(scope: String, query: String, kinds: Set<LibraryKind>, categoryIDs: [String], limit: Int = 300) -> [CatalogItem] {
+        let match = Self.ftsQuery(query)
+        guard !match.isEmpty, !kinds.isEmpty, !categoryIDs.isEmpty else { return [] }
+        let kindMarks = Array(repeating: "?", count: kinds.count).joined(separator: ",")
+        let categoryMarks = Array(repeating: "?", count: categoryIDs.count).joined(separator: ",")
+        guard let statement = statement("SELECT c.id,c.title,c.year,c.category_id,c.poster,c.ext,c.number,c.added,c.rating,c.provider_id,c.kind FROM catalog_fts f JOIN catalog_items c ON c.scope=f.scope AND c.kind=f.kind AND c.id=f.item_id WHERE catalog_fts MATCH ? AND f.scope=? AND f.kind IN (\(kindMarks)) AND c.category_id IN (\(categoryMarks)) ORDER BY CASE WHEN lower(c.title)=lower(?) THEN 0 WHEN lower(c.title) LIKE lower(?) THEN 1 ELSE 2 END, c.title LIMIT ?") else { return [] }
+        defer { sqlite3_finalize(statement) }
+        text(match, at: 1, in: statement); text(scope, at: 2, in: statement)
+        for (offset, kind) in kinds.sorted(by: { $0.rawValue < $1.rawValue }).enumerated() { text(kind.rawValue, at: Int32(offset + 3), in: statement) }
+        let firstCategoryIndex = 3 + kinds.count
+        for (offset, categoryID) in categoryIDs.enumerated() { text(categoryID, at: Int32(firstCategoryIndex + offset), in: statement) }
+        let exactIndex = Int32(firstCategoryIndex + categoryIDs.count); text(query, at: exactIndex, in: statement); text(query + "%", at: exactIndex + 1, in: statement)
+        sqlite3_bind_int(statement, exactIndex + 2, Int32(max(1, min(limit, 1000))))
+        var results: [CatalogItem] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let kind = LibraryKind(rawValue: string(statement, 10)) else { continue }
+            let poster = URL(string: string(statement, 4))
+            results.append(CatalogItem(id: string(statement, 0), name: string(statement, 1), kind: kind, fileExtension: string(statement, 5), poster: poster, categoryID: string(statement, 3), number: string(statement, 6), added: Int(sqlite3_column_int64(statement, 7)), rating: sqlite3_column_double(statement, 8), year: string(statement, 2), providerID: UUID(uuidString: string(statement, 9))))
+        }
+        return results
+    }
+
+    func loadSeries(scope: String, categoryID: String) -> [SeriesItem]? {
+        guard let state = statement("SELECT updated FROM series_category_state WHERE scope=? AND category_id=?") else { return nil }
+        text(scope, at: 1, in: state); text(categoryID, at: 2, in: state)
+        let loaded = sqlite3_step(state) == SQLITE_ROW && isFresh(sqlite3_column_double(state, 0)); sqlite3_finalize(state)
+        guard loaded, let query = statement("SELECT id,title,year,category_id,poster,added,rating,external_id,provider_id FROM series_items WHERE scope=? AND category_id=?") else { return nil }
+        defer { sqlite3_finalize(query) }
+        text(scope, at: 1, in: query); text(categoryID, at: 2, in: query)
+        return readSeries(query)
+    }
+
+    func loadSeriesSnapshot(scope: String, categoryIDs: [String]) -> [SeriesItem]? {
+        guard let state = statement("SELECT signature,updated FROM series_snapshots WHERE scope=?") else { return nil }
+        text(scope, at: 1, in: state)
+        let matches = sqlite3_step(state) == SQLITE_ROW && string(state, 0) == Self.signature(categoryIDs) && isFresh(sqlite3_column_double(state, 1))
+        sqlite3_finalize(state)
+        guard matches, !categoryIDs.isEmpty else { return matches ? [] : nil }
+        let marks = Array(repeating: "?", count: categoryIDs.count).joined(separator: ",")
+        guard let query = statement("SELECT id,title,year,category_id,poster,added,rating,external_id,provider_id FROM series_items WHERE scope=? AND category_id IN (\(marks))") else { return nil }
+        defer { sqlite3_finalize(query) }
+        text(scope, at: 1, in: query)
+        for (offset, id) in categoryIDs.enumerated() { text(id, at: Int32(offset + 2), in: query) }
+        return readSeries(query)
+    }
+
+    func hasSeriesSnapshot(scope: String, categoryIDs: [String]) -> Bool {
+        guard let state = statement("SELECT signature,updated FROM series_snapshots WHERE scope=?") else { return false }
+        defer { sqlite3_finalize(state) }
+        text(scope, at: 1, in: state)
+        return sqlite3_step(state) == SQLITE_ROW && string(state, 0) == Self.signature(categoryIDs) && isFresh(sqlite3_column_double(state, 1))
+    }
+
+    private func readSeries(_ query: OpaquePointer) -> [SeriesItem] {
+        var values: [SeriesItem] = []
+        while sqlite3_step(query) == SQLITE_ROW {
+            values.append(SeriesItem(id: string(query, 0), name: string(query, 1),
+                poster: URL(string: string(query, 4)), providerID: UUID(uuidString: string(query, 8)),
+                categoryID: string(query, 3), added: Int(sqlite3_column_int64(query, 5)),
+                rating: sqlite3_column_double(query, 6), year: string(query, 2),
+                externalID: string(query, 7).isEmpty ? nil : string(query, 7)))
+        }
+        return values
+    }
+
+    func storeSeries(_ items: [SeriesItem], scope: String, categoryID: String?, provider: Provider) {
+        if let categoryID, let rows = statement("SELECT id FROM series_items WHERE scope=? AND category_id=?") {
+            text(scope, at: 1, in: rows); text(categoryID, at: 2, in: rows)
+            var old: [String] = []; while sqlite3_step(rows) == SQLITE_ROW { old.append(string(rows, 0)) }
+            sqlite3_finalize(rows)
+            if let removeFTS = statement("DELETE FROM series_fts WHERE scope=? AND item_id=?") {
+                defer { sqlite3_finalize(removeFTS) }
+                for id in old {
+                    sqlite3_reset(removeFTS); sqlite3_clear_bindings(removeFTS)
+                    text(scope, at: 1, in: removeFTS); text(id, at: 2, in: removeFTS); _ = sqlite3_step(removeFTS)
+                }
+            }
+            if let remove = statement("DELETE FROM series_items WHERE scope=? AND category_id=?") {
+                text(scope, at: 1, in: remove); text(categoryID, at: 2, in: remove); _ = sqlite3_step(remove); sqlite3_finalize(remove)
+            }
+        }
+        guard let insert = statement("INSERT OR REPLACE INTO series_items(scope,id,title,year,category_id,poster,added,rating,external_id,provider_id) VALUES(?,?,?,?,?,?,?,?,?,?)") else { return }
+        guard let insertSearch = statement("INSERT INTO series_fts(scope,item_id,title,category) VALUES(?,?,?,?)") else { sqlite3_finalize(insert); return }
+        guard run("BEGIN IMMEDIATE") else { sqlite3_finalize(insert); sqlite3_finalize(insertSearch); return }
+        defer { sqlite3_finalize(insert); sqlite3_finalize(insertSearch); _ = run("COMMIT") }
+        for item in items.prefix(SeriesSearchBudget.maximumItems) {
+            sqlite3_reset(insert); sqlite3_clear_bindings(insert)
+            text(scope, at: 1, in: insert); text(item.scopedID, at: 2, in: insert); text(item.name, at: 3, in: insert)
+            text(item.year, at: 4, in: insert); text(item.categoryID, at: 5, in: insert)
+            text(safePoster(item.poster, provider: provider), at: 6, in: insert)
+            sqlite3_bind_int64(insert, 7, Int64(item.added)); sqlite3_bind_double(insert, 8, item.rating)
+            text(item.externalID, at: 9, in: insert); text(item.providerID?.uuidString, at: 10, in: insert)
+            _ = sqlite3_step(insert)
+            sqlite3_reset(insertSearch); sqlite3_clear_bindings(insertSearch)
+            text(scope, at: 1, in: insertSearch); text(item.scopedID, at: 2, in: insertSearch)
+            text(item.name, at: 3, in: insertSearch); text("", at: 4, in: insertSearch); _ = sqlite3_step(insertSearch)
+        }
+        if let categoryID, let state = statement("INSERT OR REPLACE INTO series_category_state(scope,category_id,item_count,updated) VALUES(?,?,?,?)") {
+            text(scope, at: 1, in: state); text(categoryID, at: 2, in: state); sqlite3_bind_int64(state, 3, Int64(items.count)); sqlite3_bind_double(state, 4, Date().timeIntervalSince1970); _ = sqlite3_step(state); sqlite3_finalize(state)
+        }
+    }
+
+    func markSeriesSnapshot(_ items: [SeriesItem], scope: String, categoryIDs: [String], provider: Provider) {
+        if let removeFTS = statement("DELETE FROM series_fts WHERE scope=?") { text(scope, at: 1, in: removeFTS); _ = sqlite3_step(removeFTS); sqlite3_finalize(removeFTS) }
+        if let remove = statement("DELETE FROM series_items WHERE scope=?") { text(scope, at: 1, in: remove); _ = sqlite3_step(remove); sqlite3_finalize(remove) }
+        if let remove = statement("DELETE FROM series_category_state WHERE scope=?") { text(scope, at: 1, in: remove); _ = sqlite3_step(remove); sqlite3_finalize(remove) }
+        storeSeries(items, scope: scope, categoryID: nil, provider: provider)
+        var counts: [String: Int] = [:]
+        for item in items { counts[item.categoryID, default: 0] += 1 }
+        if let categoryState = statement("INSERT OR REPLACE INTO series_category_state(scope,category_id,item_count,updated) VALUES(?,?,?,?)") {
+            defer { sqlite3_finalize(categoryState) }
+            for (categoryID, count) in counts {
+                sqlite3_reset(categoryState); sqlite3_clear_bindings(categoryState)
+                text(scope, at: 1, in: categoryState); text(categoryID, at: 2, in: categoryState)
+                sqlite3_bind_int64(categoryState, 3, Int64(count)); sqlite3_bind_double(categoryState, 4, Date().timeIntervalSince1970); _ = sqlite3_step(categoryState)
+            }
+        }
+        guard let state = statement("INSERT OR REPLACE INTO series_snapshots(scope,signature,updated) VALUES(?,?,?)") else { return }
+        text(scope, at: 1, in: state); text(Self.signature(categoryIDs), at: 2, in: state); sqlite3_bind_double(state, 3, Date().timeIntervalSince1970); _ = sqlite3_step(state); sqlite3_finalize(state)
+    }
+
+    func searchSeries(scope: String, query: String, categoryIDs: [String], limit: Int = 300) -> [SeriesItem] {
+        let match = Self.ftsQuery(query)
+        guard !match.isEmpty, !categoryIDs.isEmpty else { return [] }
+        let marks = Array(repeating: "?", count: categoryIDs.count).joined(separator: ",")
+        guard let statement = statement("SELECT s.id,s.title,s.year,s.category_id,s.poster,s.added,s.rating,s.external_id,s.provider_id FROM series_fts f JOIN series_items s ON s.scope=f.scope AND s.id=f.item_id WHERE series_fts MATCH ? AND f.scope=? AND s.category_id IN (\(marks)) ORDER BY CASE WHEN lower(s.title)=lower(?) THEN 0 WHEN lower(substr(s.title,1,length(?)))=lower(?) AND substr(s.title,length(?)+1,2)=' (' THEN 1 WHEN lower(substr(s.title,1,length(?)))=lower(?) THEN 2 ELSE 3 END,s.title LIMIT ?") else { return [] }
+        defer { sqlite3_finalize(statement) }
+        text(match, at: 1, in: statement); text(scope, at: 2, in: statement)
+        for (offset, id) in categoryIDs.enumerated() { text(id, at: Int32(offset + 3), in: statement) }
+        let rank = Int32(3 + categoryIDs.count)
+        for offset in 0..<6 { text(query, at: rank + Int32(offset), in: statement) }
+        sqlite3_bind_int(statement, rank + 6, Int32(max(1, min(limit, 1000))))
+        return readSeries(statement)
+    }
+
+    private func deleteFTS(table: String, scope: String, kind: String, id: String) {
+        let sql = table == "catalog_fts"
+            ? "DELETE FROM catalog_fts WHERE scope=? AND kind=? AND item_id=?"
+            : "DELETE FROM series_fts WHERE scope=? AND item_id=?"
+        guard let statement = statement(sql) else { return }
+        text(scope, at: 1, in: statement)
+        if table == "catalog_fts" { text(kind, at: 2, in: statement); text(id, at: 3, in: statement) }
+        else { text(id, at: 2, in: statement) }
+        _ = sqlite3_step(statement); sqlite3_finalize(statement)
+    }
+
+    private func insertFTS(table: String, scope: String, kind: String, id: String, title: String, category: String) {
+        guard let statement = statement(table == "catalog_fts" ? "INSERT INTO catalog_fts(scope,kind,item_id,title,category) VALUES(?,?,?,?,?)" : "INSERT INTO series_fts(scope,item_id,title,category) VALUES(?,?,?,?)") else { return }
+        text(scope, at: 1, in: statement)
+        if table == "catalog_fts" {
+            text(kind, at: 2, in: statement); text(id, at: 3, in: statement); text(title, at: 4, in: statement); text(category, at: 5, in: statement)
+        } else { text(id, at: 2, in: statement); text(title, at: 3, in: statement); text(category, at: 4, in: statement) }
+        _ = sqlite3_step(statement); sqlite3_finalize(statement)
+    }
+
+    private func safePoster(_ url: URL?, provider: Provider) -> String? {
+        guard let url, let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              parts.user == nil, parts.password == nil,
+              !parts.queryItems.orEmpty.contains(where: { ["user", "username", "password", "token", "auth", "key"].contains($0.name.lowercased()) }),
+              (provider.username.isEmpty || !url.absoluteString.localizedCaseInsensitiveContains(provider.username)),
+              (provider.password.isEmpty || !url.absoluteString.localizedCaseInsensitiveContains(provider.password)) else { return nil }
+        return url.absoluteString
+    }
+
+    private static func ftsQuery(_ input: String) -> String {
+        let tokens = input.lowercased().components(separatedBy: CharacterSet.alphanumerics.union(.init(charactersIn: "_-")).inverted).filter { !$0.isEmpty }.prefix(8)
+        return tokens.map { "\"\($0.replacingOccurrences(of: "\"", with: "\"\""))\"*" }.joined(separator: " AND ")
+    }
+}
+
+private extension Optional where Wrapped == [URLQueryItem] {
+    var orEmpty: [URLQueryItem] { self ?? [] }
+}
+
+extension AppModel {
+    /// Stable opaque key for the local catalog cache. A password never enters
+    /// the key or database; account changes on the same host still get a new scope.
+    var catalogCacheScope: String {
+        let identities: [String]
+        if libraryMode == .combined {
+            identities = combinedProfiles.compactMap { profile in
+                guard let host = try? profile.provider.baseURL().host else { return nil }
+                return "\(host.lowercased())|\(profile.provider.username)|\(profile.provider.kind.rawValue)"
+            }.sorted()
+        } else if let host = try? provider.baseURL().host {
+            identities = ["\(host.lowercased())|\(provider.username)|\(provider.kind.rawValue)"]
+        } else { identities = [] }
+        let raw = (preferenceKey ?? "device") + "|" + identities.joined(separator: "\u{1f}")
+        return SHA256.hash(data: Data(raw.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+}
 
 // Ephemeral, bounded in-memory requests prevent provider responses or URLs entering disk caches.
 final class BoundedTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendable {
@@ -457,7 +857,7 @@ struct LiveChannelRow: View {
                 guide = nil
                 guard epgEnabled else { return }
                 while !Task.isCancelled {
-                    let value = await EPGCache.shared.nowNext(streamID: item.id, provider: provider, scope: scope)
+                    let value = await EPGCache.shared.nowNext(streamID: item.id, provider: provider, scope: scope, categoryID: item.categoryID)
                     guard !Task.isCancelled else { return }; guide = value
                     do { try await Task.sleep(for: .seconds(60)) } catch { return }
                 }
@@ -593,6 +993,7 @@ struct LibraryView: View {
             .background { StreamBackdrop() }
             .foregroundStyle(StreamTheme.text(for: AppAppearance(rawValue: appearance) ?? .dark))
             .navigationTitle(kind.title).navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $query, prompt: "Search \(kind.title)")
             .toolbar { Button { model.settingsVisible = true } label: { Image(systemName: "person.crop.circle") }.accessibilityLabel("Account and provider settings") }
             .task(id: "\(model.libraryRevision)-\(retry)") { await loadCategories() }
             .task(id: "\(scope.rawValue)-\(selected)-\(model.libraryRevision)-\(retry)") { await loadItems() }

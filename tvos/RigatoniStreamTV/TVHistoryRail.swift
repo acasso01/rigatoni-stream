@@ -8,6 +8,7 @@ struct TVHistoryRail: View {
     @State private var records: [TVWatchedRecord] = []
     @State private var playing: CatalogItem?
     @State private var playingKind = "movie"
+    @State private var playingProgressID: String?
     @State private var notice = ""
     // Movie detail pushes on the NavigationStack so the player's cover is a
     // single modal level (nested fullScreenCovers silently fail on tvOS).
@@ -44,9 +45,10 @@ struct TVHistoryRail: View {
         .onChange(of: model.libraryRevision) { _, _ in reload() }
         .fullScreenCover(item: $playing, onDismiss: { reload() }) { item in
             if playingKind == "series" {
+                let progressID = playingProgressID ?? ("series-" + item.id)
                 DirectPlayerView(item: item, provider: model.provider(for: item),
-                             startSeconds: model.preferences.progress["series-" + item.id]?.seconds ?? 0,
-                             progressID: "series-" + item.id)
+                             startSeconds: model.preferences.progress[progressID]?.seconds ?? 0,
+                             progressID: progressID)
             } else { CatalogDestination(item: item) }
         }
         .navigationDestination(isPresented: $showingDetail) {
@@ -61,7 +63,8 @@ struct TVHistoryRail: View {
             let visible = record.kind == "series" || model.preferences.visible(CatalogItem(id: record.itemID, name: record.name, kind: kind, fileExtension: record.ext, poster: nil, categoryID: record.categoryID, providerID: record.providerID))
             guard visible else { return false }
             if !onlyInProgress { return true }
-            return ResumeList.isInProgress(kind: record.kind, itemID: record.itemID, progress: model.preferences.progress)
+            let key = record.progressID ?? (record.kind == "series" ? "series-" + record.itemID : record.itemID)
+            return model.preferences.progress[key] != nil
         }
     }
 
@@ -73,7 +76,7 @@ struct TVHistoryRail: View {
 
     private func open(_ record: TVWatchedRecord) async {
         let scope = model.preferenceKey
-        notice = ""; playingKind = record.kind
+        notice = ""; playingKind = record.kind; playingProgressID = record.progressID
         let kind: LibraryKind = record.kind == "live" ? .live : .movies
         var item = CatalogItem(id: record.itemID, name: record.name, kind: kind, fileExtension: record.ext, poster: nil, categoryID: record.categoryID, providerID: record.providerID)
         do {

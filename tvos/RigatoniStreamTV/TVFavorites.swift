@@ -11,6 +11,27 @@ typealias TVFavoriteRecord = SavedRecord
     }
     static func key(model: AppModel) -> String? { model.preferenceKey.map { $0 + "-favorites-v2" } }
     static func items(model: AppModel) -> [SavedRecord] { SavedCollection.items(key: key(model: model)) }
+    private static func watchedKey(model: AppModel) -> String? { model.preferenceKey.map { $0 + "-watched-series-v1" } }
+    private static func preferredSourceKey(groupID: String, model: AppModel) -> String? {
+        model.preferenceKey.map { $0 + "-preferred-series-source-" + groupID }
+    }
+    static func preferredSeriesSource(groupID: String, model: AppModel) -> String? {
+        preferredSourceKey(groupID: groupID, model: model).flatMap { UserDefaults.standard.string(forKey: $0) }
+    }
+    static func setPreferredSeriesSource(_ sourceID: String, groupID: String, model: AppModel) {
+        guard let key = preferredSourceKey(groupID: groupID, model: model) else { return }
+        UserDefaults.standard.set(sourceID, forKey: key)
+    }
+    static func isSeriesWatched(_ series: SeriesItem, model: AppModel) -> Bool {
+        guard let key = watchedKey(model: model) else { return false }
+        return (UserDefaults.standard.stringArray(forKey: key) ?? []).contains(series.scopedID)
+    }
+    static func setSeriesWatched(_ series: SeriesItem, watched: Bool, model: AppModel) {
+        guard let key = watchedKey(model: model) else { return }
+        var ids = Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
+        if watched { ids.insert(series.scopedID) } else { ids.remove(series.scopedID) }
+        UserDefaults.standard.set(ids.sorted(), forKey: key)
+    }
     static func contains(id: String, kind: String, providerID: UUID? = nil, model: AppModel) -> Bool {
         items(model: model).contains { $0.id == SavedRecord.makeID(kind: kind, itemID: id, providerID: providerID) }
     }

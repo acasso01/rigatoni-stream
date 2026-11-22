@@ -461,7 +461,7 @@ struct MobileGuideRow: View {
         .task(id: "\(model.libraryRevision)-\(item.scopedID)-\(epgCache.revision)") {
             programs = []; loading = true
             while !Task.isCancelled {
-                let loaded = await EPGCache.shared.programs(streamID: item.id, provider: model.provider(for: item), scope: model.epgScope(for: item))
+                let loaded = await EPGCache.shared.programs(streamID: item.id, provider: model.provider(for: item), scope: model.epgScope(for: item), categoryID: item.categoryID)
                 guard !Task.isCancelled else { return }
                 programs = Array(loaded.filter { $0.end > Date() }.prefix(6)); loading = false
                 do { try await Task.sleep(for: .seconds(60)) } catch { return }

@@ -48,6 +48,11 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(cache.cachedCount, 0)
         XCTAssertEqual(calls, 2)
     }
+    func testEPGAutoRefreshIntervalOptions() {
+        XCTAssertEqual(EPGRefreshInterval.allCases.map(\.rawValue), [0, 4, 6, 12, 24])
+        XCTAssertEqual(EPGRefreshInterval(rawValue: 6)?.title, "Every 6 hours")
+        XCTAssertNil(EPGRefreshInterval(rawValue: 3))
+    }
 
     @MainActor func testMobileRecordsExcludePlaybackAndPosterURLs() throws {
         var item = CatalogItem(id: "42", name: "Example movie", kind: .movies, fileExtension: "mkv",
@@ -134,7 +139,7 @@ final class CoreTests: XCTestCase {
     }
     @MainActor func testSeriesDetailsInferSeasonsSortEpisodesAndValidateFormats() {
         let detail = SeriesStore.parseDetail(["episodes": ["2": [
-            ["id": "12", "episode_num": 2, "title": "Second", "container_extension": "mkv"],
+            ["id": "12", "episode_num": 2, "title": "Second", "container_extension": "mkv", "info": ["plot": "Episode summary", "duration": "00:42:15", "movie_image": "https://cdn.example/episode.jpg"]],
             ["id": 11, "episode_num": 1, "title": "First", "info": ["container_extension": "m4v"]],
             ["id": "13", "episode_num": 3, "container_extension": "../../invalid"],
             ["id": "12", "episode_num": 4],
@@ -143,6 +148,10 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(detail.seasons.map(\.number), [2])
         XCTAssertEqual(detail.episodes[2]?.map(\.id), ["11", "12", "13"])
         XCTAssertEqual(detail.episodes[2]?.map(\.ext), ["m4v", "mkv", "mp4"])
+        let metadataEpisode = detail.episodes[2]?.first { $0.id == "12" }
+        XCTAssertEqual(metadataEpisode?.synopsis, "Episode summary")
+        XCTAssertEqual(metadataEpisode?.durationSeconds, 2535)
+        XCTAssertEqual(metadataEpisode?.thumbnail?.host, "cdn.example")
     }
     @MainActor func testEpisodeProgressDoesNotCollideWithMovieProgress() {
         let episode = SeriesEpisode(id: "42", number: 1, title: "Pilot", ext: "mp4")

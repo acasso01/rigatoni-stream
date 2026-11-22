@@ -1,6 +1,25 @@
 import SwiftUI
 import UIKit
 import VLCKit
+import OSLog
+
+@MainActor
+enum TVPlaybackDiagnostics {
+    private static let logger = Logger(subsystem: "com.acasso01.rigatonistreamtv", category: "Playback")
+
+    static func started(isLive: Bool) {
+        logger.info("Playback started; stream_type=\(isLive ? "live" : "on_demand", privacy: .public)")
+    }
+
+    static func failed(isLive: Bool) {
+        logger.error("VLCKit reported a playback error; stream_type=\(isLive ? "live" : "on_demand", privacy: .public)")
+    }
+
+    static func memoryWarning() {
+        logger.warning("tvOS reported a memory warning")
+        PosterMemory.shared.removeAllObjects()
+    }
+}
 
 // tvOS playback engine. Mirrors the iPhone build's NativePlayer semantics
 // (VLC media, network-caching option, 0.5 s polling, state strings) minus
@@ -27,6 +46,7 @@ final class TVNativePlayer: ObservableObject {
     private var openedAt = Date()
     private var url: URL?
     private var cache = 1500
+    private var failureLogged = false
 
     func attach(_ view: UIView) { engine.drawable = view }
 
@@ -37,6 +57,8 @@ final class TVNativePlayer: ObservableObject {
 
     func start() {
         guard let url else { return }
+        failureLogged = false
+        TVPlaybackDiagnostics.started(isLive: isLive)
         if !isLive { resumeSeconds = max(resumeSeconds, lastSeconds) }
         engine.stop()
         resetShuttle()
@@ -91,6 +113,7 @@ final class TVNativePlayer: ObservableObject {
         case .playing: state = "Playing"
         case .paused: state = "Paused"
         case .error:
+            if !failureLogged { TVPlaybackDiagnostics.failed(isLive: isLive); failureLogged = true }
             let host = self.url.map(ProviderHTTP.endpoint) ?? "the provider"
             state = "The stream could not play from \(host). Ant Streams opened that host directly; no gateway was used."
         case .stopped: state = "Playback stopped"
@@ -186,16 +209,20 @@ final class TVNativePlayer: ObservableObject {
 
     func stop() {
         // Back and onDisappear can both stop the same playback session.
-        guard timer != nil else { return }
         // Capture the current position, including a seek since the last poll.
-        if !isLive, resumeSeconds == 0 {
+        if timer != nil, !isLive, resumeSeconds == 0 {
             let seconds = playbackSeconds
             let duration = Double(engine.media?.length.value?.int64Value ?? 0) / 1000
             if duration > 0 { lastSeconds = max(0, seconds); lastDuration = duration }
             progressRecorder?(lastSeconds, lastDuration)
         }
-        timer?.invalidate(); timer = nil; engine.stop()
+        timer?.invalidate(); timer = nil
+        engine.stop()
         resetShuttle()
+        engine.media = nil
+        engine.drawable = nil
+        url = nil
+        progressRecorder = nil
         playing = false
     }
 }
@@ -440,7 +467,7 @@ struct TVPlayerView: View {
 
     private func recordHistory() {
         guard playbackURL != nil else { return }
-        TVLastWatched.record(kind: lastWatchedKind ?? (currentItem.kind == .live ? "live" : "movie"), item: currentItem, model: model)
+        TVLastWatched.record(kind: lastWatchedKind ?? (currentItem.kind == .live ? "live" : "movie"), item: currentItem, progressID: progressID, model: model)
     }
 
     private func adjacentChannel(_ offset: Int) -> CatalogItem? {

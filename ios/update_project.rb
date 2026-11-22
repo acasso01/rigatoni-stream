@@ -1,8 +1,12 @@
 # Update existing generated projects without resetting signing, signing settings or version numbers.
 require 'xcodeproj'
 require 'pathname'
+require 'yaml'
 Dir.chdir(__dir__)
 project = Xcodeproj::Project.open('RigatoniStream.xcodeproj')
+release = YAML.load_file('project.yml').fetch('targets').fetch('RigatoniStream').fetch('settings').fetch('base')
+version = release.fetch('CURRENT_PROJECT_VERSION').to_s
+marketing_version = release.fetch('MARKETING_VERSION').to_s
 target = project.targets.find { |candidate| candidate.name == 'RigatoniStream' }
 abort 'RigatoniStream application target missing' unless target
 group = project.main_group.children.find { |candidate| candidate.respond_to?(:path) && candidate.path == 'RigatoniStream' }
@@ -24,13 +28,13 @@ target.build_configurations.each do |config|
   info['NSAppTransportSecurity'] = { 'NSAllowsArbitraryLoads' => true }
   info['CFBundleDisplayName'] = 'Ant Streams'
   info['CFBundleName'] = 'Ant Streams'
-  info['CFBundleShortVersionString'] = '1.0.1'
-  info['CFBundleVersion'] = '12'
+  info['CFBundleShortVersionString'] = marketing_version
+  info['CFBundleVersion'] = version
   config.build_settings['INFOPLIST_KEY_CFBundleDisplayName'] = 'Ant Streams'
-  config.build_settings['MARKETING_VERSION'] = '1.0.1'
-  config.build_settings['CURRENT_PROJECT_VERSION'] = '12'
+  config.build_settings['MARKETING_VERSION'] = marketing_version
+  config.build_settings['CURRENT_PROJECT_VERSION'] = version
   info['UIBackgroundModes'] = ((info['UIBackgroundModes'] || []) + ['audio']).uniq
   Xcodeproj::Plist.write_to_path(info, path)
 end
 project.save
-puts 'Added native PiP sources and audio background mode; enabled standalone/direct HTTP provider support; kept signing and version numbers.'
+puts "Added native PiP sources and audio background mode; enabled standalone/direct HTTP provider support; preserved signing; set build #{version}."

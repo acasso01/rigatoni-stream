@@ -6,6 +6,13 @@ enum PlaybackRouting {
     static func usesApple(extension ext: String, preference: String) -> Bool {
         preference == "apple" || (preference == "auto" && ["m3u8", "mp4", "m4v", "mov"].contains(ext.lowercased()))
     }
+    static func usesApple(extension ext: String, preference: String, kind: LibraryKind) -> Bool {
+        // Some Xtream HLS endpoints behave differently in AVPlayer and can
+        // fail on redirects/auth even when VLC can play the same direct URL.
+        // Keep automatic Live TV playback on VLC; users can still force Apple.
+        if kind == .live && preference == "auto" { return false }
+        return usesApple(extension: ext, preference: preference)
+    }
 }
 
 @MainActor final class ApplePlayback: ObservableObject {
@@ -97,7 +104,14 @@ struct AppleVideoSurface: UIViewControllerRepresentable {
     let player: AVPlayer
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
-        controller.player = player; controller.showsPlaybackControls = true
+        controller.player = player
+        #if os(tvOS)
+        // Keep tvOS focus in the SwiftUI control overlay so provider fallback
+        // is reachable with the Siri Remote. iOS keeps the native controls.
+        controller.showsPlaybackControls = false
+        #else
+        controller.showsPlaybackControls = true
+        #endif
         #if os(iOS)
         controller.allowsPictureInPicturePlayback = true
         controller.canStartPictureInPictureAutomaticallyFromInline = true
@@ -120,28 +134,74 @@ struct DirectPlayerView: View {
     @State private var fallback = false
     @State private var selected: CatalogItem?
     @State private var fallbackSeconds = 0.0
+#if os(tvOS)
+    @FocusState private var playbackControlFocus: String?
+#endif
     private var current: CatalogItem { selected ?? item }
-    private var useApple: Bool { !fallback && PlaybackRouting.usesApple(extension: current.fileExtension, preference: preference) }
+    private var useApple: Bool { !fallback && PlaybackRouting.usesApple(extension: current.fileExtension, preference: preference, kind: current.kind) }
     var body: some View {
         Group {
             if useApple {
                 ZStack {
                     Color.black.ignoresSafeArea()
+#if os(tvOS)
+                    Button { toggleApplePlayback() } label: {
+                        AppleVideoSurface(player: apple.player).ignoresSafeArea()
+                    }
+                    .buttonStyle(.plain)
+                    // A real focusable surface gives Up on the Siri Remote a
+                    // deterministic path to the VLC action above the video.
+                    .focused($playbackControlFocus, equals: "surface")
+                    .accessibilityLabel("Video playback")
+                    .onMoveCommand { direction in
+                        if direction == .up { playbackControlFocus = "vlc" }
+                    }
+#else
                     AppleVideoSurface(player: apple.player).ignoresSafeArea()
+#endif
                     VStack {
                         HStack {
                             Button("Back") { apple.stop(); dismiss() }
                             Text(current.name).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                            Button { toggleApplePlayback() } label: {
+                                Label("Play/Pause", systemImage: "playpause.fill")
+                            }
+#if os(tvOS)
+                                .focused($playbackControlFocus, equals: "toggle")
+#endif
                             if current.kind == .live {
                                 Button("Previous") { change(-1) }.disabled(adjacent(-1) == nil)
                                 Button("Next") { change(1) }.disabled(adjacent(1) == nil)
                             }
-                            Button("Use VLC") { switchToVLC() }
-                        }.font(.callout).padding().background(.black.opacity(0.6))
+                            Button { switchToVLC() } label: { Label("Use VLC", systemImage: "play.rectangle.on.rectangle") }
+#if os(tvOS)
+                                .buttonStyle(.borderedProminent)
+                                .focused($playbackControlFocus, equals: "vlc")
+#endif
+                        }
+                        .font(.callout).padding().background(.black.opacity(0.78))
+#if os(tvOS)
+                        .focusSection()
+#endif
                         Spacer()
                         if !apple.notice.isEmpty { Text(apple.notice).padding().background(.black.opacity(0.8)) }
                     }.foregroundStyle(.white)
+#if os(tvOS)
+                    .defaultFocus($playbackControlFocus, "surface")
+                    .task {
+                        // Wait for the video surface to join the focus tree so
+                        // the first Up press has a reliable route to Use VLC.
+                        await Task.yield()
+                        playbackControlFocus = "surface"
+                    }
+#endif
                 }
+#if os(tvOS)
+                .onMoveCommand { direction in
+                    if direction == .up { playbackControlFocus = "vlc" }
+                }
+                .onPlayPauseCommand { toggleApplePlayback() }
+#endif
                 .task(id: current.scopedID) {
                     do {
                         let url = try model.provider(for: current).streamURL(item: current)
@@ -150,7 +210,7 @@ struct DirectPlayerView: View {
                         #if os(iOS)
                         MobileRecords.watched(current, episode: progressID != nil, model: model)
                         #else
-                        TVLastWatched.record(kind: progressID != nil ? "series" : current.kind == .live ? "live" : "movie", item: current, model: model)
+                        TVLastWatched.record(kind: progressID != nil ? "series" : current.kind == .live ? "live" : "movie", item: current, progressID: progressID, model: model)
                         #endif
                     } catch { apple.notice = "This stream URL could not be opened." }
                 }
@@ -165,6 +225,10 @@ struct DirectPlayerView: View {
                 #endif
             }
         }
+    }
+    private func toggleApplePlayback() {
+        if apple.player.timeControlStatus == .playing { apple.player.pause() }
+        else { apple.player.play() }
     }
     private func switchToVLC() { fallbackSeconds = max(startSeconds, apple.seconds); apple.stop(); fallback = true }
     private func adjacent(_ offset: Int) -> CatalogItem? {

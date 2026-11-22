@@ -1,19 +1,5 @@
 import SwiftUI
 
-/// tvOS delivers the previous field's submit to a SecureField that has just
-/// taken focus. That skips the password and can activate Sign In or Save.
-enum TVPasswordEntry {
-    @MainActor
-    static func focus<Field: Hashable>(_ field: FocusState<Field?>.Binding, _ password: Field, armed: Binding<Bool>) {
-        armed.wrappedValue = false
-        field.wrappedValue = password
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(500))
-            armed.wrappedValue = true
-        }
-    }
-}
-
 // Optional account sign-in. Direct providers do not need this. Credentials
 // saved without an account stay in the device Keychain, never in preferences,
 // logs, or disk caches. A signed-in provider still uses the encrypted vault.
@@ -113,9 +99,17 @@ struct TVProviderSetupView: View {
     @EnvironmentObject private var model: AppModel
     @Namespace private var setupFocus
     @FocusState private var focusedField: SetupField?
-    @State private var visiblePassword = false
+    // Use the same tvOS keyboard path as Username during first-run setup.
+    // The eye control can mask the password after entry.
+    @State private var visiblePassword = true
     @State private var showAccount = false
-    @State private var passwordReady = false
+    // Keep credentials local while the setup form is being edited. Writing the
+    // first non-empty password character to AppModel makes providerReady true,
+    // which would otherwise replace this screen and dismiss the tvOS keyboard.
+    @State private var draftServer = ""
+    @State private var draftUsername = ""
+    @State private var draftPassword = ""
+    @State private var draftName = ""
 
     var body: some View {
         Group {
@@ -133,44 +127,61 @@ struct TVProviderSetupView: View {
                             .font(.largeTitle.bold())
                         Text("Enter your IPTV provider. No Ant Streams account is required.")
                             .foregroundStyle(TVTheme.muted)
-                        TextField("Server URL", text: $model.provider.server)
+                        TextField("Server URL", text: $draftServer)
                             .focused($focusedField, equals: .server)
                             .prefersDefaultFocus(in: setupFocus)
                             .textInputAutocapitalization(.never)
                             .submitLabel(.next)
                             .onSubmit { focusedField = .username }
-                        TextField("Username", text: $model.provider.username)
+                        TextField("Username", text: $draftUsername)
                             .focused($focusedField, equals: .username)
                             .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
                             .submitLabel(.next)
-                            .onSubmit { TVPasswordEntry.focus($focusedField, .password, armed: $passwordReady) }
+                            .onSubmit { focusedField = .password }
                         HStack {
-                            Group {
-                                if visiblePassword { TextField("Provider password", text: $model.provider.password) }
-                                else { SecureField("Provider password", text: $model.provider.password) }
+                            if visiblePassword {
+                                TextField("Provider password", text: $draftPassword)
+                                    .focused($focusedField, equals: .password)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                    .submitLabel(.next)
+                                    .onSubmit { focusedField = .start }
+                            } else {
+                                SecureField("Provider password", text: $draftPassword)
+                                    .focused($focusedField, equals: .password)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                    .submitLabel(.next)
+                                    .onSubmit { focusedField = .start }
                             }
-                            .focused($focusedField, equals: .password)
-                            .textInputAutocapitalization(.never)
-                            .submitLabel(.done)
-                            .onSubmit { submitSetupPassword() }
                             Button {
                                 visiblePassword.toggle()
-                                TVPasswordEntry.focus($focusedField, .password, armed: $passwordReady)
+                                focusedField = .password
                             } label: {
                                 Image(systemName: visiblePassword ? "eye.slash" : "eye")
                             }
                             .focused($focusedField, equals: .reveal)
                             .accessibilityLabel("Show or hide provider password")
                         }
-                        TextField("Name (optional)", text: $model.providerName)
+                        TextField("Name (optional)", text: $draftName)
                             .focused($focusedField, equals: .name)
                             .submitLabel(.next)
                             .onSubmit { focusedField = .start }
-                        Button("Start watching") { Task { await model.saveSettings() } }
+                        Button("Start watching") {
+                            model.provider = Provider(
+                                server: draftServer,
+                                username: draftUsername,
+                                password: draftPassword,
+                                name: draftName
+                            )
+                            model.providerName = draftName
+                            Task { await model.saveSettings() }
+                        }
                             .focused($focusedField, equals: .start)
                             .buttonStyle(.card)
                             .tint(.white)
-                            .disabled(model.busy || model.provider.server.isEmpty || model.provider.username.isEmpty || model.provider.password.isEmpty)
+                            .disabled(model.busy || draftServer.isEmpty || draftUsername.isEmpty || draftPassword.isEmpty)
                         Button("Sign in to sync") { showAccount = true }
                             .focused($focusedField, equals: .sync)
                             .buttonStyle(.card)
@@ -190,22 +201,18 @@ struct TVProviderSetupView: View {
             }
         }
         .background { StreamBackdrop() }
-        .onAppear { focusedField = .server }
+        .onAppear {
+            draftServer = model.provider.server
+            draftUsername = model.provider.username
+            draftPassword = model.provider.password
+            draftName = model.providerName
+            focusedField = .server
+        }
         .onChange(of: showAccount) { _, showing in
             if !showing { focusedField = .server }
         }
     }
 
-    /// Done on the password signs in only after the field has actually taken
-    /// focus and every required value is present. Otherwise focus stays here.
-    private func submitSetupPassword() {
-        guard passwordReady else { return }
-        guard !model.provider.server.isEmpty, !model.provider.username.isEmpty, !model.provider.password.isEmpty else {
-            focusedField = .password
-            return
-        }
-        Task { await model.saveSettings() }
-    }
 }
 
 // Settings tab. Provider fields are saved on this device unless an account
@@ -226,7 +233,6 @@ struct TVSettingsView: View {
     @State private var providers = false
     @State private var customization = false
     @FocusState private var providerField: ProviderField?
-    @State private var passwordReady = false
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -261,20 +267,28 @@ struct TVSettingsView: View {
                         TextField("Username", text: $model.provider.username)
                             .focused($providerField, equals: .username)
                             .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
                             .submitLabel(.next)
-                            .onSubmit { TVPasswordEntry.focus($providerField, .password, armed: $passwordReady) }
+                            .onSubmit { providerField = .password }
                         HStack {
-                            Group {
-                                if visiblePassword { TextField("Provider password", text: $model.provider.password) }
-                                else { SecureField("Provider password", text: $model.provider.password) }
+                            if visiblePassword {
+                                TextField("Provider password", text: $model.provider.password)
+                                    .focused($providerField, equals: .password)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                    .submitLabel(.next)
+                                    .onSubmit { providerField = .name }
+                            } else {
+                                SecureField("Provider password", text: $model.provider.password)
+                                    .focused($providerField, equals: .password)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                    .submitLabel(.next)
+                                    .onSubmit { providerField = .name }
                             }
-                            .focused($providerField, equals: .password)
-                            .textInputAutocapitalization(.never)
-                            .submitLabel(.done)
-                            .onSubmit { submitSettingsPassword() }
                             Button {
                                 visiblePassword.toggle()
-                                TVPasswordEntry.focus($providerField, .password, armed: $passwordReady)
+                                providerField = .password
                             } label: {
                                 Image(systemName: visiblePassword ? "eye.slash" : "eye")
                             }
@@ -438,15 +452,6 @@ struct TVSettingsView: View {
         }
     }
 
-    private func submitSettingsPassword() {
-        guard passwordReady else { return }
-        guard !model.provider.server.isEmpty, !model.provider.username.isEmpty, !model.provider.password.isEmpty else {
-            providerField = .password
-            return
-        }
-        Task { await model.saveSettings() }
-    }
-
 }
 
 private struct TVAddProviderView: View {
@@ -460,7 +465,6 @@ private struct TVAddProviderView: View {
     @State private var username = ""
     @State private var password = ""
     @State private var visiblePassword = false
-    @State private var passwordReady = false
 
     var body: some View {
         ScrollView {
@@ -475,20 +479,28 @@ private struct TVAddProviderView: View {
                 TextField("Username", text: $username)
                     .focused($focusedField, equals: .username)
                     .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
                     .submitLabel(.next)
-                    .onSubmit { TVPasswordEntry.focus($focusedField, .password, armed: $passwordReady) }
+                    .onSubmit { focusedField = .password }
                 HStack {
-                    Group {
-                        if visiblePassword { TextField("Provider password", text: $password) }
-                        else { SecureField("Provider password", text: $password) }
+                    if visiblePassword {
+                        TextField("Provider password", text: $password)
+                            .focused($focusedField, equals: .password)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .submitLabel(.next)
+                            .onSubmit { focusedField = .name }
+                    } else {
+                        SecureField("Provider password", text: $password)
+                            .focused($focusedField, equals: .password)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .submitLabel(.next)
+                            .onSubmit { focusedField = .name }
                     }
-                    .focused($focusedField, equals: .password)
-                    .textInputAutocapitalization(.never)
-                    .submitLabel(.done)
-                    .onSubmit { submitAddedPassword() }
                     Button {
                         visiblePassword.toggle()
-                        TVPasswordEntry.focus($focusedField, .password, armed: $passwordReady)
+                        focusedField = .password
                     } label: {
                         Image(systemName: visiblePassword ? "eye.slash" : "eye")
                     }
@@ -520,17 +532,6 @@ private struct TVAddProviderView: View {
         .onAppear { focusedField = .server }
     }
 
-    private func submitAddedPassword() {
-        guard passwordReady else { return }
-        guard !server.isEmpty, !username.isEmpty, !password.isEmpty else {
-            focusedField = .password
-            return
-        }
-        Task {
-            let saved = await model.addLocalProvider(name: name, provider: Provider(server: server, username: username, password: password), gateway: "")
-            if saved { password = ""; dismiss() }
-        }
-    }
 }
 
 extension TVSettingsView {

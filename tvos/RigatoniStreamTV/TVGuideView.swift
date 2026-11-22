@@ -249,7 +249,7 @@ struct TVGuideView: View {
                 guard guideVisible, playing == nil, previewItem?.scopedID == item.scopedID else { return }
                 previewPlayer.play(url: url)
                 // Best-effort "now playing" label; must not block video.
-                let progs = await EPGCache.shared.programs(streamID: item.id, provider: model.provider(for: item), scope: model.epgScope(for: item))
+                let progs = await EPGCache.shared.programs(streamID: item.id, provider: model.provider(for: item), scope: model.epgScope(for: item), categoryID: item.categoryID)
                 if !Task.isCancelled {
                     previewNowTitle = EPGParser.nowNext(progs).now?.title ?? ""
                 }
@@ -302,7 +302,7 @@ struct TVGuideView: View {
         let ids = ["all"] + visibleCategories.map(\.id)
         return VStack(alignment: .leading, spacing: 12) {
             Text("Categories")
-                .font(.system(size: 22, weight: .semibold))
+                .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(TVTheme.muted)
                 .padding(.horizontal, 4)
             ScrollView(.vertical, showsIndicators: false) {
@@ -335,12 +335,13 @@ struct TVGuideView: View {
         Button { selectedCategory = id } label: {
             HStack {
                 Text((id != "all" && pinnedCatIDs.contains(id) ? "★ " : "") + name)
-                    .font(.system(size: 26, weight: .semibold))
-                    .lineLimit(1)
+                    .font(.system(size: 18, weight: .medium))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
                 Spacer()
             }
             .padding(.horizontal, 24)
-            .padding(.vertical, 16)
+            .padding(.vertical, 12)
         }
         .buttonStyle(TVCompactButtonStyle())
         .focused($catFocus, equals: "cat-\(id)")
@@ -443,7 +444,8 @@ private struct TVGuideRow: View {
             while !Task.isCancelled {
                 let loaded = await EPGCache.shared.programs(streamID: channel.id,
                                                             provider: model.provider(for: channel),
-                                                            scope: model.epgScope(for: channel))
+                                                            scope: model.epgScope(for: channel),
+                                                            categoryID: channel.categoryID)
                 guard !Task.isCancelled else { return }
                 programs = Array(loaded.filter { $0.end > Date() }.prefix(6)); loading = false
                 do { try await Task.sleep(for: .seconds(60)) } catch { return }

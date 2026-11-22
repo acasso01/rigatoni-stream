@@ -10,6 +10,10 @@ struct TVMoviesView: View {
     @State private var loading = false
     @State private var error = ""
     @State private var retry = 0
+    @State private var searchQuery = ""
+    @State private var searchResults: [CatalogItem] = []
+    @State private var searchError = ""
+    @State private var searchLoading = false
     // Movie detail is pushed on the NavigationStack (not a fullScreenCover)
     // so the player's own fullScreenCover presents from a stack view — a
     // single modal level, which tvOS handles reliably. Nested covers
@@ -17,11 +21,44 @@ struct TVMoviesView: View {
     @State private var detailItem: CatalogItem?
     @State private var showingDetail = false
 
+    private var searchTerm: String { searchQuery.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var searchingCatalog: Bool { searchTerm.count >= 2 }
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 24) {
                     StreamHeading(title: "Movies", subtitle: "Make tonight a movie night.")
+                    TextField("Search all movies", text: $searchQuery)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .submitLabel(.search)
+                        .accessibilityLabel("Search all movies")
+                    if !searchTerm.isEmpty && !searchingCatalog {
+                        Text("Enter at least two characters to search all enabled movie categories.")
+                            .foregroundStyle(TVTheme.muted)
+                    }
+                    if searchingCatalog {
+                        if searchLoading {
+                            ProgressView(catalog.progress[.movies] ?? "Searching all enabled movie categories…")
+                        }
+                        if !searchError.isEmpty { Text(searchError).foregroundStyle(TVTheme.muted) }
+                        if searchResults.isEmpty && !searchLoading {
+                            Text(searchError.isEmpty ? "No matching movies." : "No results are available yet.")
+                                .foregroundStyle(TVTheme.muted)
+                        } else if !searchResults.isEmpty {
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: 22)], spacing: 30) {
+                                ForEach(Array(searchResults.prefix(count)), id: \.scopedID) { item in
+                                    Button { openDetail(item) } label: { TVCatalogCard(item: item) }
+                                        .buttonStyle(TVCardButtonStyle())
+                                }
+                            }
+                            if searchResults.count > count {
+                                Button("Show more") { count += 60 }.buttonStyle(.bordered)
+                            }
+                            Text("\(searchResults.count) matching movies").font(.caption).foregroundStyle(TVTheme.muted)
+                        }
+                    } else {
                     if !categories.isEmpty { categoryStrip(landing: featured == nil) }
                     if let featured {
                         TVEntryControl(section: .movies) {
@@ -49,6 +86,7 @@ struct TVMoviesView: View {
                     if count < categories.count {
                         Button("More categories") { count += 4 }.buttonStyle(.bordered)
                     }
+                    }
                 }.padding(.horizontal, 30).padding(.vertical, 20)
             }
             .background { StreamBackdrop() }
@@ -65,6 +103,29 @@ struct TVMoviesView: View {
                     }
                     if loaded.isEmpty { error = "No movie categories are available." }
                 } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+            }
+            .task(id: "movie-search-\(model.libraryRevision)-\(searchTerm)") {
+                guard searchingCatalog else { searchResults = []; searchError = ""; searchLoading = false; return }
+                let term = searchTerm
+                do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
+                guard !Task.isCancelled else { return }
+                searchLoading = true
+                searchError = ""
+                count = 60
+                defer { if !Task.isCancelled { searchLoading = false } }
+                do {
+                    let result = try await catalog.loadAll(kind: .movies, model: model)
+                    guard !Task.isCancelled, term == searchTerm else { return }
+                    let categories = catalog.knownCategories(kind: .movies)
+                    let enabled = result.items.filter { model.preferences.accepts($0, categories: categories) }
+                    let worker = Task.detached(priority: .userInitiated) { CatalogIndex.matches(enabled, query: term) }
+                    let matches = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
+                    guard !Task.isCancelled, term == searchTerm else { return }
+                    searchResults = matches
+                    searchError = result.notice
+                } catch {
+                    if !Task.isCancelled { searchError = error.localizedDescription }
+                }
             }
             .navigationDestination(isPresented: $showingDetail) {
                 if let item = detailItem { MovieDetailView(item: item) }
@@ -84,7 +145,12 @@ struct TVMoviesView: View {
                 if landing { TVEntryControl(section: .movies) { allTitles } } else { allTitles }
                 ForEach(categories) { category in
                     NavigationLink { TVCatalogBrowser(kind: .movies, allowPins: false, initialCategoryID: category.id) } label: {
-                        Text(category.name).font(.headline).padding(.horizontal, 22).padding(.vertical, 12)
+                        Text(category.name)
+                            .font(.system(size: 18, weight: .medium))
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(minWidth: 150, maxWidth: 280, minHeight: 58)
+                            .padding(.horizontal, 12).padding(.vertical, 8)
                     }.buttonStyle(.bordered)
                 }
             }.padding(.vertical, 12)

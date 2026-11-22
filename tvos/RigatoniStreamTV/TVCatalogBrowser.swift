@@ -14,6 +14,8 @@ struct TVCatalogBrowser: View {
     @EnvironmentObject private var model: AppModel
     @State private var store: TVLibraryStore?
     @State private var selectedCategory = ""
+    @State private var searchQuery = ""
+    @State private var matchingItems: [CatalogItem] = []
     @State private var pinnedIDs: [String] = []
     @State private var playing: CatalogItem?
     @State private var visibleCount = 60
@@ -32,7 +34,7 @@ struct TVCatalogBrowser: View {
     }
 
     private var selectedName: String {
-        selectedCategory == "all" ? "All movies" : orderedCategories.first { $0.id == selectedCategory }?.name ?? ""
+        selectedCategory == "all" ? (kind == .live ? "All channels" : "All movies") : orderedCategories.first { $0.id == selectedCategory }?.name ?? ""
     }
 
     private var isPinned: Bool { pinnedIDs.contains(selectedCategory) }
@@ -52,12 +54,17 @@ struct TVCatalogBrowser: View {
     private func content(_ store: TVLibraryStore) -> some View {
         HStack(alignment: .top, spacing: 24) {
             categorySidebar(store)
-                .frame(width: kind == .live ? 420 : 285)
+                .frame(width: kind == .live ? 400 : 330)
                 .frame(maxHeight: .infinity)
                 .focusSection()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 26) {
                     Text(selectedName.isEmpty ? kind.title : selectedName).font(.title2.bold())
+                    TextField("Search \(selectedName.isEmpty ? kind.title.lowercased() : selectedName)", text: $searchQuery)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .submitLabel(.search)
+                        .accessibilityLabel("Search \(selectedName.isEmpty ? kind.title.lowercased() : selectedName)")
                     if !model.providerReady {
                         Text("Save your provider in Settings to browse.").foregroundStyle(.secondary)
                             .tvLanding(for: .live, when: kind == .live && orderedCategories.isEmpty)
@@ -98,6 +105,18 @@ struct TVCatalogBrowser: View {
             await loadSelection(store)
             focusedCard = store.items.first?.id
         }
+        .task(id: "\(selectedCategory)-\(store.contentRevision)-\(searchQuery)") {
+            let source = store.items.filter { model.preferences.accepts($0, categories: store.categories) }
+            let term = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !term.isEmpty else { matchingItems = source; return }
+            do { try await Task.sleep(for: .milliseconds(180)) } catch { return }
+            guard !Task.isCancelled else { return }
+            let worker = Task.detached(priority: .userInitiated) { CatalogIndex.matches(source, query: term) }
+            let result = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
+            guard !Task.isCancelled else { return }
+            matchingItems = result
+        }
+        .onChange(of: searchQuery) { _, _ in visibleCount = 60 }
         .onChange(of: store.items.map(\.id)) { _, ids in
             if focusedCard == nil { focusedCard = ids.first }
         }
@@ -125,16 +144,14 @@ struct TVCatalogBrowser: View {
             Text("CATEGORIES").font(.caption.weight(.semibold)).tracking(2).foregroundStyle(.secondary).padding(.horizontal, 16)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: kind == .live ? 8 : 12) {
-                    if kind == .movies {
-                        categoryButton(store, id: "all", title: "All titles", index: -1)
+                    if kind == .movies || kind == .live {
+                        let allRow = categoryButton(store, id: "all", title: kind == .live ? "All channels" : "All titles", index: -1)
+                        if kind == .live { TVEntryControl(section: .live) { allRow } }
+                        else { allRow }
                     }
                     ForEach(Array(orderedCategories.enumerated()), id: \.element.id) { index, category in
                         let row = categoryButton(store, id: category.id, title: category.name, index: index, pinned: pinnedIDs.contains(category.id))
-                        if kind == .live && index == 0 {
-                            TVEntryControl(section: .live) { row }
-                        } else {
-                            row
-                        }
+                        row
                     }
                 }.padding(.horizontal, 14).padding(.vertical, 10)
             }.frame(maxHeight: .infinity)
@@ -152,7 +169,7 @@ struct TVCatalogBrowser: View {
 
     private func categoryButton(_ store: TVLibraryStore, id: String, title: String, index: Int, pinned: Bool = false) -> some View {
         let ids = orderedCategories.map(\.id)
-        let above = index <= 0 ? (kind == .movies ? "all" : id) : ids[index - 1]
+        let above = index <= 0 ? ((kind == .movies || kind == .live) ? "all" : id) : ids[index - 1]
         let below = index + 1 < ids.count ? ids[index + 1] : id
         return Button { selectedCategory = id } label: {
             HStack(spacing: 12) {
@@ -160,10 +177,12 @@ struct TVCatalogBrowser: View {
                     Image(systemName: pinned ? "pin.fill" : kind.symbol)
                         .foregroundStyle(.secondary)
                 }
-                Text(title).font(.system(size: kind == .live ? 22 : 20, weight: .medium)).lineLimit(1)
+                Text(title).font(.system(size: 18, weight: .medium)).lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
                 if selectedCategory == id { Image(systemName: "checkmark") }
-            }.padding(.horizontal, 20).frame(maxWidth: .infinity, minHeight: kind == .live ? 68 : 60, alignment: .leading)
+            }.padding(.horizontal, 18).padding(.vertical, 10)
+                .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
         }
         .buttonStyle(TVCatalogRowStyle(selected: selectedCategory == id))
         .focused($categoryFocus, equals: id)
@@ -189,10 +208,10 @@ struct TVCatalogBrowser: View {
 
     @ViewBuilder
     private func itemGrid(_ store: TVLibraryStore) -> some View {
-        let shown = store.items.filter { model.preferences.accepts($0, categories: store.categories) }
+        let shown = matchingItems
         let visible = Array(shown.prefix(visibleCount))
         if visible.isEmpty {
-            Text("No titles available.").foregroundStyle(TVTheme.muted)
+            Text(searchQuery.isEmpty ? "No titles available." : "No matching titles.").foregroundStyle(TVTheme.muted)
         } else {
             if kind == .live {
                 LazyVStack(spacing: 10) {

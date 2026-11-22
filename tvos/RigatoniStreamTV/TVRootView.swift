@@ -1,7 +1,8 @@
 import SwiftUI
+import UIKit
 
-// Root of the tvOS app: provider setup when nothing is saved, then an X1-style left nav rail with
-// the content area to its right. The rail replaces the old top tab bar.
+// Root of the tvOS app: provider setup when nothing is saved, then centered
+// top navigation with a full-width content area beneath it.
 // The content tree is rebuilt when the theme changes (`.id(theme)`), which
 // keeps the static TVTheme color accessors in sync without touching every
 // view.
@@ -67,8 +68,8 @@ struct TVRootView: View {
                 if model.starting {
                     ProgressView("Opening Ant Streams…")
                 } else if !model.needsProviderSetup {
-                    HStack(spacing: 0) {
-                        navRail
+                    VStack(spacing: 12) {
+                        topNavigation
                             .focusScope(railFocus)
                             .focusSection()
                         content
@@ -90,16 +91,13 @@ struct TVRootView: View {
                         guard let item else { return }
                         if entryGrace { return }
                         if contentOwnsFocus {
-                            // Left re-entered the rail. Keep the open tab
-                            // selected instead of accepting the geometrically
-                            // nearest button, which can be an unrelated tab.
+                            // Focus returned from content to the top row.
+                            // Let the user browse tabs before opening one.
                             contentOwnsFocus = false
                             focusRouter.cancel()
-                            if item != selection { focusedItem = selection }
                         }
-                        // Up/Down only move the rail highlight. The content
-                        // pane changes when the user selects the item or moves
-                        // right into it.
+                        // Browsing the top row does not change the page until
+                        // the focused tab is selected.
                     }
                     // Rebuild the whole tree on theme change so every
                     // TVTheme.xxx static resolves to the new theme.
@@ -111,36 +109,34 @@ struct TVRootView: View {
             .foregroundStyle(TVTheme.text)
         }
         .environmentObject(focusRouter)
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+            TVPlaybackDiagnostics.memoryWarning()
+        }
     }
 
-    // MARK: - Nav rail
+    // MARK: - Top navigation
 
-    private var navRail: some View {
-        VStack(alignment: .leading, spacing: 0) {
+    private var topNavigation: some View {
+        HStack(spacing: 10) {
             Text("ANT STREAMS")
                 .font(.system(size: 23, weight: .bold))
                 .foregroundStyle(TVTheme.muted)
-                .padding(.horizontal, 24)
-                .padding(.top, 24)
-                .padding(.bottom, 24)
+                .frame(width: 220, alignment: .leading)
 
             ForEach(TVSection.allCases) { section in
                 let selected = selection == section
                 let focused = focusedItem == section
                 Button { enterContent(section) } label: {
-                    HStack(spacing: 14) {
+                    HStack(spacing: 9) {
                         Image(systemName: section.symbol)
-                            .font(.system(size: 30))
-                            .frame(width: 38)
+                            .font(.system(size: 22, weight: .semibold))
                         Text(section.title)
-                            .font(.system(size: 28, weight: selected ? .bold : .medium))
+                            .font(.system(size: 21, weight: selected ? .bold : .medium))
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
-                        Spacer()
                     }
-                    .padding(.horizontal, 18)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .frame(height: 62, alignment: .leading)
+                    .padding(.horizontal, 15)
+                    .frame(height: 62)
                     .background {
                         if selected { TVTheme.accentFill }
                         else { focused ? TVTheme.focusCard : Color.clear }
@@ -150,27 +146,17 @@ struct TVRootView: View {
                 }
                 .buttonStyle(TVCompactButtonStyle())
                 .focused($focusedItem, equals: section)
-                .accessibilityIdentifier("rail-\(section.rawValue)")
+                .accessibilityIdentifier("top-navigation-\(section.rawValue)")
                 .prefersDefaultFocus(selected, in: railFocus)
-                .onMoveCommand { direction in
-                    // Let tvOS perform vertical focus movement once. Reassigning
-                    // @FocusState here races the focus engine and can turn one
-                    // remote press into multiple rail steps.
-                    if direction == .right { enterContent(section) }
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 4)
             }
-
         }
-        .padding(.bottom, 20)
-        .frame(width: 340)
-        .frame(maxHeight: .infinity)
-        .background(TVTheme.panel)
+        .padding(.horizontal, 28)
+        .padding(.top, 18)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .background(TVTheme.background.opacity(0.96))
     }
 
-    /// Right (or a click) opens the highlighted tab and moves focus into it.
-    /// Up/Down can browse the rail without replacing the current content.
+    /// Selecting a top navigation tab opens it and moves focus into its page.
     private func enterContent(_ preferred: TVSection? = nil) {
         let section = preferred ?? focusedItem ?? selection
         if selection != section { selection = section }
