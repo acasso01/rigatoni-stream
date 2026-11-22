@@ -637,12 +637,13 @@ enum CatalogCoverage {
     }
 }
 
-// One bounded full-catalog request is the fast path. Category fallback remains cancellable
-// and publishes results as each category arrives, without creating more concurrent requests.
+// Prefer one full-catalog request. When a provider only returns one category at a time,
+// use a small bounded fan-out so a large playlist does not take one network round-trip
+// per category while keeping provider load and memory use controlled.
 @MainActor
 enum CatalogLoader {
     static func load(categoryIDs: [String], preferFullCatalog: Bool,
-                     fetch: (String?) async throws -> [CatalogItem],
+                     fetch: @escaping (String?) async throws -> [CatalogItem],
                      progress: ([CatalogItem], String) -> Void) async throws -> CatalogLoadResult {
         try Task.checkCancellation()
         if preferFullCatalog {
@@ -666,19 +667,55 @@ enum CatalogLoader {
         }
         var index = CatalogIndex()
         var failed = 0
-        for (offset, category) in categoryIDs.enumerated() {
-            try Task.checkCancellation()
-            do {
-                let batch = try await fetch(category)
-                try Task.checkCancellation()
-                do { try index.append(batch) }
-                catch { return CatalogLoadResult(items: index.items, notice: error.localizedDescription) }
-            } catch {
-                try Task.checkCancellation()
-                failed += 1
+        let concurrency = min(4, categoryIDs.count)
+        var next = 0
+        var completed = 0
+        var limitNotice: String?
+        await withTaskGroup(of: (Int, Result<[CatalogItem], Error>).self) { group in
+            func enqueue(_ offset: Int) {
+                let category = categoryIDs[offset]
+                group.addTask {
+                    do {
+                        try Task.checkCancellation()
+                        return (offset, .success(try await fetch(category)))
+                    } catch {
+                        return (offset, .failure(error))
+                    }
+                }
             }
-            progress(index.items, "Loading category \(offset + 1) of \(categoryIDs.count)…")
+
+            while next < concurrency {
+                enqueue(next)
+                next += 1
+            }
+            while let (_, outcome) = await group.next() {
+                if Task.isCancelled { group.cancelAll(); break }
+                switch outcome {
+                case .success(let batch):
+                    do { try index.append(batch) }
+                    catch {
+                        limitNotice = error.localizedDescription
+                        group.cancelAll()
+                        break
+                    }
+                case .failure(let error):
+                    if error is CancellationError {
+                        if Task.isCancelled { group.cancelAll(); break }
+                    } else {
+                        failed += 1
+                    }
+                }
+                if limitNotice != nil || Task.isCancelled { break }
+                completed += 1
+                progress(index.items, "Loading category \(completed) of \(categoryIDs.count)…")
+                if next < categoryIDs.count {
+                    enqueue(next)
+                    next += 1
+                }
+            }
         }
+        try Task.checkCancellation()
+        if let limitNotice { return CatalogLoadResult(items: index.items, notice: limitNotice) }
         return CatalogLoadResult(items: index.items, notice: failed == 0 ? "" : "\(failed) categories could not be loaded. Showing available results; Retry will refresh the catalog.")
     }
 }

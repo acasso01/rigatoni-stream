@@ -109,6 +109,7 @@ struct TVMoviesView: View {
                 let term = searchTerm
                 do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
                 guard !Task.isCancelled else { return }
+                searchResults = []
                 searchLoading = true
                 searchError = ""
                 count = 60
@@ -126,6 +127,23 @@ struct TVMoviesView: View {
                 } catch {
                     if !Task.isCancelled { searchError = error.localizedDescription }
                 }
+            }
+            .task(id: "movie-search-progress-\(model.libraryRevision)-\(catalog.revision)-\(searchTerm)") {
+                guard searchingCatalog else { return }
+                let term = searchTerm
+                let partial = (catalog.searchable[.movies] ?? []).filter {
+                    model.preferences.accepts($0, categories: catalog.knownCategories(kind: .movies))
+                }
+                guard !partial.isEmpty else { return }
+                let worker = Task.detached(priority: .userInitiated) {
+                    CatalogIndex.matches(partial, query: term)
+                }
+                let matches = await withTaskCancellationHandler(
+                    operation: { await worker.value },
+                    onCancel: { worker.cancel() }
+                )
+                guard !Task.isCancelled, term == searchTerm else { return }
+                searchResults = matches
             }
             .navigationDestination(isPresented: $showingDetail) {
                 if let item = detailItem { MovieDetailView(item: item) }
