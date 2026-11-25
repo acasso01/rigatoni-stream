@@ -931,7 +931,11 @@ struct LiveChannelRow: View {
             }
             Image(systemName: "play.circle.fill").font(.title2).foregroundStyle(.secondary)
         }.padding(12).foregroundStyle(.primary)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: StreamTheme.corner))
+            // Make the entire visual row, including its padded background,
+            // part of the enclosing Button's hit target on iPhone.
+            .contentShape(RoundedRectangle(cornerRadius: StreamTheme.corner))
             .contextMenu { MobileSaveButton(record: MobileRecords.record(item)) }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("\(item.name), live" + (guide?.now.map { ", now playing \($0.title)" } ?? ""))
