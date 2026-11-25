@@ -973,6 +973,7 @@ struct LibraryView: View {
     @State private var error = ""
     @State private var page = 0
     @State private var playing: CatalogItem?
+    @State private var browsingChannels = false
     @State private var retry = 0
     @State private var multiViewShown = false
     @State private var epgReload = 0
@@ -1010,7 +1011,20 @@ struct LibraryView: View {
                         if kind == .movies && scope == .category {
                             GuideCategoryPicker(categories: orderedCategories, selected: $selected)
                         }
-                        if kind == .live && !categories.isEmpty {
+                        if kind == .live && !categories.isEmpty && browsingChannels {
+                            HStack(spacing: 12) {
+                                Button {
+                                    browsingChannels = false
+                                    query = ""
+                                } label: {
+                                    Label("Categories", systemImage: "chevron.left")
+                                }
+                                .buttonStyle(.plain)
+                                Text(scope == .all ? "All Channels" : (orderedCategories.first { $0.id == selected }?.name ?? "Channels"))
+                                    .font(.headline).lineLimit(1)
+                            }
+                        }
+                        if kind == .live && !categories.isEmpty && !browsingChannels {
                             HStack {
                                 Text("Categories").font(.headline)
                                 Spacer()
@@ -1029,11 +1043,11 @@ struct LibraryView: View {
                                 .accessibilityLabel("Reload program guide")
                             }
                             LazyVStack(spacing: 8) {
-                                Button { scope = .all } label: {
+                                Button { scope = .all; browsingChannels = true } label: {
                                     liveCategoryRow(name: "All Channels", selected: scope == .all, pinned: false)
                                 }.buttonStyle(.plain)
                                 ForEach(orderedCategories) { category in
-                                    Button { scope = .category; selected = category.id } label: {
+                                    Button { scope = .category; selected = category.id; browsingChannels = true } label: {
                                         liveCategoryRow(name: category.name, selected: scope == .category && selected == category.id, pinned: pinnedIDs.contains(category.id))
                                     }.buttonStyle(.plain)
                                     .contextMenu {
@@ -1049,8 +1063,8 @@ struct LibraryView: View {
                         if !error.isEmpty {
                             Text(error).foregroundStyle(.secondary)
                             Button("Retry") { model.refreshProvider(); retry += 1 }.buttonStyle(.bordered)
-                        } else if !loading && filtered.isEmpty { Text(query.isEmpty ? "No titles available." : "No matching titles.").foregroundStyle(.secondary) }
-                        if kind == .live {
+                        } else if !loading && filtered.isEmpty && (kind != .live || browsingChannels) { Text(query.isEmpty ? "No titles available." : "No matching titles.").foregroundStyle(.secondary) }
+                        if kind == .live && browsingChannels {
                             LazyVStack(spacing: 10) {
                                 ForEach(visible, id: \.scopedID) { item in
                                     Button { playing = item } label: {
@@ -1058,21 +1072,23 @@ struct LibraryView: View {
                                     }.buttonStyle(.plain)
                                 }
                             }
-                        } else {
+                        } else if kind != .live {
                             LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 16)], spacing: 22) {
                                 ForEach(visible, id: \.scopedID) { item in
                                     Button { playing = item } label: { MovieCard(item: item) }.buttonStyle(.plain)
                                 }
                             }
                         }
-                        if filtered.count > 120 {
+                        if (kind != .live || browsingChannels) && filtered.count > 120 {
                             HStack {
                                 Button("Previous") { page -= 1 }.disabled(page == 0)
                                 Spacer(); Text("Page \(page + 1)").foregroundStyle(.secondary); Spacer()
                                 Button("Next") { page += 1 }.disabled((page + 1) * 120 >= filtered.count)
                             }
                         }
-                        Text("\(filtered.count) titles · \(scope.rawValue)").font(.caption).foregroundStyle(.secondary)
+                        if kind != .live || browsingChannels {
+                            Text("\(filtered.count) titles · \(scope.rawValue)").font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                 }.padding()
             }
@@ -1139,7 +1155,8 @@ struct LibraryView: View {
             try Task.checkCancellation()
             categories = loaded
             selected = orderedCategories.first { $0.id == initialCategoryID }?.id ?? orderedCategories.first?.id ?? ""
-            if initialCategoryID == "all" { scope = .all }
+            if initialCategoryID == "all" { scope = .all; browsingChannels = true }
+            else if initialCategoryID != nil { browsingChannels = !selected.isEmpty }
             if selected.isEmpty { loading = false }
         } catch { if !Task.isCancelled { self.error = error.localizedDescription; loading = false } }
     }
