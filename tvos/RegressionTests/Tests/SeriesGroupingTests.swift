@@ -24,7 +24,10 @@ final class SeriesGroupingTests: XCTestCase {
         let us = SeriesItem(id: "1", name: "US| From (2022) HD", poster: nil, categoryID: "us", year: "2022")
         let en = SeriesItem(id: "2", name: "EN| From (2022) FHD", poster: nil, categoryID: "en", year: "2022")
         let ar = SeriesItem(id: "3", name: "AR| From (2022)", poster: nil, categoryID: "ar", year: "2022")
-        let groups = SeriesSearchGrouping.matches([ar, en, us, us], query: " from ", categories: categories, preferences: LibraryPreferences())
+        var preferences = LibraryPreferences()
+        preferences.unitedStatesOnly = false
+        preferences.hideNonEnglishCategories = false
+        let groups = SeriesSearchGrouping.matches([ar, en, us, us], query: " from ", categories: categories, preferences: preferences)
         XCTAssertEqual(groups.count, 1)
         XCTAssertEqual(groups.first?.title, "From")
         XCTAssertEqual(groups.first?.year, "2022")

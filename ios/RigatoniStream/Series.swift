@@ -97,6 +97,7 @@ enum SeriesEpisodeGrouping {
 
 @MainActor
 final class SeriesStore: ObservableObject {
+    private static let maximumConcurrentCategoryRequests = 6
     private let model: AppModel
 
     @Published var categories: [CatalogCategory] = []
@@ -162,6 +163,13 @@ final class SeriesStore: ObservableObject {
     func loadCategories() async {
         categories = []; series = []; error = ""
         guard unavailableReason == nil else { return }
+        if model.libraryMode == .separate, model.provider.kind == .xtream,
+           let cached = await PersistentCatalogIndex.shared.loadCategories(scope: model.catalogCacheScope, kind: CatalogSection.series.rawValue) {
+            guard !Task.isCancelled else { return }
+            categories = cached
+            if model.preferences.observeCategories(cached, section: .series) { model.savePreferences() }
+            return
+        }
         loading = true
         defer { loading = false }
         do {
@@ -197,6 +205,9 @@ final class SeriesStore: ObservableObject {
                 }
             }
             if model.preferences.observeCategories(categories, section: .series) { model.savePreferences() }
+            if model.libraryMode == .separate, model.provider.kind == .xtream {
+                await PersistentCatalogIndex.shared.storeCategories(categories, scope: model.catalogCacheScope, kind: CatalogSection.series.rawValue)
+            }
         } catch {
             guard !Task.isCancelled else { return }
             self.error = error.localizedDescription
@@ -300,7 +311,7 @@ final class SeriesStore: ObservableObject {
                     } catch { return (request.0, request.1, nil) }
                 }
             }
-            for request in requests.prefix(2) { enqueue(request); next += 1 }
+            for request in requests.prefix(Self.maximumConcurrentCategoryRequests) { enqueue(request); next += 1 }
             while let (index, categoryID, items) = await group.next() {
                 guard !Task.isCancelled else { group.cancelAll(); return }
                 completed += 1
@@ -435,7 +446,7 @@ final class SeriesStore: ObservableObject {
                     } catch { return (request.0, request.1, nil) }
                 }
             }
-            for request in requests.prefix(2) { enqueue(request); next += 1 }
+            for request in requests.prefix(Self.maximumConcurrentCategoryRequests) { enqueue(request); next += 1 }
             while let (index, categoryID, items) = await group.next() {
                 guard !Task.isCancelled else { group.cancelAll(); return }
                 completed += 1
@@ -488,7 +499,9 @@ final class SeriesStore: ObservableObject {
             update?(visible, "")
             return visible
         }
-        let all = await loadAllSeries(update: update)
+        let all = await loadAllSeries { items, progress in
+            update?(SeriesSearchScope.matching(items, query: term, categories: self.categories, preferences: self.model.preferences), progress)
+        }
         guard !Task.isCancelled else { return [] }
         return SeriesSearchScope.matching(all, query: term, categories: categories, preferences: model.preferences)
     }
@@ -706,7 +719,7 @@ enum SeriesSearchGrouping {
     private static let languagePrefix = try! NSRegularExpression(pattern: #"^(?:EN|ENG|ENGLISH)\s+"#, options: [.caseInsensitive])
 
     private static func identity(_ item: SeriesItem) -> (title: String, key: String, year: String, normalized: String) {
-        var title = NameCleaner.clean(item.name)
+        var title = MovieTitle.clean(item.name)
         var year = item.year.count >= 4 ? String(item.year.prefix(4)) : ""
         if Int(year).map({ (1900...2099).contains($0) }) != true { year = "" }
         if let match = yearPattern.firstMatch(in: title, range: NSRange(title.startIndex..., in: title)),
@@ -780,10 +793,26 @@ enum SeriesSearchGrouping {
             guard preferences.acceptsSeries(item, categories: categories), seen.insert(item.scopedID).inserted else { continue }
             matched.append((item, identity(item)))
         }
+
+        // Providers sometimes omit a year from one language/category copy.
+        // Join that entry to the only known release for the title, but keep it
+        // separate whenever the catalog contains multiple years/remakes.
+        var yearsByTitle: [String: Set<String>] = [:]
+        for entry in matched where !entry.identity.year.isEmpty {
+            yearsByTitle[entry.identity.normalized, default: []].insert(entry.identity.year)
+        }
         var grouped: [String: [SeriesItem]] = [:]
         for entry in matched {
             let identity = entry.identity
-            grouped[identity.key, default: []].append(entry.item)
+            let key: String
+            if entry.item.externalID == nil, identity.year.isEmpty,
+               let years = yearsByTitle[identity.normalized], years.count == 1,
+               let year = years.first {
+                key = "title:\(identity.normalized):\(year)"
+            } else {
+                key = identity.key
+            }
+            grouped[key, default: []].append(entry.item)
         }
         return grouped.compactMap { key, variants in
             let sorted = variants.sorted {

@@ -534,7 +534,7 @@ struct ProviderPoster: View {
             guard let url else { return }
             PosterMemory.configure()
             if let cached = PosterMemory.shared.object(forKey: url as NSURL) { image = cached; return }
-            guard let data = try? await BoundedTransfer(limit: 2 * 1024 * 1024).fetch(url), !Task.isCancelled else { return }
+            guard let data = try? await PosterImageLoader.shared.data(for: url), !Task.isCancelled else { return }
             let worker = Task.detached(priority: .utility) { () -> UIImage? in
                 guard let source = CGImageSourceCreateWithData(data as CFData, nil),
                       let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
@@ -549,6 +549,51 @@ struct ProviderPoster: View {
             PosterMemory.shared.setObject(decoded, forKey: url as NSURL, cost: (decoded.cgImage?.bytesPerRow ?? 0) * (decoded.cgImage?.height ?? 0))
             image = decoded
         }
+    }
+}
+
+/// Reuses connections and coalesces duplicate artwork requests while keeping
+/// both the HTTP response cache and decoded images in memory only.
+actor PosterImageLoader {
+    static let shared = PosterImageLoader()
+
+    private let dataCache = NSCache<NSURL, NSData>()
+    private var inFlight: [URL: Task<Data, Error>] = [:]
+    private lazy var session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = URLCache(memoryCapacity: 24 * 1024 * 1024, diskCapacity: 0, diskPath: nil)
+        configuration.requestCachePolicy = .returnCacheDataElseLoad
+        configuration.httpMaximumConnectionsPerHost = 8
+        configuration.timeoutIntervalForRequest = 12
+        configuration.timeoutIntervalForResource = 24
+        return URLSession(configuration: configuration)
+    }()
+
+    private init() {
+        dataCache.totalCostLimit = 24 * 1024 * 1024
+        dataCache.countLimit = 240
+    }
+
+    func data(for url: URL) async throws -> Data {
+        guard TransportPolicy.permits(url) else { throw AppFailure("Artwork URL is blocked by this app build's network settings.") }
+        if let cached = dataCache.object(forKey: url as NSURL) { return cached as Data }
+        if let task = inFlight[url] { return try await task.value }
+
+        let task = Task<Data, Error> {
+            var request = URLRequest(url: url, cachePolicy: .returnCacheDataElseLoad, timeoutInterval: 12)
+            request.setValue(ProviderHTTP.userAgent, forHTTPHeaderField: "User-Agent")
+            let (data, response) = try await session.data(for: request)
+            guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else {
+                throw AppFailure("Artwork server returned an error.")
+            }
+            guard data.count <= 2 * 1024 * 1024 else { throw AppFailure("Artwork image is too large.") }
+            return data
+        }
+        inFlight[url] = task
+        defer { inFlight[url] = nil }
+        let data = try await task.value
+        dataCache.setObject(data as NSData, forKey: url as NSURL, cost: data.count)
+        return data
     }
 }
 

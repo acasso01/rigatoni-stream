@@ -122,7 +122,7 @@ struct TVMoviesView: View {
                     let worker = Task.detached(priority: .userInitiated) { CatalogIndex.matches(enabled, query: term) }
                     let matches = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
                     guard !Task.isCancelled, term == searchTerm else { return }
-                    searchResults = matches
+                    searchResults = MovieTitle.unique(matches)
                     searchError = result.notice
                 } catch {
                     if !Task.isCancelled { searchError = error.localizedDescription }
@@ -143,7 +143,7 @@ struct TVMoviesView: View {
                     onCancel: { worker.cancel() }
                 )
                 guard !Task.isCancelled, term == searchTerm else { return }
-                searchResults = matches
+                searchResults = MovieTitle.unique(matches)
             }
             .navigationDestination(isPresented: $showingDetail) {
                 if let item = detailItem { MovieDetailView(item: item) }

@@ -76,6 +76,75 @@ enum PosterCaption {
     static func series(year: String) -> String { year.isEmpty ? "Series" : "\(year), Series" }
 }
 
+/// Removes only leading, standalone provider/quality tokens. The raw provider
+/// title remains on CatalogItem for playback and source matching.
+enum MovieTitle {
+    private static let prefix = try! NSRegularExpression(
+        pattern: #"^(?:NF|NETFLIX|D\+|DISNEY\+|4K|8K|UHD|FHD|HD|SD|EN|ENG|FR|DE|ES|IT|PT|AR|1080P|2160P|720P)(?:\s*[-|:]\s*|\s+)"#,
+        options: [.caseInsensitive]
+    )
+    private static let yearPattern = try! NSRegularExpression(pattern: #"\s*[\[(]((?:19|20)\d{2})[\])]\s*"#)
+
+    static func clean(_ raw: String) -> String {
+        var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        while !value.isEmpty {
+            let range = NSRange(value.startIndex..., in: value)
+            guard let match = prefix.firstMatch(in: value, range: range),
+                  let swiftRange = Range(match.range, in: value) else { break }
+            value.removeSubrange(swiftRange)
+        }
+        let cleaned = NameCleaner.clean(value)
+        return cleaned.isEmpty ? raw.trimmingCharacters(in: .whitespacesAndNewlines) : cleaned
+    }
+
+    private static func titleYear(_ item: CatalogItem) -> (title: String, year: String) {
+        let title = clean(item.name)
+        var year = item.year.count >= 4 ? String(item.year.prefix(4)) : ""
+        if let match = yearPattern.firstMatch(in: title, range: NSRange(title.startIndex..., in: title)),
+           let range = Range(match.range(at: 1), in: title) { year = String(title[range]) }
+        let yearless = yearPattern.stringByReplacingMatches(in: title, range: NSRange(title.startIndex..., in: title), withTemplate: " ")
+        let normalized = yearless.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }.map(String.init).joined().lowercased()
+        return (normalized, year)
+    }
+
+    static func identity(_ item: CatalogItem) -> String {
+        let value = titleYear(item)
+        return "\(value.title):\(value.year)"
+    }
+
+    static func matchesSource(_ candidate: CatalogItem, for item: CatalogItem) -> Bool {
+        let source = titleYear(candidate)
+        let selected = titleYear(item)
+        guard !source.title.isEmpty, source.title == selected.title else { return false }
+        return source.year.isEmpty || selected.year.isEmpty || source.year == selected.year
+    }
+
+    /// Keeps one representative per exact normalized title and year. An
+    /// undated entry joins a dated release only when that title has one
+    /// unambiguous year in the current result set.
+    static func unique(_ items: [CatalogItem]) -> [CatalogItem] {
+        let identities = items.map(titleYear)
+        var yearsByTitle: [String: Set<String>] = [:]
+        for value in identities where !value.year.isEmpty {
+            yearsByTitle[value.title, default: []].insert(value.year)
+        }
+        var seen = Set<String>()
+        var unique: [CatalogItem] = []
+        unique.reserveCapacity(items.count)
+        for (index, item) in items.enumerated() {
+            guard !Task.isCancelled else { break }
+            guard item.kind == .movies else { unique.append(item); continue }
+            let value = identities[index]
+            let knownYears = yearsByTitle[value.title] ?? []
+            let resolvedYear = value.year.isEmpty && knownYears.count == 1 ? knownYears.first! : value.year
+            let key = "\(value.title):\(resolvedYear.isEmpty ? "unknown" : resolvedYear)"
+            if seen.insert(key).inserted { unique.append(item) }
+        }
+        return unique
+    }
+}
+
 enum CategoryOrder {
     static func apply(_ categories: [CatalogCategory], saved: [String]) -> [CatalogCategory] {
         let byID = Dictionary(categories.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -98,7 +167,7 @@ enum CategoryRegion {
     static let englishWords: Set<String> = ["ENGLISH", "ENG"]
     static let foreignWords: Set<String> = [
         "CANADA", "MEXICO", "BRAZIL", "ARGENTINA", "COLOMBIA", "CHILE", "PERU",
-        "LATINO", "LATINA", "LATAM", "SPANISH", "FRENCH", "GERMAN", "ITALIAN",
+        "LATINO", "LATINA", "LATAM", "SPAIN", "ESPANA", "ESPANOL", "SPANISH", "FRENCH", "GERMAN", "ITALIAN",
         "PORTUGUESE", "ARABIC", "ARAB", "HINDI", "DESI", "PUNJABI", "TURKISH",
         "RUSSIAN", "POLISH", "KOREAN", "JAPANESE", "CHINESE", "AUSTRALIA",
         "GERMANY", "FRANCE", "ITALY", "SPAIN", "INDIA", "PAKISTAN", "TURKEY",
@@ -544,10 +613,20 @@ extension LibraryPreferences {
         displayName(raw: category.name, key: Self.renameKey(section: section, role: "category", id: category.id))
     }
     func itemTitle(_ item: CatalogItem) -> String {
-        displayName(raw: item.name, key: Self.renameKey(section: CatalogSection(item.kind), role: "item", id: item.scopedID))
+        if cleanNames, item.kind == .movies {
+            let key = Self.renameKey(section: .movies, role: "item", id: item.scopedID)
+            if let custom = renames[key]?.trimmingCharacters(in: .whitespacesAndNewlines), !custom.isEmpty { return custom }
+            return MovieTitle.clean(item.name)
+        }
+        return displayName(raw: item.name, key: Self.renameKey(section: CatalogSection(item.kind), role: "item", id: item.scopedID))
     }
     func seriesTitle(_ item: SeriesItem) -> String {
-        displayName(raw: item.name, key: Self.renameKey(section: .series, role: "item", id: item.scopedID))
+        if cleanNames {
+            let key = Self.renameKey(section: .series, role: "item", id: item.scopedID)
+            if let custom = renames[key]?.trimmingCharacters(in: .whitespacesAndNewlines), !custom.isEmpty { return custom }
+            return MovieTitle.clean(item.name)
+        }
+        return displayName(raw: item.name, key: Self.renameKey(section: .series, role: "item", id: item.scopedID))
     }
     mutating func setSection(_ id: String, section: CatalogSection, visible: Bool) {
         customizedCategorySections.insert(section.rawValue)

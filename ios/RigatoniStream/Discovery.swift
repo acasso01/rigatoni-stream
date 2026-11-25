@@ -26,6 +26,24 @@ final class SessionCatalog: ObservableObject {
     private var seriesCategoryOrder: [String] = []
     private var cachedSeriesCount = 0
     private let maximumCachedSeriesItems = 60_000
+    private var movieSourcesCache: [String: [CatalogItem]] = [:]
+    private var movieSourcesOrder: [String] = []
+
+    func cachedMovieSources(for item: CatalogItem, scope: String) -> [CatalogItem]? {
+        let key = scope + "|" + MovieTitle.identity(item)
+        guard let cached = movieSourcesCache[key] else { return nil }
+        movieSourcesOrder.removeAll { $0 == key }; movieSourcesOrder.append(key)
+        return cached
+    }
+    func completedItems(kind: LibraryKind) -> [CatalogItem]? {
+        completed[kind]?.items ?? combinedCompleted[kind]?.items
+    }
+    func cacheMovieSources(_ sources: [CatalogItem], for item: CatalogItem, scope: String) {
+        let key = scope + "|" + MovieTitle.identity(item)
+        movieSourcesCache[key] = sources
+        movieSourcesOrder.removeAll { $0 == key }; movieSourcesOrder.append(key)
+        while movieSourcesOrder.count > 128 { movieSourcesCache[movieSourcesOrder.removeFirst()] = nil }
+    }
 
     func knownCategories(kind: LibraryKind) -> [CatalogCategory] {
         if let combined = combinedCategoryLists[kind], !combined.isEmpty { return combined }
@@ -39,6 +57,7 @@ final class SessionCatalog: ObservableObject {
         jobs = [:]; fullJobs = [:]; combinedFullJobs = [:]; batches = [:]; batchOrder = []
         completed = [:]; combinedCompleted = [:]; categoryLists = [:]; combinedCategoryLists = [:]
         fullSeries = nil; seriesFullChecked = false; clearSeriesCache()
+        movieSourcesCache.removeAll(); movieSourcesOrder.removeAll()
         searchable = [:]; progress = [:]; revision += 1
     }
     /// Full-catalog search results depend on category visibility. Keep the
@@ -50,6 +69,7 @@ final class SessionCatalog: ObservableObject {
         fullJobs = [:]; combinedFullJobs = [:]
         completed = [:]; combinedCompleted = [:]
         fullSeries = nil; seriesFullChecked = false; clearSeriesCache()
+        movieSourcesCache.removeAll(); movieSourcesOrder.removeAll()
         searchable = [:]; progress = [:]; revision += 1
     }
     func cachedFullSeries() -> [SeriesItem]? { fullSeries }
@@ -516,7 +536,8 @@ struct SearchHit: Identifiable {
 
 enum UnifiedSearch {
     static func matches(_ items: [CatalogItem], query: String, filter: String) -> [SearchHit] {
-        CatalogIndex.matches(items, query: query).filter { filter == "all" || $0.kind.rawValue == filter }.map { SearchHit(item: $0) }
+        let matching = CatalogIndex.matches(items, query: query).filter { filter == "all" || $0.kind.rawValue == filter }
+        return MovieTitle.unique(matching).map { SearchHit(item: $0) }
     }
 }
 
@@ -1071,6 +1092,7 @@ struct MovieDetailView: View {
     @State private var movieSourcesLoading = false
     @State private var movieSourcesProgress = ""
     @State private var movieSourcesNotice = ""
+    @State private var showingMovieSources = false
 #endif
     // Shared bindings identify the detail actions; tvOS also needs a directional
     // focus section because the poster separates Back from the action column.
@@ -1096,49 +1118,14 @@ struct MovieDetailView: View {
                         if !info.release.isEmpty { Text("Released \(info.release)").foregroundStyle(.secondary) }
                         if !info.genre.isEmpty { Text(info.genre).foregroundStyle(.secondary) }
                         if let saved = model.preferences.progress[item.id] {
-                            Button { resumeSeconds = saved.seconds; playing = true } label: { Label("Continue from \(saved.label)", systemImage: "play.fill") }.buttonStyle(.borderedProminent).foregroundStyle(StreamTheme.onAccent)
+                            Button { resumeSeconds = saved.seconds; playMovieAction() } label: { Label("Continue from \(saved.label)", systemImage: "play.fill") }.buttonStyle(.borderedProminent).foregroundStyle(StreamTheme.onAccent)
                                 .focused($detailFocus, equals: "play")
                             Button("Restart movie") { restart() }.buttonStyle(.bordered)
                                 .focused($detailFocus, equals: "restart")
                         } else {
-                            Button { resumeSeconds = 0; playing = true } label: { Label("Play movie", systemImage: "play.fill") }.buttonStyle(.borderedProminent).foregroundStyle(StreamTheme.onAccent)
+                            Button { resumeSeconds = 0; playMovieAction() } label: { Label("Play Movie", systemImage: "play.fill") }.buttonStyle(.borderedProminent).foregroundStyle(StreamTheme.onAccent)
                                 .focused($detailFocus, equals: "play")
                         }
-#if os(tvOS)
-                        Button {
-                            Task { await findMovieSources() }
-                        } label: {
-                            Label("Choose Stream", systemImage: "play.tv")
-                        }
-                        .buttonStyle(.bordered)
-                        .focused($detailFocus, equals: "sources")
-                        if movieSourcesLoading {
-                            ProgressView(movieSourcesProgress.isEmpty ? "Finding enabled sources…" : movieSourcesProgress)
-                        }
-                        if !movieSourcesNotice.isEmpty {
-                            Text(movieSourcesNotice).font(.footnote).foregroundStyle(.secondary)
-                        }
-                        if !movieSources.isEmpty {
-                            Text("AVAILABLE STREAMS").font(.caption.weight(.semibold)).tracking(2).foregroundStyle(.secondary)
-                            ForEach(movieSources, id: \.scopedID) { source in
-                                Button {
-                                    selectedMovieSource = source
-                                    resumeSeconds = model.preferences.progress[source.scopedID]?.seconds ?? 0
-                                    playing = true
-                                } label: {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(model.preferences.itemTitle(source)).font(.headline).lineLimit(1)
-                                        Text(movieSourceLabel(source)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                                    }
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.horizontal, 18).padding(.vertical, 12)
-                                    .background(StreamTheme.panel, in: RoundedRectangle(cornerRadius: 14))
-                                }
-                                .buttonStyle(.bordered)
-                                .accessibilityIdentifier("movie-source-\(source.scopedID)")
-                            }
-                        }
-#endif
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
                 #if os(tvOS)
@@ -1174,6 +1161,24 @@ struct MovieDetailView: View {
                 try Task.checkCancellation(); info = MovieInformation.parse(row)
             } catch { if !Task.isCancelled { metadataNotice = error.localizedDescription } }
         }
+#if os(tvOS)
+        .task(id: "movie-sources-\(item.scopedID)") { await findMovieSources() }
+        .sheet(isPresented: $showingMovieSources) {
+            MovieSourcePicker(
+                title: model.preferences.itemTitle(item), sources: orderedMovieSources,
+                loading: movieSourcesLoading, progress: movieSourcesProgress,
+                error: movieSourcesNotice, sourceLabel: movieSourceLabel,
+                retry: { Task { await findMovieSources(forceRefresh: true) } },
+                choose: { source in
+                    selectedMovieSource = source
+                    if let key = preferredMovieSourceKey { UserDefaults.standard.set(source.scopedID, forKey: key) }
+                    resumeSeconds = model.preferences.progress[source.scopedID]?.seconds ?? 0
+                    showingMovieSources = false
+                    playing = true
+                }
+            )
+        }
+#endif
         .fullScreenCover(isPresented: $playing) {
 #if os(tvOS)
             let selected = selectedMovieSource ?? item
@@ -1184,45 +1189,46 @@ struct MovieDetailView: View {
         }
     }
 #if os(tvOS)
-    private func findMovieSources() async {
+    private func findMovieSources(forceRefresh: Bool = false) async {
         guard !movieSourcesLoading else { return }
+        if !forceRefresh, let cached = model.catalog.cachedMovieSources(for: item, scope: model.catalogCacheScope) {
+            movieSources = cached
+            movieSourcesNotice = cached.isEmpty ? "No matching streams were found in enabled categories." : ""
+            return
+        }
+        // The movie the user opened is always a valid source option, even if
+        // the catalog scan fails or is still in progress.
+        movieSources = [item]
         movieSourcesLoading = true
         movieSourcesNotice = ""
         movieSourcesProgress = ""
-        defer { if !Task.isCancelled { movieSourcesLoading = false; movieSourcesProgress = "" } }
+        defer { movieSourcesLoading = false; movieSourcesProgress = "" }
         do {
-            let categories = try await model.catalog.categories(kind: .movies, model: model)
-            let enabled = model.preferences.browseCategories(categories, section: .movies)
-            var matches: [CatalogItem] = [item]
-            let target = normalizedMovieSourceTitle(item.name)
-            let pending = enabled.filter { $0.id != item.categoryID }
-            var completed = 0
-            await withTaskGroup(of: (String, [CatalogItem]?).self) { group in
-                var next = 0
-                func enqueue(_ categoryID: String) {
-                    group.addTask {
-                        do { return (categoryID, try await model.catalog.items(kind: .movies, category: categoryID, model: model)) }
-                        catch { return (categoryID, nil) }
-                    }
-                }
-                for category in pending.prefix(4) { enqueue(category.id); next += 1 }
-                while let (_, entries) = await group.next() {
-                    guard !Task.isCancelled else { group.cancelAll(); return }
-                    completed += 1
-                    if let entries {
-                        for candidate in entries where normalizedMovieSourceTitle(candidate.name) == target {
-                            if !item.year.isEmpty, !candidate.year.isEmpty, item.year != candidate.year { continue }
-                            if !matches.contains(where: { $0.scopedID == candidate.scopedID }) { matches.append(candidate) }
-                        }
-                        movieSources = matches
-                    }
-                    movieSourcesProgress = "Checked \(completed) of \(pending.count) categories…"
-                    if next < pending.count { enqueue(pending[next].id); next += 1 }
-                }
+            _ = try await model.catalog.categories(kind: .movies, model: model)
+            let allItems: [CatalogItem]
+            if !forceRefresh, let completed = model.catalog.completedItems(kind: .movies) {
+                allItems = completed
+            } else {
+                // Reuse the catalog's shared in-flight job and persistent
+                // category cache instead of launching a second category scan.
+                let result = try await model.catalog.loadAll(kind: .movies, model: model)
+                allItems = result.items
+                movieSourcesNotice = result.notice
             }
             try Task.checkCancellation()
+            movieSourcesProgress = "Matching available streams…"
+            var matches = allItems.filter { candidate in
+                MovieTitle.matchesSource(candidate, for: item)
+            }
+            if !matches.contains(where: { $0.scopedID == item.scopedID }) { matches.insert(item, at: 0) }
+            var seen = Set<String>()
+            matches = matches.filter { seen.insert($0.scopedID).inserted }
+            try Task.checkCancellation()
             movieSources = matches
-            if matches.count == 1 { movieSourcesNotice = "No other matching streams were found in enabled categories." }
+            if movieSourcesNotice.isEmpty {
+                model.catalog.cacheMovieSources(matches, for: item, scope: model.catalogCacheScope)
+            }
+            if matches.count == 1 && movieSourcesNotice.isEmpty { movieSourcesNotice = "No other matching streams were found in enabled categories." }
         } catch is CancellationError {
             return
         } catch {
@@ -1238,13 +1244,30 @@ struct MovieDetailView: View {
         return [source.year, categoryName, providerName].filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
-    private func normalizedMovieSourceTitle(_ raw: String) -> String {
-        let cleaned = NameCleaner.clean(raw)
-            .replacingOccurrences(of: #"\b(?:19|20)\d{2}\b"#, with: "", options: .regularExpression)
-            .folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
-        return cleaned.filter { $0.isLetter || $0.isNumber }
+    private var preferredMovieSourceKey: String? {
+        model.preferenceKey.map { $0 + "-preferred-movie-source-" + MovieTitle.identity(item) }
     }
+
+    private var orderedMovieSources: [CatalogItem] {
+        guard let preferred = preferredMovieSourceKey.flatMap({ UserDefaults.standard.string(forKey: $0) }) else { return movieSources }
+        return movieSources.sorted { ($0.scopedID == preferred) && ($1.scopedID != preferred) }
+    }
+
 #endif
+    private func playMovieAction() {
+        #if os(tvOS)
+        if movieSources.count == 1 && !movieSourcesLoading {
+            selectedMovieSource = movieSources[0]
+            showingMovieSources = false
+            playing = true
+        } else {
+            showingMovieSources = true
+            if movieSources.isEmpty && !movieSourcesLoading { Task { await findMovieSources() } }
+        }
+        #else
+        playing = true
+        #endif
+    }
     private var posterWidth: CGFloat {
         #if os(tvOS)
         return 300
@@ -1254,9 +1277,82 @@ struct MovieDetailView: View {
     }
     private func restart() {
         model.preferences.progress[item.id] = nil; model.preferences.write(key: model.preferenceKey)
-        resumeSeconds = 0; playing = true
+        resumeSeconds = 0; playMovieAction()
     }
 }
+
+#if os(tvOS)
+private struct MovieSourcePicker: View {
+    @Environment(\.dismiss) private var dismiss
+    let title: String
+    let sources: [CatalogItem]
+    let loading: Bool
+    let progress: String
+    let error: String
+    let sourceLabel: (CatalogItem) -> String
+    let retry: () -> Void
+    let choose: (CatalogItem) -> Void
+    @FocusState private var focusedSource: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(title).font(.title2.bold())
+                    Text("Choose a stream").font(.callout).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Back to Details") { dismiss() }.buttonStyle(.bordered)
+            }
+            if loading {
+                ProgressView(progress.isEmpty ? "Finding available streams…" : progress)
+                    .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
+            }
+            if !error.isEmpty {
+                HStack(spacing: 18) {
+                    Text(error).foregroundStyle(.secondary)
+                    Button("Retry") { retry() }.buttonStyle(.borderedProminent)
+                }
+            }
+            if sources.isEmpty && !loading && error.isEmpty {
+                Text("No matching streams were found in your enabled categories.")
+                    .foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 100, alignment: .leading)
+            }
+            if !sources.isEmpty {
+                ScrollView {
+                    LazyVStack(spacing: 12) {
+                        ForEach(sources, id: \.scopedID) { source in
+                            Button { choose(source) } label: {
+                                HStack(spacing: 18) {
+                                    Image(systemName: "play.tv.fill").font(.title3)
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        Text(MovieTitle.clean(source.name)).font(.headline).lineLimit(1)
+                                        Text(sourceLabel(source)).font(.callout).foregroundStyle(.secondary).lineLimit(2)
+                                    }
+                                    Spacer()
+                                    if let range = source.name.range(of: #"\b(?:8K|4K|2160P|1080P|720P|FHD|HD)\b"#, options: [.caseInsensitive, .regularExpression]) {
+                                        Text(String(source.name[range])).font(.caption.weight(.semibold))
+                                    }
+                                }
+                                .padding(.horizontal, 22).padding(.vertical, 18)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(focusedSource == source.scopedID ? Color.accentColor : Color.secondary.opacity(0.14), in: RoundedRectangle(cornerRadius: 16))
+                            }
+                            .buttonStyle(.plain)
+                            .focused($focusedSource, equals: source.scopedID)
+                            .accessibilityIdentifier("movie-source-\(source.scopedID)")
+                        }
+                    }
+                }
+            }
+        }
+        .padding(36)
+        .frame(minWidth: 760, minHeight: 500)
+        .background(.ultraThinMaterial)
+        .defaultFocus($focusedSource, sources.first?.scopedID)
+    }
+}
+#endif
 
 struct CatalogDestination: View {
     @EnvironmentObject private var model: AppModel

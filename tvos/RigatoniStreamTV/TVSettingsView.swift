@@ -94,7 +94,8 @@ struct TVLoginView: View {
 // First launch, when no provider is saved and nobody is signed in.
 // Focus lands on Server URL, matching Settings.
 struct TVProviderSetupView: View {
-    private enum SetupField: Hashable { case server, username, password, reveal, name, start, sync }
+    var onTryDemo: (() -> Void)? = nil
+    private enum SetupField: Hashable { case server, username, password, reveal, name, start, sync, demo }
 
     @EnvironmentObject private var model: AppModel
     @Namespace private var setupFocus
@@ -185,6 +186,15 @@ struct TVProviderSetupView: View {
                         Button("Sign in to sync") { showAccount = true }
                             .focused($focusedField, equals: .sync)
                             .buttonStyle(.card)
+                        if let onTryDemo {
+                            Button("Explore Demo") { onTryDemo() }
+                                .focused($focusedField, equals: .demo)
+                                .buttonStyle(.card)
+                            Text("Browse sample films and a clearly labeled prerecorded demo channel. No provider account is needed.")
+                                .font(.footnote)
+                                .foregroundStyle(TVTheme.muted)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                         if model.busy { ProgressView() }
                         if !model.notice.isEmpty {
                             Text(model.notice).font(.callout).foregroundStyle(TVTheme.muted)

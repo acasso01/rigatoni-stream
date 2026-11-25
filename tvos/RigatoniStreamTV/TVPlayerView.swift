@@ -438,7 +438,9 @@ struct TVPlayerView: View {
             showControls()
         }
         .onAppear {
-            player.progressRecorder = { seconds, duration in model.saveProgress(id: progressID ?? item.id, seconds: seconds, duration: duration) }
+            if !item.isDemo {
+                player.progressRecorder = { seconds, duration in model.saveProgress(id: progressID ?? item.id, seconds: seconds, duration: duration) }
+            }
             player.title = currentItem.name
             recordHistory()
             showControls()
@@ -466,7 +468,7 @@ struct TVPlayerView: View {
     }
 
     private func recordHistory() {
-        guard playbackURL != nil else { return }
+        guard playbackURL != nil, !currentItem.isDemo else { return }
         TVLastWatched.record(kind: lastWatchedKind ?? (currentItem.kind == .live ? "live" : "movie"), item: currentItem, progressID: progressID, model: model)
     }
 

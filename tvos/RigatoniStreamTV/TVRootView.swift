@@ -60,6 +60,7 @@ struct TVRootView: View {
     @State private var entryGrace = false
     @State private var entryToken = UUID()
     @State private var entryTask: Task<Void, Never>?
+    @State private var showingDemo = false
 
     var body: some View {
         ZStack {
@@ -67,7 +68,11 @@ struct TVRootView: View {
             Group {
                 if model.starting {
                     ProgressView("Opening Ant Streams…")
-                } else if !model.needsProviderSetup {
+                } else if model.needsProviderSetup && !showingDemo {
+                    TVProviderSetupView(onTryDemo: { showingDemo = true })
+                } else if showingDemo {
+                    TVDemoModeView(onExit: { showingDemo = false })
+                } else {
                     VStack(spacing: 12) {
                         topNavigation
                             .focusScope(railFocus)
@@ -102,8 +107,6 @@ struct TVRootView: View {
                     // Rebuild the whole tree on theme change so every
                     // TVTheme.xxx static resolves to the new theme.
                     .id(appearance + (model.vault.selectedID?.uuidString ?? ""))
-                } else {
-                    TVProviderSetupView()
                 }
             }
             .foregroundStyle(TVTheme.text)

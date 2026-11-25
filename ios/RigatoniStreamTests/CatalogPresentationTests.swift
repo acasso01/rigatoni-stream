@@ -75,6 +75,50 @@ final class CatalogPresentationTests: XCTestCase {
         }
     }
 
+    func testMovieTitleCleanupAndSafeDeduplication() {
+        let samples: [(String, String)] = [
+            ("NF Cars 3", "Cars 3"),
+            ("D+ Cars 2 (2011)", "Cars 2 (2011)"),
+            ("4K-D+ Cars 3 (2017)", "Cars 3 (2017)"),
+            ("4K-EN From (2022)", "From (2022)"),
+            ("NF Breaking Bad", "Breaking Bad"),
+            ("The Café 2 (2020)", "The Café 2 (2020)")
+        ]
+        for (raw, expected) in samples { XCTAssertEqual(MovieTitle.clean(raw), expected, raw) }
+
+        func movie(_ id: String, _ name: String, _ year: String, _ category: String) -> CatalogItem {
+            CatalogItem(id: id, name: name, kind: .movies, fileExtension: "mp4", poster: nil,
+                        categoryID: category, year: year)
+        }
+        let entries = [
+            movie("1", "NF Cars 3", "2017", "netflix"),
+            movie("2", "4K-D+ Cars 3 (2017)", "2017", "disney"),
+            movie("3", "Cars 2 (2011)", "2011", "movies"),
+            movie("4", "Cars 3", "2024", "remake")
+        ]
+        XCTAssertEqual(MovieTitle.unique(entries).map(\.id), ["1", "3", "4"])
+        let oneKnownRelease = [movie("5", "NF Cars 3", "", "netflix"), movie("6", "Cars 3 (2017)", "2017", "disney")]
+        XCTAssertEqual(MovieTitle.unique(oneKnownRelease).map(\.id), ["5"])
+        XCTAssertEqual(entries[0].name, "NF Cars 3", "Normalization must not replace the provider title used for source lookup.")
+        let chosen = movie("10", "The Polar Express (2004)", "2004", "A")
+        XCTAssertTrue(MovieTitle.matchesSource(movie("11", "4K-DE The Polar Express", "2004", "B"), for: chosen))
+        XCTAssertTrue(MovieTitle.matchesSource(movie("12", "The Polar Express", "", "C"), for: chosen))
+        XCTAssertFalse(MovieTitle.matchesSource(movie("13", "The Polar Express (2010)", "2010", "D"), for: chosen))
+        XCTAssertFalse(MovieTitle.matchesSource(movie("14", "Polar Express", "2004", "E"), for: chosen))
+    }
+
+    @MainActor
+    func testResolvedMovieSourcesAreCachedPerProviderLibraryScope() {
+        let catalog = SessionCatalog()
+        let item = CatalogItem(id: "31", name: "NF Cars 3", kind: .movies, fileExtension: "mp4", poster: nil, categoryID: "a", year: "2017")
+        let secondSource = CatalogItem(id: "84", name: "4K-D+ Cars 3 (2017)", kind: .movies, fileExtension: "mkv", poster: nil, categoryID: "b", year: "2017")
+        catalog.cacheMovieSources([item, secondSource], for: item, scope: "library-one")
+        XCTAssertEqual(catalog.cachedMovieSources(for: item, scope: "library-one")?.map(\.scopedID), ["31", "84"])
+        XCTAssertNil(catalog.cachedMovieSources(for: item, scope: "library-two"))
+        catalog.reset()
+        XCTAssertNil(catalog.cachedMovieSources(for: item, scope: "library-one"))
+    }
+
     func testUnitedStatesFilterKeepsUntaggedAndDropsForeign() {
         XCTAssertTrue(CategoryRegion.isUnitedStates("US| TUBI RAW"))
         XCTAssertTrue(CategoryRegion.isUnitedStates("US: HBO"))

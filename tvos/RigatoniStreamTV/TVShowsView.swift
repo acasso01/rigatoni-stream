@@ -36,6 +36,7 @@ private struct TVSeriesBrowser: View {
     @State private var searchGroups: [SeriesSearchGroup] = []
     @State private var searching = false
     @State private var searchProgress = ""
+    @State private var searchBatchRevision = 0
     @State private var searchNotice = ""
     @State private var searchRetry = 0
     @FocusState private var searchFocused: Bool
@@ -69,7 +70,7 @@ private struct TVSeriesBrowser: View {
                     allLoading = true
                     allProgress = ""
                     defer { if !Task.isCancelled { allLoading = false } }
-                    let loaded = await store.loadPreviewSeries(categoryLimit: 3) { items, progress in
+                    let loaded = await store.loadPreviewSeries(categoryLimit: 6) { items, progress in
                         guard !Task.isCancelled else { return }
                         allSeries = items
                         allProgress = progress
@@ -92,19 +93,19 @@ private struct TVSeriesBrowser: View {
                     guard !Task.isCancelled else { return }
                     searchItems = items
                     searchProgress = progress
+                    searchBatchRevision += 1
                 }
                 guard !Task.isCancelled else { return }
                 searchItems = items
                 searchProgress = ""
                 searchNotice = store.searchNotice
             }
-            .task(id: "\(trimmedQuery)-\(searchItems.count)-\(model.libraryRevision)") {
+            .task(id: "\(trimmedQuery)-\(searchBatchRevision)-\(model.libraryRevision)") {
                 guard searchingCatalog, !searchItems.isEmpty else { searchGroups = []; return }
                 let term = trimmedQuery
                 let items = searchItems
                 let categories = store.categories
                 let preferences = model.preferences
-                do { try await Task.sleep(for: .milliseconds(120)) } catch { return }
                 let worker = Task.detached(priority: .userInitiated) {
                     SeriesSearchGrouping.matches(items, query: term, categories: categories, preferences: preferences)
                 }
@@ -175,11 +176,6 @@ private struct TVSeriesBrowser: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .tvLanding(for: .shows)
 
-        } else if store.loading && store.categories.isEmpty {
-            ProgressView("Loading TV shows…")
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .tvLanding(for: .shows)
-
         } else {
             HStack(alignment: .top, spacing: 28) {
                 categorySidebar
@@ -223,6 +219,11 @@ private struct TVSeriesBrowser: View {
                                 .font(.caption)
                                 .foregroundStyle(TVTheme.muted)
                         }
+                    } else if selectedCategory.isEmpty {
+                        TVHistoryRail(title: "Continue Watching", onlyInProgress: true, hidesWhenEmpty: true)
+                        groupShelf("Popular Shows", groups: [])
+                        groupShelf("Latest Releases", groups: [])
+                        ProgressView("Loading TV show categories…")
                     } else if selectedCategory == allCategoriesID || selectedCategory == recentCategoriesID {
                         TVHistoryRail(title: "Continue Watching", onlyInProgress: true, hidesWhenEmpty: true)
                         if allLoading && allGroups.isEmpty {

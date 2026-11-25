@@ -203,6 +203,9 @@ struct CatalogItem: Identifiable, Equatable {
     /// Owning provider in combined-library mode. Nil means the currently
     /// selected provider (separate mode, and all pre-combined data).
     var providerID: UUID? = nil
+    /// Sample entries belong to the local review/demo experience and should
+    /// never be added to a user's playback history or progress records.
+    var isDemo: Bool = false
     /// Collision-free identity for ForEach, pins and favorites in combined
     /// mode. Identical to `id` in separate mode.
     var scopedID: String { Self.namespaced(providerID: providerID, id: id) }

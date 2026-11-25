@@ -92,6 +92,10 @@ The Ant Streams update keeps the original bundle identifiers, session Keychain s
 
 The interface update includes Dark, iOS Light, Ghost and Nebula themes. Apple TV has a left navigation rail with Guide and Saved, plus movie/show hero banners. The guide uses provider short-EPG data with at most four concurrent requests and a bounded, account/provider-scoped memory cache; gateway/no-EPG providers retain playable Live rows. Saved favorites persist IDs and metadata only, respect hidden movie/live categories and channels, and open movie details with Continue/Restart. New source files are added to existing Xcode projects by `bundle exec ruby update_project.rb`; signing is preserved while direct HTTP IPTV access is enabled.
 
+### Review demo mode
+
+On a clean install, select **Explore Demo** from provider setup to browse a small local demo catalog without provider credentials. The sample film is the complete *Sintel* release from Blender Foundation, licensed CC BY 3.0; keep its ending credit roll intact. The “Demo Channel” reuses that prerecorded footage and is labeled as simulated, not a live broadcast. The stream is served from Blender's linked mirror. Demo playback is excluded from watch history and progress. License: https://durian.blender.org/about/ .
+
 ## Refresh an existing installation (0.2.3, build 5)
 
 The generated Xcode project is local and ignored by Git. Matching branch HEAD
