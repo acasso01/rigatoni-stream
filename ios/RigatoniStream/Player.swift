@@ -326,8 +326,21 @@ struct PlayerView: View {
         }
         .statusBarHidden(!controlsVisible)
         .persistentSystemOverlays(controlsVisible ? .automatic : .hidden)
-        .onChange(of: currentItem.id) { _, _ in MobileRecords.watched(currentItem, episode: progressID != nil, model: model) }
-        .onAppear { MobileRecords.watched(currentItem, episode: progressID != nil, model: model); player.resumeSeconds = startSeconds; player.progressRecorder = { seconds, duration in model.saveProgress(id: progressID ?? item.id, seconds: seconds, duration: duration) }; player.title = currentItem.name; player.isLive = currentItem.kind == .live; showControls() }
+        .onChange(of: currentItem.id) { _, _ in
+            if !currentItem.isDemo { MobileRecords.watched(currentItem, episode: progressID != nil, model: model) }
+        }
+        .onAppear {
+            if !currentItem.isDemo {
+                MobileRecords.watched(currentItem, episode: progressID != nil, model: model)
+                player.progressRecorder = { seconds, duration in model.saveProgress(id: progressID ?? item.id, seconds: seconds, duration: duration) }
+            } else {
+                player.progressRecorder = nil
+            }
+            player.resumeSeconds = startSeconds
+            player.title = currentItem.name
+            player.isLive = currentItem.kind == .live
+            showControls()
+        }
         .onChange(of: currentItem.scopedID) { _, _ in
             guard let url = currentItem.playbackURL ?? (try? owner.streamURL(item: currentItem)) else {
                 player.stop(); return
