@@ -4,6 +4,7 @@ import SwiftUI
 struct RigatoniStreamApp: App {
     @StateObject private var model = AppModel()
     @AppStorage("rigatoni-appearance") private var appearance = "dark"
+    @AppStorage("ant-demo-mode") private var demoMode = false
     init() {
         AppAppearance.migrateStoredSelection()
     }
@@ -11,7 +12,7 @@ struct RigatoniStreamApp: App {
         WindowGroup {
             Group {
                 if model.starting { ProgressView("Opening Ant Streams…") }
-                else if model.providerReady {
+                else if model.providerReady || demoMode {
                     MobileRootView().id(model.vault.selectedID)
                 } else if model.needsProviderSetup { ProviderSetupView() }
                 else { ProviderWelcomeView() }
@@ -87,6 +88,7 @@ struct ProviderSetupView: View {
     @EnvironmentObject private var model: AppModel
     @State private var visiblePassword = false
     @State private var showAccount = false
+    @AppStorage("ant-demo-mode") private var demoMode = false
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -109,6 +111,9 @@ struct ProviderSetupView: View {
                         .buttonStyle(.borderedProminent).controlSize(.large).foregroundStyle(.white)
                         .disabled(model.busy || model.provider.server.isEmpty || model.provider.username.isEmpty || model.provider.password.isEmpty)
                     Button("Sign in to sync") { showAccount = true }
+                    Button("Explore Demo") { demoMode = true }
+                        .buttonStyle(.bordered)
+                        .accessibilityHint("Browse licensed sample content without signing in")
                     if model.busy { ProgressView() }
                     if !model.notice.isEmpty { Text(model.notice).font(.callout).foregroundStyle(.secondary).accessibilityAddTraits(.updatesFrequently) }
                     Text("The provider login is saved in this device's Keychain only. Playback connects directly to the provider server. No Ant Streams account or gateway is required.").font(.footnote).foregroundStyle(.secondary)
@@ -117,6 +122,33 @@ struct ProviderSetupView: View {
             .sheet(isPresented: $showAccount) { LoginView() }
         }
     }
+}
+
+/// A no-account sample experience for App Review and people evaluating the
+/// iPhone app. The channel entry is explicitly prerecorded, not live TV.
+enum MobileDemoCatalog {
+    static let movie = CatalogItem(
+        id: "demo-sintel",
+        name: "Sintel · Licensed Sample Film",
+        kind: .movies,
+        fileExtension: "mp4",
+        poster: nil,
+        playbackURL: URL(string: "https://www.peach.themazzone.com/durian/movies/sintel-1280-surround.mp4"),
+        categoryID: "demo",
+        isDemo: true
+    )
+
+    static let items: [CatalogItem] = [movie, CatalogItem(
+            id: "demo-channel-sintel",
+            name: "Demo Channel · Prerecorded Sample",
+            kind: .live,
+            fileExtension: "mp4",
+            poster: nil,
+            playbackURL: movie.playbackURL,
+            categoryID: "demo",
+            number: "DEMO",
+            isDemo: true
+        )]
 }
 
 private struct AddLocalProviderSheet: View {
