@@ -403,6 +403,7 @@ struct MovieCard: View {
 
 struct MoviesHomeView: View {
     @AppStorage("rigatoni-appearance") private var appearance = "dark"
+    @AppStorage("ant-demo-mode") private var demoMode = false
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var catalog: SessionCatalog
     @State private var categories: [CatalogCategory] = []
@@ -418,6 +419,15 @@ struct MoviesHomeView: View {
                 LazyVStack(alignment: .leading, spacing: 28) {
                     StreamHeading(title: "Movies", subtitle: "Something great to watch.")
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 22).padding(.top, 20)
+                    if demoMode {
+                        Text("DEMO · Licensed sample content").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.horizontal, 22)
+                        MobileDemoShelf(title: "Demo Movies", kind: .movies, select: {})
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Film credit and license").font(.headline)
+                            Text("Sintel © Blender Foundation, 2010 · Creative Commons Attribution 3.0.").font(.footnote).foregroundStyle(.secondary)
+                            Link("View license details", destination: URL(string: "https://durian.blender.org/about/")!).font(.footnote)
+                        }.padding(.horizontal, 22)
+                    }
                     if !categories.isEmpty {
                         ScrollView(.horizontal, showsIndicators: true) {
                             LazyHStack(spacing: 10) {
@@ -443,7 +453,7 @@ struct MoviesHomeView: View {
                     } else if featuredLoading && model.providerReady {
                         ProgressView("Loading movies…").frame(maxWidth: .infinity).padding(40)
                     }
-                    if !model.providerReady {
+                    if !model.providerReady && !demoMode {
                         Button("Add your provider to browse movies") { model.settingsVisible = true }.padding()
                     }
                     if !error.isEmpty {
@@ -468,7 +478,7 @@ struct MoviesHomeView: View {
                 featured = nil; categories = []; error = ""; categoryCount = 6
                 featuredLoading = true
                 defer { featuredLoading = false }
-                guard model.providerReady else { return }
+                guard model.providerReady, !demoMode else { return }
                 do {
                     let loaded = try await catalog.categories(kind: .movies, model: model)
                     try Task.checkCancellation()
