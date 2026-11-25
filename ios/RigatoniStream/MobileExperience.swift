@@ -31,6 +31,7 @@ enum MobileSection: String, CaseIterable, Identifiable {
 
 struct MobileRootView: View {
     @EnvironmentObject private var model: AppModel
+    @AppStorage("ant-demo-mode") private var demoMode = false
     @State private var section: MobileSection = .home
     @State private var more = false
     @AppStorage("rigatoni-appearance") private var appearance = "dark"
@@ -40,8 +41,8 @@ struct MobileRootView: View {
                 switch section {
                 case .home: MobileHomeView(select: { section = $0 })
                 case .guide: MobileGuideView()
-                case .live: LibraryView(kind: .live)
-                case .movies: MoviesHomeView()
+                case .live: demoMode ? AnyView(MobileDemoLibraryView(kind: .live)) : AnyView(LibraryView(kind: .live))
+                case .movies: demoMode ? AnyView(MobileDemoLibraryView(kind: .movies)) : AnyView(MoviesHomeView())
                 case .shows: ShowsView()
                 case .saved: MobileSavedView()
                 case .search: GlobalSearchView()
@@ -92,6 +93,20 @@ struct MobileRootView: View {
             }.presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $model.settingsVisible) { SettingsView() }
+        .overlay(alignment: .top) {
+            if demoMode {
+                HStack {
+                    Label("Demo Mode", systemImage: "play.rectangle")
+                    Spacer()
+                    Button("Exit Demo") { demoMode = false }
+                }
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 14).padding(.vertical, 9)
+                .background(.ultraThinMaterial, in: Capsule())
+                .padding(.top, 4)
+                .accessibilityElement(children: .contain)
+            }
+        }
     }
     private func navLabel(_ title: String, symbol: String, selected: Bool) -> some View {
         VStack(spacing: 3) {
@@ -169,6 +184,7 @@ struct MobileSaveButton: View {
 
 struct MobileHomeView: View {
     @EnvironmentObject private var model: AppModel
+    @AppStorage("ant-demo-mode") private var demoMode = false
     let select: (MobileSection) -> Void
     @StateObject private var shelves = HomeShelfLoader()
     @AppStorage("rigatoni-tmdb-api-key") private var tmdbKey = ""
@@ -195,7 +211,12 @@ struct MobileHomeView: View {
                             }
                         }
                     }
-                    if !model.providerReady {
+                    if demoMode {
+                        MobileDemoShelf(title: "Demo Movies", kind: .movies, select: { select(.movies) })
+                        MobileDemoShelf(title: "Demo Channel · Prerecorded", kind: .live, select: { select(.live) })
+                        Label("Licensed sample content · No sign-in required", systemImage: "checkmark.seal")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    } else if !model.providerReady {
                         Button("Add your provider to start watching") { model.settingsVisible = true }.buttonStyle(.borderedProminent).foregroundStyle(StreamTheme.onAccent)
                     } else {
                         if shelves.loading && shelves.trendingMovies.isEmpty && shelves.trendingShows.isEmpty {
@@ -217,7 +238,7 @@ struct MobileHomeView: View {
                 .toolbar { Button { model.settingsVisible = true } label: { Image(systemName: "person.crop.circle") }.accessibilityLabel("Account settings") }
                 .task(id: "\(model.libraryRevision)-\(retry)-\(tmdbKey.hashValue)") {
                     categories = []; error = ""
-                    guard model.providerReady else {
+                    guard model.providerReady, !demoMode else {
                         await shelves.load(model: model, tmdbKey: "")
                         return
                     }
@@ -240,6 +261,68 @@ struct MobileHomeView: View {
         switch poster.media {
         case .movie(let item): playing = item
         case .show(let series): openedShow = series
+        }
+    }
+}
+
+struct MobileDemoShelf: View {
+    let title: String
+    let kind: LibraryKind
+    let select: () -> Void
+    @State private var playing: CatalogItem?
+    private var item: CatalogItem { MobileDemoCatalog.items.first { $0.kind == kind }! }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Button(action: select) {
+                HStack { Text(title).font(.title2.bold()); Spacer(); Image(systemName: "chevron.right") }
+            }.buttonStyle(.plain)
+            Button { playing = item } label: {
+                HStack(spacing: 14) {
+                    Image(systemName: kind == .movies ? "film" : "tv")
+                        .font(.title).frame(width: 84, height: 110)
+                        .background(StreamTheme.accentFill, in: RoundedRectangle(cornerRadius: 14))
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(item.name).font(.headline)
+                        Text(kind == .movies ? "Sintel (2010) · Licensed sample film" : "PRERECORDED · Sample channel")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Label("Play demo", systemImage: "play.fill").font(.subheadline.weight(.semibold))
+                    }
+                    Spacer()
+                }
+                .padding(12)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 18)
+        .fullScreenCover(item: $playing) { item in PlayerView(item: item, provider: Provider()) }
+    }
+}
+
+struct MobileDemoLibraryView: View {
+    let kind: LibraryKind
+    @State private var playing: CatalogItem?
+    private var item: CatalogItem { MobileDemoCatalog.items.first { $0.kind == kind }! }
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    StreamHeading(title: kind.title, subtitle: "Demo library · No provider login required")
+                    Text(kind == .live
+                         ? "This sample channel plays prerecorded footage to demonstrate playback. It is not a live broadcast."
+                         : "A complete licensed sample film is available to play, including its credits.")
+                        .foregroundStyle(.secondary)
+                    MobileDemoShelf(title: kind == .movies ? "Demo Movies" : "Demo Channel · Prerecorded", kind: kind, select: {})
+                    if kind == .movies {
+                        Text("Sintel © Blender Foundation, 2010 · Creative Commons Attribution 3.0.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                        Link("View license details", destination: URL(string: "https://durian.blender.org/about/")!)
+                    }
+                }.padding(.vertical, 20)
+            }
+            .background { StreamBackdrop() }
+            .navigationTitle(kind.title).navigationBarTitleDisplayMode(.inline)
+            .fullScreenCover(item: $playing) { item in PlayerView(item: item, provider: Provider()) }
         }
     }
 }
