@@ -377,8 +377,14 @@ final class AccountAPI {
         let data: Data, response: URLResponse
         do { (data, response) = try await http.data(for: request) }
         catch { throw AppFailure("Could not reach your account. Check your connection and retry.") }
-        guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else {
-            if (response as? HTTPURLResponse)?.statusCode == 401 { throw AppFailure("Your sign-in was rejected or expired. Sign in again.") }
+        guard let response = response as? HTTPURLResponse else {
+            throw AppFailure("Your account request could not be completed. Check your connection and retry.")
+        }
+        guard (200..<300).contains(response.statusCode) else {
+            if response.statusCode == 401 { throw AppFailure("Your sign-in was rejected or expired. Sign in again.") }
+            if response.statusCode == 429 {
+                throw AppFailure("Too many account emails were requested. Check your inbox for the first confirmation email, then wait a minute before trying again.")
+            }
             throw AppFailure("Account request failed. Check your sign-in details or retry shortly.")
         }
         return data
