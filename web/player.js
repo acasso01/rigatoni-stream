@@ -27,7 +27,34 @@ const ENGINE_LABELS={native:'Native',hlsjs:'HLS.js',mpegts:'MPEG-TS',canvas:'Can
 const store={get(k,d){try{const v=root.localStorage.getItem(k);return v==null?d:v}catch{return d}},set(k,v){try{root.localStorage.setItem(k,v)}catch{}}};
 const settings={get engine(){return store.get('ant-engine','auto')},set engine(v){store.set('ant-engine',v)}};
 const hasMSE=()=>!!(root.MediaSource||root.ManagedMediaSource);
-const isTesla=()=>/Tesla\//.test(root.navigator?.userAgent||'')||!!doc.body?.classList.contains('tesla-lite');
+const isTesla=()=>/Tesla\//.test(root.navigator?.userAgent||'')||!!doc?.body?.classList.contains('tesla-lite');
+
+// ---------- audio: one volume/mute state for every engine ----------
+// Volume and mute persist. Browsers (Tesla's Chromium included) block sound until the page gets a tap,
+// so a stream that could only start muted is marked autoMuted and the next tap anywhere turns sound on.
+// The canvas engine plays through one shared AudioContext that is resumed inside that tap.
+const clamp01=v=>Math.min(1,Math.max(0,v));
+const audio={
+  ctx:null,autoMuted:false,listeners:new Set(),
+  get volume(){const v=parseFloat(store.get('ant-volume','1'));return isFinite(v)?clamp01(v):1},
+  get muted(){return store.get('ant-muted','0')==='1'},
+  get silent(){return this.muted||this.autoMuted},
+  context(){
+    if(!this.ctx){const C=root.AudioContext||root.webkitAudioContext;if(!C)return null;try{this.ctx=new C({latencyHint:'playback'})}catch{return null}}
+    return this.ctx;
+  },
+  // Call only from inside a user gesture (tap, click, key).
+  unlock(create){
+    const ctx=create?this.context():this.ctx;
+    if(ctx&&ctx.state!=='running'&&ctx.state!=='closed')try{ctx.resume().catch(()=>{})}catch{}
+    if(this.autoMuted){this.autoMuted=false;this.emit()}
+  },
+  setVolume(v){v=clamp01(Number(v)||0);store.set('ant-volume',String(v));if(v>0&&this.muted)store.set('ant-muted','0');this.autoMuted=false;this.emit()},
+  setMuted(m){store.set('ant-muted',m?'1':'0');if(!m&&this.volume===0)store.set('ant-volume','0.5');this.autoMuted=false;this.emit()},
+  applyTo(video){if(!video)return;try{video.volume=this.volume}catch{}video.muted=this.silent},
+  on(f){this.listeners.add(f);return()=>this.listeners.delete(f)},
+  emit(){for(const f of this.listeners)try{f()}catch{}}
+};
 
 // ---------- <video> engines ----------
 function waitForPlaying(video,ms,signal){
@@ -44,9 +71,14 @@ class VideoEngine{
   constructor(video,name){this.video=video;this.name=name;this.abort=new AbortController()}
   get paused(){return this.video.paused}get currentTime(){return this.video.currentTime}get duration(){return this.video.duration}
   get videoHeight(){return this.video.videoHeight}
-  play(){return this.video.play()}pause(){this.video.pause()}setMuted(m){this.video.muted=m}
+  play(){return this.video.play()}pause(){this.video.pause()}setMuted(m){this.video.muted=m}setVolume(v){try{this.video.volume=v}catch{}}
   seek(t){this.video.currentTime=t}
-  async start(ms){const p=waitForPlaying(this.video,ms,this.abort.signal);this.video.play().catch(()=>{});return p}
+  async start(ms){
+    const v=this.video,p=waitForPlaying(v,ms,this.abort.signal);audio.applyTo(v);
+    // Sound blocked (no tap yet): start muted instead of failing, and let the next tap unmute.
+    v.play().catch(e=>{if(e?.name==='NotAllowedError'&&!v.muted&&!this.abort.signal.aborted){audio.autoMuted=true;audio.applyTo(v);audio.emit();v.play().catch(()=>{})}});
+    return p;
+  }
   destroy(){this.abort.abort();resetVideo(this.video)}
 }
 class NativeEngine extends VideoEngine{
@@ -78,9 +110,10 @@ class MpegtsEngine extends VideoEngine{
   destroy(){try{this.player?.pause();this.player?.unload();this.player?.detachMediaElement();this.player?.destroy()}catch{}super.destroy()}
 }
 class CanvasWrap{
-  constructor(stage,video){this.name='canvas';this.video=video;this.inner=new root.AntCanvasEngine.CanvasEngine(stage,{live:true});this.handlers=[]}
+  constructor(stage,video){this.name='canvas';this.video=video;this.inner=new root.AntCanvasEngine.CanvasEngine(stage,{live:true,audio:{context:()=>audio.context(),volume:audio.volume,muted:audio.silent}});this.handlers=[]}
   get paused(){return this.inner.paused}get currentTime(){return this.inner.currentTime}get duration(){return Infinity}get videoHeight(){return this.inner.videoHeight}
-  play(){return this.inner.play()}pause(){this.inner.pause()}setMuted(m){this.inner.setMuted(m)}seek(){}
+  play(){return this.inner.play()}pause(){this.inner.pause()}setMuted(m){this.inner.setMuted(m)}setVolume(v){this.inner.setVolume(v)}seek(){}
+  get audioBlocked(){return this.inner.audioBlocked}get audioIssue(){return this.inner.audioIssue}
   async load(src,ms){
     resetVideo(this.video);this.video.classList.add('ant-hidden');
     let t;const timeout=new Promise((_r,reject)=>{t=setTimeout(()=>reject(Error('No video after '+Math.round(ms/1000)+' seconds.')),ms)});
@@ -124,7 +157,7 @@ function saveProgress(item,t,d){
 function rememberLive(c){const list=readJSON(RECENT_KEY,[]).filter(x=>x!==String(c.stream_id));list.unshift(String(c.stream_id));store.set(RECENT_KEY,JSON.stringify(list.slice(0,20)))}
 
 // ---------- overlay ----------
-const ui={};let engine=null,attempt=0,current=null,hideTimer=null,isLive=false,lastSave=0;
+const ui={};let engine=null,attempt=0,current=null,hideTimer=null,isLive=false,lastSave=0,lastPointer='',unlockedAt=0;
 const fmt=s=>{if(!isFinite(s)||s<0)return '0:00';s=Math.floor(s);const h=Math.floor(s/3600),m=Math.floor(s/60)%60,x=String(s%60).padStart(2,'0');return h?h+':'+String(m).padStart(2,'0')+':'+x:m+':'+x};
 const el=(tag,cls,html)=>{const e=doc.createElement(tag);if(cls)e.className=cls;if(html!=null)e.innerHTML=html;return e};
 const ICON={play:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></svg>',pause:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" fill="currentColor"/></svg>',
@@ -148,25 +181,52 @@ function init(){
   ui.time=el('span','ant-time','0:00');ui.seek=el('input','ant-seek');ui.seek.type='range';ui.seek.min='0';ui.seek.max='1000';ui.seek.value='0';ui.seek.setAttribute('aria-label','Seek');
   ui.dur=el('span','ant-time','0:00');ui.live=el('span','ant-live','● LIVE');
   ui.chips=el('div','ant-chips');ui.quality=el('span','ant-chip','');ui.engine=el('button','ant-chip ant-engine','');ui.engine.title='Player engine';
+  ui.sound=el('button','ant-chip ant-sound','Tap for sound');ui.sound.hidden=true;
   ui.mute=el('button','ant-chip ant-icon','');ui.mute.innerHTML=ICON.vol;ui.mute.setAttribute('aria-label','Mute');
-  ui.chips.append(ui.quality,ui.engine,ui.mute);
+  ui.vol=el('input','ant-vol');ui.vol.type='range';ui.vol.min='0';ui.vol.max='100';ui.vol.step='1';ui.vol.setAttribute('aria-label','Volume');
+  ui.volwrap=el('div','ant-volwrap');ui.volwrap.append(ui.mute,ui.vol);
+  ui.chips.append(ui.sound,ui.quality,ui.engine,ui.volwrap);
   ui.bottom.append(ui.time,ui.seek,ui.dur,ui.live,ui.chips);
   stage.append(ui.center,ui.bottom);
   ui.toggle.onclick=e=>{e.stopPropagation();togglePlay()};
   ui.back.onclick=e=>{e.stopPropagation();skip(-10)};ui.fwd.onclick=e=>{e.stopPropagation();skip(10)};
-  ui.mute.onclick=e=>{e.stopPropagation();const m=media();const next=!(engine?engine.muted:ui.video.muted);if(engine){engine.muted=next;engine.setMuted(next)}else ui.video.muted=next;ui.mute.innerHTML=next?ICON.mute:ICON.vol;ui.mute.setAttribute('aria-label',next?'Unmute':'Mute')};
+  ui.mute.onclick=e=>{e.stopPropagation();const off=audio.silent||audio.volume===0;audio.unlock(true);audio.setMuted(!off);wake()};
+  ui.sound.onclick=e=>{e.stopPropagation();audio.unlock(true);if(audio.muted)audio.setMuted(false);applyAudio();wake()};
+  ui.vol.oninput=()=>{audio.unlock(true);audio.setVolume(Number(ui.vol.value)/100);wake()};
+  ui.vol.addEventListener('click',e=>e.stopPropagation());
+  audio.on(applyAudio);applyAudio();
   ui.engine.onclick=e=>{e.stopPropagation();openEngineMenu()};
   ui.seek.oninput=()=>{const m=media();const d=m.duration;if(isFinite(d)&&d>0)ui.time.textContent=fmt(d*ui.seek.value/1000)};
   ui.seek.onchange=()=>{const m=media();const d=m.duration;if(isFinite(d)&&d>0){if(engine)engine.seek(d*ui.seek.value/1000);else ui.video.currentTime=d*ui.seek.value/1000}};
-  stage.addEventListener('pointermove',wake);stage.addEventListener('pointerdown',wake);
-  stage.addEventListener('click',e=>{if(e.target===stage||e.target===ui.video||e.target.tagName==='CANVAS'){if(stage.classList.contains('ant-idle'))wake();else togglePlay()}});
+  // A tap on the picture only shows/hides the controls. It never pauses: pausing is the pause button (or Space).
+  stage.addEventListener('pointermove',e=>{if(e.pointerType==='mouse')wake()});
+  stage.addEventListener('pointerdown',e=>{lastPointer=e.pointerType||''});
+  stage.addEventListener('click',onStageTap);
+  // Any tap or key while the page is open lets sound start (autoplay unlock). Capture phase, so it runs inside the gesture.
+  for(const ev of ['pointerup','touchend','click','keydown'])doc.addEventListener(ev,e=>{if(e.target?.closest?.('.ant-volwrap,.ant-sound'))return;if(!ui.sound.hidden)unlockedAt=Date.now();audio.unlock(!ui.watch.classList.contains('hide')||isTesla()||settings.engine==='canvas')},true);
   const fs=doc.getElementById('fullscreen');if(fs)fs.onclick=()=>{if(doc.fullscreenElement)doc.exitFullscreen?.();else if(stage.requestFullscreen)stage.requestFullscreen().catch(()=>ui.video.webkitEnterFullscreen?.());else ui.video.webkitEnterFullscreen?.()};
   for(const ev of ['play','pause','playing','timeupdate','durationchange','loadedmetadata','waiting'])video.addEventListener(ev,sync);
   video.addEventListener('loadedmetadata',resume);video.addEventListener('timeupdate',track);
   doc.addEventListener('keydown',e=>{if(ui.watch.classList.contains('hide')||/INPUT|SELECT|TEXTAREA/.test(e.target?.tagName||''))return;if(e.key===' '||e.key==='k'){e.preventDefault();togglePlay()}else if(e.key==='ArrowLeft')skip(-10);else if(e.key==='ArrowRight')skip(10);else if(e.key==='Escape'&&!doc.fullscreenElement)doc.getElementById('close')?.click()});
   setInterval(()=>{if(!ui.watch.classList.contains('hide'))sync()},1000);
 }
-function wake(){ui.stage.classList.remove('ant-idle');clearTimeout(hideTimer);hideTimer=setTimeout(()=>{if(!media().paused)ui.stage.classList.add('ant-idle')},3000)}
+function controlTarget(t){return !!t?.closest?.('button,input,select,textarea,a,label,.ant-menu')}
+// Touch: a tap toggles the controls. Mouse: hovering already shows them, so a click just keeps them up.
+function onStageTap(e){if(controlTarget(e.target))return;if(lastPointer==='mouse'||Date.now()-unlockedAt<1000||ui.stage.classList.contains('ant-idle'))wake();else hideControls()}
+function hideControls(){clearTimeout(hideTimer);ui.stage.classList.add('ant-idle')}
+function applyAudio(){
+  if(!ui.ready)return;const v=audio.volume,off=audio.silent||v===0;
+  audio.applyTo(ui.video);try{engine?.setVolume?.(v);engine?.setMuted?.(audio.silent)}catch{}
+  ui.mute.innerHTML=off?ICON.mute:ICON.vol;ui.mute.setAttribute('aria-label',off?'Unmute':'Mute');ui.mute.setAttribute('aria-pressed',String(off));
+  const shown=audio.muted?0:Math.round(v*100);if(doc.activeElement!==ui.vol)ui.vol.value=String(shown);ui.vol.style.setProperty('--p',shown+'%');
+  setNeedsTap(!!(audio.autoMuted||engine?.audioBlocked));
+}
+const TAP_NOTE=' · Tap the screen for sound';
+function setNeedsTap(on){
+  ui.sound.hidden=!on;ui.stage.classList.toggle('ant-needs-tap',on);
+  if(on)wake();else{const s=doc.getElementById('playstatus');if(s&&s.textContent.endsWith(TAP_NOTE))s.textContent=s.textContent.slice(0,-TAP_NOTE.length)}
+}
+function wake(){ui.stage.classList.remove('ant-idle');clearTimeout(hideTimer);hideTimer=setTimeout(()=>{if(!media().paused&&ui.sound.hidden)ui.stage.classList.add('ant-idle')},3000)}
 function togglePlay(){const m=media();if(m.paused)Promise.resolve(m.play()).catch(()=>{});else m.pause();setTimeout(sync,50);wake()}
 function skip(s){if(isLive)return;const m=media();const d=m.duration;if(!isFinite(d))return;const t=Math.max(0,Math.min(d-1,m.currentTime+s));if(engine)engine.seek(t);else ui.video.currentTime=t;wake()}
 function sync(){
@@ -178,6 +238,7 @@ function sync(){
   ui.seek.style.setProperty('--p',(vod?t/d*100:100)+'%');
   const h=m.videoHeight||0;ui.quality.textContent=h?(h>=2000?'4K':h+'p'):'';ui.quality.hidden=!h;
   ui.engine.textContent=engine?ENGINE_LABELS[engine.name]:ui.mode||'Native';
+  const needsTap=!!(audio.autoMuted||engine?.audioBlocked);if(ui.sound.hidden===needsTap)setNeedsTap(needsTap);
 }
 function track(){if(!current||isLive||current.kind==='live')return;const now=Date.now();if(now-lastSave<5000)return;lastSave=now;saveProgress(current,ui.video.currentTime,ui.video.duration)}
 function resume(){
@@ -196,7 +257,8 @@ function status(text){const s=doc.getElementById('playstatus');if(s)s.textConten
 
 // ---------- public API ----------
 const api={
-  settings,ladder,sourcesFor,loadLib,ENGINE_LABELS,saveProgress,
+  settings,ladder,sourcesFor,loadLib,ENGINE_LABELS,saveProgress,audio,
+  __test:{VideoEngine,CanvasWrap},get engine(){return engine},
   progress(){return readJSON(PROGRESS_KEY,{})},recentLive(){return readJSON(RECENT_KEY,[])},
   handles(){return settings.engine!=='legacy'},
   track(c,mode){init();current=c?{...c,resumed:false}:null;isLive=!c||!c.kind||c.kind==='live';engine&&api.stop();ui.mode=mode||null;if(ui.ready){ui.stage.classList.toggle('ant-is-live',isLive);ui.back.hidden=ui.fwd.hidden=isLive;wake();sync()}},
@@ -214,12 +276,13 @@ const api={
       if(my!==attempt)return;
       status('Connecting with '+ENGINE_LABELS[name]+'…');ui.mode=ENGINE_LABELS[name];sync();
       const e=name==='native'?new NativeEngine(ui.video):name==='hlsjs'?new HlsEngine(ui.video):name==='mpegts'?new MpegtsEngine(ui.video):new CanvasWrap(ui.stage,ui.video);
-      engine=e;
+      engine=e;applyAudio();
       try{
         await e.load(sources,name==='canvas'?25000:15000);
         if(my!==attempt){e.destroy();return}
-        status('Now playing · '+ENGINE_LABELS[name]+(errors.length?' (after '+errors.map(x=>x.name).join(', ')+')':''));
-        e.on?.('waiting',()=>status('Buffering live stream…'));e.on?.('playing',()=>status('Now playing · '+ENGINE_LABELS[name]));
+        const note=e.audioIssue?' · No sound: '+e.audioIssue:(audio.autoMuted||e.audioBlocked)?TAP_NOTE:'';
+        status('Now playing · '+ENGINE_LABELS[name]+(errors.length?' (after '+errors.map(x=>x.name).join(', ')+')':'')+note);applyAudio();
+        e.on?.('audiostate',()=>{if(engine===e)applyAudio()});e.on?.('waiting',()=>status('Buffering live stream…'));e.on?.('playing',()=>status('Now playing · '+ENGINE_LABELS[name]));
         e.on?.('error',()=>{if(my===attempt&&engine===e)status('Playback stopped · '+ENGINE_LABELS[name]+'. Tap the engine chip to try another.')});
         sync();wake();return name;
       }catch(err){
@@ -235,6 +298,6 @@ const api={
     return null;
   }
 };
-root.AntPlayer=api;
+root.AntPlayer=api;root.AntAudio=audio;
 if(doc){if(doc.readyState==='loading')doc.addEventListener('DOMContentLoaded',init);else init()}
 })(typeof globalThis!=='undefined'?globalThis:window);

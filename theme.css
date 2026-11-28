@@ -560,6 +560,15 @@ body.ant-tab-guide #searchwrap{margin-top:18px}
 .ant-chip{border:0;background:rgba(20,20,22,.8);color:#fff;font-weight:700;font-size:13px;border-radius:9px;padding:7px 10px;min-height:34px;display:grid;place-items:center}
 .ant-chip:empty{display:none}
 .ant-icon svg{width:18px;height:18px}
+.ant-volwrap{display:flex;align-items:center;gap:6px;background:rgba(20,20,22,.8);border-radius:9px;padding-right:10px}
+.ant-volwrap .ant-chip{background:none}
+.ant-vol{width:96px;-webkit-appearance:none;appearance:none;height:4px;border-radius:2px;padding:0!important;margin:0;border:0!important;touch-action:none;background:linear-gradient(90deg,#fff var(--p,100%),rgba(255,255,255,.3) var(--p,100%))}
+.ant-vol::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;border-radius:50%;background:#fff;border:0}
+.ant-vol::-moz-range-thumb{width:18px;height:18px;border-radius:50%;background:#fff;border:0}
+.ant-sound{background:var(--accent,#F43F3F)}
+.ant-sound[hidden]{display:none}
+.ant-needs-tap .ant-sound{animation:ant-pulse 1.6s ease-in-out infinite}
+@keyframes ant-pulse{50%{opacity:.6}}
 .ant-menu{position:absolute;right:18px;bottom:64px;z-index:5;background:#141416;border-radius:14px;padding:6px;display:flex;flex-direction:column;min-width:210px;box-shadow:0 12px 40px rgba(0,0,0,.6)}
 .ant-menu button{border:0;background:none;color:#fff;text-align:left;padding:11px 12px;border-radius:9px;font-weight:500}
 .ant-menu button:hover{background:#1C1C1F}.ant-menu button.active{color:var(--accent,#F43F3F);font-weight:700}
@@ -568,5 +577,6 @@ body.ant-tab-guide #searchwrap{margin-top:18px}
 #watch>#compatible,#watch>#alternate{position:absolute;z-index:4;left:50%;transform:translateX(-50%);bottom:110px;margin:0!important}
 #watch>#alternate{bottom:160px}
 body.tesla-lite .ant-center{gap:40px}body.tesla-lite .ant-play{width:84px;height:84px}
+body.tesla-lite .ant-vol{width:150px;height:6px}body.tesla-lite .ant-vol::-webkit-slider-thumb{width:28px;height:28px}body.tesla-lite .ant-chip{min-height:44px;font-size:15px}
 
 @media(max-width:700px){.hero.has-art{min-height:0;padding-top:120px}.poster{flex-basis:132px}.continue{flex-basis:200px}}
