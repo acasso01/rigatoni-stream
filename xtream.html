@@ -406,7 +406,7 @@ function row(title,items){
   draw();$('rows').append(wrap);
 }
 let teslaLite=localStorage.getItem('ant-tesla-lite')==='1';const liteCategory={live:'',movies:'',series:''};
-function applyLite(){document.body.classList.toggle('tesla-lite',teslaLite);$('teslaMode').setAttribute('aria-pressed',String(teslaLite));$('teslaMode').textContent=teslaLite?'Exit Tesla Mode':'Tesla Mode'}
+function applyLite(){document.body?.classList.toggle('tesla-lite',teslaLite);const b=$('teslaMode');if(!b)return;b.setAttribute?.('aria-pressed',String(teslaLite));b.textContent=teslaLite?'Exit Tesla Mode':'Tesla Mode'}
 applyLite();
 $('teslaMode').onclick=()=>{teslaLite=!teslaLite;localStorage.setItem('ant-tesla-lite',teslaLite?'1':'0');applyLite();if(credentials){searchToken++;searchSweep=null;showTab(teslaLite?'live':tab)}};
 function liteBrowse(root){
