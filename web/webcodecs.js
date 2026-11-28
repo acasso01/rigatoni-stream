@@ -14,11 +14,11 @@ async function canDecode(codec='avc1.64001f',width=1280,height=720){
 async function canDecodeHevc(){return canDecode('hev1.1.6.L120.90',1920,1080)}
 class Emitter{constructor(){this.handlers={}}on(e,f){(this.handlers[e]??=[]).push(f);return this}emit(e,d){for(const f of this.handlers[e]||[])try{f(d)}catch{}}}
 class CanvasEngine extends Emitter{
-  constructor(stage,{live=true,onStats}={}){
-    super();this.name='canvas';this.label='Canvas (WebCodecs)';this.stage=stage;this.live=live;this.onStats=onStats;
+  constructor(stage,{live=true,onStats,audio}={}){
+    super();this.name='canvas';this.label='Canvas (WebCodecs)';this.stage=stage;this.live=live;this.onStats=onStats;this.audioOpts=audio||null;
     this.canvas=document.createElement('canvas');this.canvas.className='ant-canvas';this.canvas.setAttribute('aria-label','Video');
     this.ctx=this.canvas.getContext('2d',{alpha:false,desynchronized:true});stage.append(this.canvas);
-    this.frames=[];this.paused=false;this.muted=false;this.volume=1;this.destroyed=false;this.offset=0;this.duration=0;this.videoHeight=0;
+    this.frames=[];this.sources=new Set();this.paused=false;this.muted=!!audio?.muted;this.volume=audio?.volume??1;this.audioIssue=null;this.destroyed=false;this.offset=0;this.duration=0;this.videoHeight=0;
     this.drawn=0;this.dropped=0;this._raf=this._raf.bind(this);
   }
   get currentTime(){return this.offset+Math.max(0,this.lastPts||0)}
@@ -50,15 +50,21 @@ class CanvasEngine extends Emitter{
     if(!sup.supported)throw Object.assign(Error('This browser cannot decode '+v.codec+' with WebCodecs'),{code:'CODEC_UNSUPPORTED'});
     this.vdec=new VideoDecoder({output:f=>{if(this.destroyed){f.close();return}this.frames.push(f)},error:e=>{this.emit('error',e);this._fail?.(e)}});
     this.vdec.configure(vconfig);
-    if(a&&a.codec&&typeof root.AudioDecoder==='function'){
+    this.audioIssue=null;
+    if(a&&a.codec&&typeof root.AudioDecoder!=='function')this.audioIssue='this browser has no WebCodecs audio decoder';
+    else if(a&&a.codec){
       const aconfig={codec:a.codec,sampleRate:a.sampleRate,numberOfChannels:a.channels,...(a.description?{description:a.description}:{})};
       const ok=await AudioDecoder.isConfigSupported(aconfig).then(r=>r.supported).catch(()=>false);
-      if(ok){
-        const AC=root.AudioContext||root.webkitAudioContext;
-        this.actx=new AC({latencyHint:'playback',sampleRate:a.sampleRate});
+      if(!ok)this.audioIssue='this browser cannot decode '+a.codec+' audio';
+      else{
+        // One shared AudioContext (resumed by the player on every tap) so sound unlocks once per page, not per channel.
+        const shared=this.audioOpts?.context?.()||null;const AC=root.AudioContext||root.webkitAudioContext;
+        this.ownCtx=!shared;this.actx=shared||new AC({latencyHint:'playback'});
         this.gain=this.actx.createGain();this.gain.gain.value=this.muted?0:this.volume;this.gain.connect(this.actx.destination);
-        this.adec=new AudioDecoder({output:d=>this._audio(d),error:()=>{this.adec=null}});this.adec.configure(aconfig);
-        if(this.actx.state==='suspended')this.actx.resume().catch(()=>{});
+        // Running ⇄ suspended: drop queued audio and resync the audio clock to the picture.
+        this._onState=()=>{this._stopSources();this.audioBase=null;this.emit('audiostate',this.actx?.state)};this.actx.addEventListener?.('statechange',this._onState);
+        this.adec=new AudioDecoder({output:d=>this._audio(d),error:()=>{this.adec=null;this.audioIssue='audio decoder error'}});this.adec.configure(aconfig);
+        if(this.actx.state!=='running')this.actx.resume().catch(()=>{});
       }
     }
     this.emit('loadedmetadata',{width:v.width,height:v.height,codec:v.codec,audio:a?.codec||null});
@@ -83,7 +89,8 @@ class CanvasEngine extends Emitter{
     return this.base.media+(performance.now()-this.base.wall)/1000;
   }
   _audio(d){
-    if(this.destroyed||!this.actx){d.close();return}
+    // Never queue audio on a suspended context: it would all play late, at once, when sound unlocks.
+    if(this.destroyed||!this.actx||this.actx.state!=='running'){d.close();return}
     const t=d.timestamp/1e6;
     try{
       const buf=this.actx.createBuffer(d.numberOfChannels,d.numberOfFrames,d.sampleRate);
@@ -91,7 +98,7 @@ class CanvasEngine extends Emitter{
       if(this.audioBase==null&&this.base!=null){this.audioBase={media:this._clock(),ctx:this.actx.currentTime}}
       if(this.audioBase!=null&&!this.paused){
         const when=this.audioBase.ctx+(t-this.audioBase.media);
-        if(when>=this.actx.currentTime-0.02){const src=this.actx.createBufferSource();src.buffer=buf;src.connect(this.gain);src.start(Math.max(when,this.actx.currentTime))}
+        if(when>=this.actx.currentTime-0.02){const src=this.actx.createBufferSource();src.buffer=buf;src.connect(this.gain);src.onended=()=>this.sources.delete(src);this.sources.add(src);src.start(Math.max(when,this.actx.currentTime))}
       }
     }catch{}
     d.close();
@@ -120,16 +127,22 @@ class CanvasEngine extends Emitter{
     if(this.live&&this.url){// Live: pausing drops behind, so jump back to live.
       const url=this.url;this._teardown(false);this.paused=false;return this.load(url).then(()=>this.emit('play'))}
     this.base=null;this.audioBase=null;this.actx?.resume().catch(()=>{});this.emit('play');return Promise.resolve()}
-  pause(){this.paused=true;this.actx?.suspend().catch(()=>{});this.emit('pause')}
-  setMuted(m){this.muted=m;if(this.gain)this.gain.gain.value=m?0:this.volume;if(!m)this.actx?.resume().catch(()=>{})}
+  pause(){this.paused=true;this._stopSources();this.audioBase=null;if(this.ownCtx)this.actx?.suspend().catch(()=>{});this.emit('pause')}
+  get audioBlocked(){return !!(this.actx&&this.actx.state!=='running'&&!this.paused)}
+  _applyGain(){if(!this.gain)return;const g=this.muted?0:this.volume;try{this.gain.gain.setValueAtTime(g,this.actx.currentTime)}catch{this.gain.gain.value=g}}
+  setMuted(m){this.muted=!!m;this._applyGain();if(!m&&this.actx&&this.actx.state!=='running')this.actx.resume().catch(()=>{})}
+  setVolume(v){this.volume=Math.min(1,Math.max(0,Number(v)||0));this._applyGain()}
+  _stopSources(){for(const s of this.sources)try{s.stop()}catch{};this.sources.clear()}
   _teardown(removeCanvas){
     try{this.abort?.abort()}catch{}
     try{this.reader?.cancel().catch(()=>{})}catch{}
     for(const f of this.frames)try{f.close()}catch{};this.frames=[];
     try{this.vdec&&this.vdec.state!=='closed'&&this.vdec.close()}catch{}
     try{this.adec&&this.adec.state!=='closed'&&this.adec.close()}catch{}
-    try{this.actx?.close()}catch{}
-    this.vdec=this.adec=this.actx=null;this.base=this.audioBase=null;this.gotKey=false;this.drawn=0;
+    this._stopSources();try{this.gain?.disconnect()}catch{}
+    try{if(this._onState)this.actx?.removeEventListener?.('statechange',this._onState)}catch{}
+    try{if(this.ownCtx)this.actx?.close()}catch{}
+    this.vdec=this.adec=this.actx=this.gain=this._onState=null;this.base=this.audioBase=null;this.gotKey=false;this.drawn=0;
     if(removeCanvas)this.canvas.remove();
   }
   destroy(){this.destroyed=true;this._teardown(true)}
