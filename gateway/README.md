@@ -18,6 +18,35 @@ keep working exactly as before. The web player checks `/health` itself and will
 tell you to rebuild if you have more than one saved provider and the gateway is
 still the old build.
 
+## Web IPTV update (Gigaplay-style player)
+
+The web player now picks a playback engine automatically and relays plain-HTTP
+IPTV through this gateway, because an HTTPS page can't load `http://` streams.
+New routes (all tied to a signed-in gateway session; the browser never sees the
+provider login, the M3U link or the TMDB key):
+
+| Route | What it does |
+| --- | --- |
+| `GET /iptv/stream/<session>/<ticket>?mode=relay` | Redirects to the existing `/media/` relay (native HLS / hls.js). |
+| `GET /iptv/stream/<session>/<ticket>?mode=ts` | ffmpeg stream copy to MPEG-TS for mpegts.js. |
+| `GET /iptv/stream/<session>/<ticket>?mode=fmp4&video=auto\|copy\|transcode&hevc=1&t=<sec>&q=<height>` | ffmpeg fragmented MP4 for the WebCodecs canvas engine. `auto` copies H.264 (and HEVC when `hevc=1`) and converts anything else to H.264; audio is always AAC 48 kHz stereo. |
+| `GET /iptv/api/<session>?action=…` | Allow-listed Xtream `player_api.php` actions, with credentials and `user_info` scrubbed and artwork swapped for opaque tickets. |
+| `GET /iptv/epg/<session>?ids=1,2,…` | Now/next guide (Xtream `get_short_epg`, or the M3U playlist's `url-tvg` XMLTV). Max 40 ids, cached 10 minutes. |
+| `POST /iptv/m3u` `{"url":"…"}` | Signed-in only. Loads an M3U link on the Pi and returns a live-TV session. |
+| `GET /iptv/trending/<session>?media=movie\|tv` | TMDB weekly trending, using `TMDB_API_KEY` from the Pi. |
+
+Optional settings in `compose.yaml`: `TMDB_API_KEY`, `IPTV_ALLOWED_HOSTS`
+(comma list such as `provider.example,*.cdn.example`; private and Tailscale
+addresses are always refused) and `MAX_TRANSCODES` (default 2; each live
+transcode is roughly one Pi CPU core, while stream copy is light).
+
+Rebuild once to enable it:
+
+```bash
+cd ~/rigatoni-stream-gateway/gateway && git pull --ff-only && TMDB_API_KEY=your-key docker compose up -d --build
+curl http://127.0.0.1:8787/health   # shows "iptv":true
+```
+
 ## Start on the Pi
 
 Docker Compose and Tailscale must already be installed. These commands create a dedicated checkout, without changing your other Pi services:

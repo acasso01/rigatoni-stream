@@ -9,6 +9,7 @@ import {execFile} from 'node:child_process';
 import {createRemuxManager} from './remux.mjs';
 import {createDownloadManager} from './downloads.mjs';
 import {pathToFileURL} from 'node:url';
+import {xtreamQuery,sanitizeProviderJson,parseM3U,m3uKind,decodeShortEpg,parseXmltv,parseAllowList,hostAllowed,fmp4Arguments,tsArguments,createLiveTranscoder,trendingTitles} from './iptv.mjs';
 
 export function publicAddress(address) {
   if (isIP(address)===4) {
@@ -135,8 +136,11 @@ export async function probeMedia(url) {
   const container=/^[a-z0-9_,]+$/.test(parsed.format?.format_name||'')?parsed.format.format_name.slice(0,100):'unknown';
   return {streams,container};
 }
-export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.github.io',fetchVault=fetch,upstream=providerRequest,probe=probeMedia,now=Date.now,maxSessions=20,moviesDir=process.env.MOVIES_PATH||'',tvDir=process.env.TV_PATH||'',downloadStatfs}={}) {
+export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.github.io',fetchVault=fetch,upstream=providerRequest,probe=probeMedia,now=Date.now,maxSessions=20,moviesDir=process.env.MOVIES_PATH||'',tvDir=process.env.TV_PATH||'',downloadStatfs,tmdbKey=process.env.TMDB_API_KEY||'',tmdbFetch=fetch,allowedHosts=process.env.IPTV_ALLOWED_HOSTS||'',spawnFn,maxTranscodes=Number(process.env.MAX_TRANSCODES||2)}={}) {
   const sessions=new Map();
+  const allowList=parseAllowList(allowedHosts);
+  const transcoder=createLiveTranscoder({...(spawnFn?{spawn:spawnFn}:{}),maxJobs:maxTranscodes});
+  const trendingCache=new Map();
   const remux=createRemuxManager({options:supportedProbeOptions,now});
   const downloads=createDownloadManager({upstream,moviesDir,tvDir,now,statfsFn:downloadStatfs});
   let probing=false;
@@ -162,7 +166,7 @@ export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.gi
     clean();
     try {
       const path=new URL(req.url,'http://localhost').pathname;
-      if(path==='/health'&&req.method==='GET')return json(res,200,{ok:true,service:'rigatoni-gateway',multi_provider:true,downloads:true,server_downloads:downloads.configured});
+      if(path==='/health'&&req.method==='GET')return json(res,200,{ok:true,service:'rigatoni-gateway',multi_provider:true,downloads:true,server_downloads:downloads.configured,iptv:true,m3u:true,epg:true,engines:['relay','ts','fmp4'],trending:!!tmdbKey});
       if(path==='/api/connect'&&req.method==='POST') {
         const auth=req.headers.authorization;
         if(!auth?.startsWith('Bearer ')||auth.length>8192)return json(res,401,{error:'sign_in_required'});
@@ -183,6 +187,7 @@ export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.gi
         const saved=await vault.json();if(!saved.saved)return json(res,providerId?404:409,{error:providerId?'provider_not_found':'save_provider_first'});
         if(sessions.size>=maxSessions)return json(res,503,{error:'gateway_busy'});
         const base=new URL(saved.server_url);if(base.search||base.hash)throw Error('unsafe_target');
+        if(!hostAllowed(base,allowList))return json(res,403,{error:'provider_host_not_allowed'});
         const api=async (action,project,maxItems,categoryId)=>{
           const url=new URL(base.href.replace(/\/+$/,'')+'/player_api.php');url.search=new URLSearchParams({username:saved.username,password:saved.password,action}).toString();
           if(categoryId!==undefined)url.searchParams.set('category_id',categoryId);
@@ -203,9 +208,9 @@ export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.gi
         const id=token();const resources=new Map(),resourceKeys=new Map();const channelIds=new Set(channels.map(c=>String(c.stream_id)));
         const register=url=>{if(resourceKeys.has(url.href))return '/media/'+id+'/'+resourceKeys.get(url.href);if(!['http:','https:'].includes(url.protocol)||url.username||url.password)throw Error('unsafe_target');if(resources.size>=300000)throw Error('session_resource_limit');const key=token();resources.set(key,url.href);resourceKeys.set(url.href,key);return '/media/'+id+'/'+key};
         const streams={};for(const channelId of channelIds){if(!/^\d+$/.test(channelId))continue;streams[channelId]=register(new URL(base.href.replace(/\/+$/,'')+'/live/'+encodeURIComponent(saved.username)+'/'+encodeURIComponent(saved.password)+'/'+channelId+'.m3u8'))}
-        sessions.set(id,{expires:now()+4*60*60*1000,resources,register,api,apiObject,base:base.href.replace(/\/+$/,''),username:saved.username,password:saved.password});
+        sessions.set(id,{kind:'xtream',expires:now()+4*60*60*1000,resources,register,api,apiObject,base:base.href.replace(/\/+$/,''),username:saved.username,password:saved.password,secrets:[saved.password,encodeURIComponent(saved.password)].filter(x=>x&&x.length>=3)});
         // Provider icons can be HTTP or carry provider credentials. Keep cards but use the existing fallback artwork.
-        return json(res,200,{categories,channels,streams,movies_path:'/api/movies/'+id,series_path:'/api/series/'+id,downloads_path:'/api/downloads/'+id,expires_in:14400});
+        return json(res,200,{categories,channels,streams,iptv_session:id,movies_path:'/api/movies/'+id,series_path:'/api/series/'+id,downloads_path:'/api/downloads/'+id,expires_in:14400});
       }
       if(path.startsWith('/api/movies/')&&req.method==='GET'){
         const match=path.match(/^\/api\/movies\/([A-Za-z0-9_-]+)$/),session=match&&sessions.get(match[1]);
@@ -303,6 +308,107 @@ export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.gi
           });
         }
         return json(res,200,await session.series);
+      }
+      // ---------- Web IPTV routes (Gigaplay-style player) ----------
+      if(path==='/iptv/m3u'&&req.method==='POST'){
+        // Create a live-TV session from an M3U link. The link (which usually carries the
+        // provider login) is used here once and never returned to the browser.
+        const auth=req.headers.authorization;
+        if(!auth?.startsWith('Bearer ')||auth.length>8192)return json(res,401,{error:'sign_in_required'});
+        const who=await fetchVault(supabaseUrl+'/auth/v1/user',{headers:{Authorization:auth,apikey:publicKey},cache:'no-store',signal:AbortSignal.timeout(15000)}).catch(()=>null);
+        if(!who?.ok)return json(res,401,{error:'sign_in_required'});
+        const rawBody=await boundedBody(req,8192).catch(()=>null);
+        let body;try{body=JSON.parse(rawBody||'')}catch{return json(res,400,{error:'invalid_request'})}
+        let link;try{link=new URL(String(body?.url||''))}catch{return json(res,400,{error:'invalid_m3u_url'})}
+        if(!['http:','https:'].includes(link.protocol)||link.username||link.password||link.hash)return json(res,400,{error:'invalid_m3u_url'});
+        if(!hostAllowed(link,allowList))return json(res,403,{error:'provider_host_not_allowed'});
+        if(sessions.size>=maxSessions)return json(res,503,{error:'gateway_busy'});
+        const {response}=await upstream(link);
+        if(response.statusCode!==200){response.resume();throw Error('provider_connection_failed')}
+        const parsed=parseM3U(await boundedBody(response,48*1024*1024),{maxItems:100000});
+        const id=token(),resources=new Map(),resourceKeys=new Map();
+        const register=url=>{if(resourceKeys.has(url.href))return '/media/'+id+'/'+resourceKeys.get(url.href);if(!['http:','https:'].includes(url.protocol)||url.username||url.password)throw Error('unsafe_target');if(resources.size>=300000)throw Error('session_resource_limit');const key=token();resources.set(key,url.href);resourceKeys.set(url.href,key);return '/media/'+id+'/'+key};
+        const groups=new Map(),channels=[],streams={},tvg=new Map();let skipped=0;
+        for(const entry of parsed.channels){
+          if(m3uKind(entry.url)!=='live'){skipped++;continue}
+          if(!groups.has(entry.group))groups.set(entry.group,String(groups.size+1));
+          const streamId=String(channels.length+1);
+          streams[streamId]=register(new URL(entry.url));
+          let icon='';if(/^https?:\/\//i.test(entry.logo)){try{icon=register(new URL(entry.logo))}catch{}}
+          channels.push({stream_id:streamId,name:entry.name,category_id:groups.get(entry.group),stream_icon:icon,epg_channel_id:entry.tvg_id,catchup:entry.catchup});
+          if(entry.tvg_id)tvg.set(streamId,entry.tvg_id);
+        }
+        if(!channels.length)return json(res,422,{error:'m3u_has_no_live_channels'});
+        let epgUrl=null;if(parsed.epgUrl){try{const u=new URL(parsed.epgUrl);if(['http:','https:'].includes(u.protocol)&&hostAllowed(u,allowList))epgUrl=u.href}catch{}}
+        sessions.set(id,{kind:'m3u',expires:now()+4*60*60*1000,resources,register,tvg,epgUrl,secrets:[link.search.slice(1)].filter(x=>x.length>=3)});
+        const categories=[...groups].map(([name,cid])=>({category_id:cid,category_name:String(name).slice(0,512)}));
+        return json(res,200,{categories,channels:channels.map(({stream_id,name,category_id,stream_icon,catchup})=>({stream_id,name,category_id,stream_icon,catchup})),streams,iptv_session:id,epg:!!epgUrl,vod_skipped:skipped,expires_in:14400});
+      }
+      if(path.startsWith('/iptv/api/')&&req.method==='GET'){
+        const match=path.match(/^\/iptv\/api\/([A-Za-z0-9_-]+)$/),session=match&&sessions.get(match[1]);
+        if(!session)return json(res,401,{error:'stream_session_expired'});
+        if(session.kind!=='xtream')return json(res,409,{error:'not_an_xtream_session'});
+        let query;try{query=xtreamQuery(new URL(req.url,'http://localhost').search)}catch(error){return json(res,error.status||400,{error:error.message})}
+        const {action,...params}=query;
+        const raw=await session.apiObject(action,params);
+        return json(res,200,sanitizeProviderJson(raw,{secrets:session.secrets||[],register:session.register}));
+      }
+      if(path.startsWith('/iptv/epg/')&&req.method==='GET'){
+        const match=path.match(/^\/iptv\/epg\/([A-Za-z0-9_-]+)$/),session=match&&sessions.get(match[1]);
+        if(!session)return json(res,401,{error:'stream_session_expired'});
+        const ids=String(new URL(req.url,'http://localhost').searchParams.get('ids')||'').split(',').filter(Boolean);
+        if(!ids.length||ids.length>40||ids.some(x=>!/^\d{1,20}$/.test(x)))return json(res,400,{error:'invalid_epg_ids'});
+        session.epgCache??=new Map();const fresh=e=>e&&now()-e.at<10*60*1000;const epg={};
+        if(session.kind==='m3u'){
+          if(!session.epgUrl)return json(res,200,{epg:{},source:'none'});
+          if(!session.xmltv||now()-session.xmltv.at>6*60*60*1000){
+            session.xmltv={at:now(),data:(async()=>{const {response}=await upstream(session.epgUrl);if(response.statusCode!==200){response.resume();throw Error('provider_connection_failed')}const text=await boundedBody(response,96*1024*1024);const t=now()/1000;return parseXmltv(text,{channels:new Set(session.tvg.values()),from:t-2*3600,to:t+12*3600})})()};
+            session.xmltv.data.catch(()=>{session.xmltv=null});
+          }
+          const map=await session.xmltv.data;
+          for(const sid of ids){const tid=session.tvg.get(sid);epg[sid]=tid?map.get(tid)||[]:[]}
+          return json(res,200,{epg,source:'xmltv'});
+        }
+        const queue=[...ids];
+        const worker=async()=>{while(queue.length){const sid=queue.shift();const hit=session.epgCache.get(sid);if(fresh(hit)){epg[sid]=hit.list;continue}
+          try{const raw=await session.apiObject('get_short_epg',{stream_id:sid,limit:'8'});const list=decodeShortEpg(raw,{limit:8});session.epgCache.set(sid,{at:now(),list});if(session.epgCache.size>5000)session.epgCache.delete(session.epgCache.keys().next().value);epg[sid]=list}catch{epg[sid]=[]}}};
+        await Promise.all(Array.from({length:Math.min(6,ids.length)},worker));
+        return json(res,200,{epg,source:'xtream'});
+      }
+      if(path.startsWith('/iptv/stream/')&&req.method==='GET'){
+        const match=path.match(/^\/iptv\/stream\/([A-Za-z0-9_-]+)\/([A-Za-z0-9_-]+)$/);
+        if(!match)return json(res,404,{error:'not_found'});
+        const [,id,key]=match,session=sessions.get(id);
+        if(!session?.resources.has(key))return json(res,401,{error:'stream_session_expired'});
+        const q=new URL(req.url,'http://localhost').searchParams;const mode=q.get('mode')||'relay';
+        if(!['relay','ts','fmp4'].includes(mode))return json(res,400,{error:'invalid_mode'});
+        if(mode==='relay'){res.writeHead(307,{Location:'/media/'+id+'/'+key,'Cache-Control':'no-store'});res.end();return}
+        const requested=q.get('video')||'auto';if(!['auto','copy','transcode'].includes(requested))return json(res,400,{error:'invalid_video_mode'});
+        const start=Number(q.get('t')||0),height=Number(q.get('q')||1080);
+        if(!Number.isFinite(start)||start<0||start>86400*2||!Number.isFinite(height))return json(res,400,{error:'invalid_request'});
+        const live=!(session.movieKeys?.has(key)||session.episodeKeys?.has(key));
+        const input='http://127.0.0.1:'+server.address().port+'/media/'+id+'/'+key;
+        const hlsOptions=live?await supportedProbeOptions().catch(()=>[]):[];
+        if(mode==='ts')return void transcoder.start(tsArguments(input,{hlsOptions}),res,'video/mp2t');
+        let video=requested;
+        if(video==='auto'){
+          // H.264 (and HEVC when the browser says it can decode it) is copied; anything else is converted.
+          try{const info=await inspection(session,key,input);const codec=info.streams.find(s=>s.type==='video')?.codec;video=codec==='h264'||codec==='hevc'&&q.get('hevc')==='1'?'copy':'transcode'}catch{video='transcode'}
+        }
+        return void transcoder.start(fmp4Arguments(input,{video,start,live,height,hlsOptions}),res,'video/mp4');
+      }
+      if(path.startsWith('/iptv/trending/')&&req.method==='GET'){
+        const match=path.match(/^\/iptv\/trending\/([A-Za-z0-9_-]+)$/),session=match&&sessions.get(match[1]);
+        if(!session)return json(res,401,{error:'stream_session_expired'});
+        if(!tmdbKey)return json(res,404,{error:'trending_unavailable'});
+        const media=new URL(req.url,'http://localhost').searchParams.get('media')||'movie';
+        if(!['movie','tv'].includes(media))return json(res,400,{error:'invalid_media'});
+        const hit=trendingCache.get(media);
+        if(!hit||now()-hit.at>6*60*60*1000){
+          const entry={at:now(),data:(async()=>{const r=await tmdbFetch('https://api.themoviedb.org/3/trending/'+media+'/week?api_key='+encodeURIComponent(tmdbKey),{cache:'no-store',signal:AbortSignal.timeout(12000)});if(!r.ok)throw Error('trending_unavailable');const text=await r.text();if(text.length>2*1024*1024)throw Error('response_too_large');return trendingTitles(JSON.parse(text))})()};
+          entry.data.catch(()=>trendingCache.delete(media));trendingCache.set(media,entry);
+        }
+        try{return json(res,200,{media,results:await trendingCache.get(media).data})}catch{return json(res,502,{error:'trending_unavailable'})}
       }
       if(path.startsWith('/compatible/')&&req.method==='POST'){
         const match=path.match(/^\/compatible\/([A-Za-z0-9_-]+)\/([A-Za-z0-9_-]+)\/stop$/);
@@ -406,11 +512,11 @@ export function createGateway({supabaseUrl,publicKey,origin='https://acasso01.gi
       return json(res,404,{error:'not_found'});
     } catch(error) {
       if(res.headersSent){res.destroy();return}
-      const known=['unsafe_target','upstream_timeout','upstream_unavailable','provider_connection_failed','response_too_large','catalog_too_large','invalid_playlist','session_resource_limit','media_probe_failed','media_probe_unavailable','media_probe_timeout','media_probe_extension','media_probe_download','media_probe_invalid','compatibility_busy','compatibility_failed','compatibility_timeout','compatibility_segment_expired','probe_busy'];
-      return json(res,error.message==='probe_busy'?429:502,{error:known.includes(error.message)?error.message:'gateway_request_failed'});
+      const known=['transcoder_busy','invalid_playlist','catalog_too_large','unsafe_target','upstream_timeout','upstream_unavailable','provider_connection_failed','response_too_large','catalog_too_large','invalid_playlist','session_resource_limit','media_probe_failed','media_probe_unavailable','media_probe_timeout','media_probe_extension','media_probe_download','media_probe_invalid','compatibility_busy','compatibility_failed','compatibility_timeout','compatibility_segment_expired','probe_busy'];
+      return json(res,['probe_busy','transcoder_busy'].includes(error.message)?429:502,{error:known.includes(error.message)?error.message:'gateway_request_failed'});
     }
   });
-  server.on('close',()=>{void remux.close();downloads.close()});server.closeCompatibility=()=>remux.close();
+  server.on('close',()=>{void remux.close();downloads.close();transcoder.close()});server.closeCompatibility=()=>remux.close();
   server.requestTimeout=30000;server.headersTimeout=15000;
   return server;
 }
