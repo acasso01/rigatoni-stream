@@ -9,6 +9,12 @@ services:
       SUPABASE_ANON_KEY: sb_publishable_w3-KHDqTcBEsLTRNwdRpgg_U9xugdH2
       MOVIES_PATH: /mnt/nas/media/movies
       TV_PATH: /mnt/nas/media/tv
+      # Optional. Lets the web Home show "Trending this week". Kept on the Pi only.
+      TMDB_API_KEY: ${TMDB_API_KEY:-}
+      # Optional comma list of provider/EPG hosts (exact or *.suffix). Empty = any public host.
+      IPTV_ALLOWED_HOSTS: ${IPTV_ALLOWED_HOSTS:-}
+      # Concurrent live remux/transcode streams for the canvas and MPEG-TS engines.
+      MAX_TRANSCODES: ${MAX_TRANSCODES:-2}
     volumes:
       - /mnt/nas/media/movies:/mnt/nas/media/movies:rw
       - /mnt/nas/media/tv:/mnt/nas/media/tv:rw

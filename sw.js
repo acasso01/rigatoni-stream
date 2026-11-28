@@ -1,5 +1,5 @@
-const CACHE = 'ant-streams-theme-v4';
-const ASSETS = ['./', './index.html', './theme.css', './manifest.webmanifest', './icon.svg', './icon-180.png', './icon-192.png', './icon-512.png'];
+const CACHE = 'ant-streams-theme-v5';
+const ASSETS = ['./', './index.html', './theme.css', './manifest.webmanifest', './icon.svg', './icon-180.png', './icon-192.png', './icon-512.png', './xtream.html', './web/titles.js', './web/fmp4.js', './web/webcodecs.js', './web/player.js', './web/ui.js', './fonts/barlow-latin-400-normal.woff2', './fonts/barlow-latin-500-normal.woff2', './fonts/barlow-latin-700-normal.woff2', './fonts/barlow-condensed-latin-700-normal.woff2'];
 self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting())));
 self.addEventListener('activate', event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => (key.startsWith('rigatoni-') || key.startsWith('ant-streams-')) && key !== CACHE).map(key => caches.delete(key)))).then(() => self.clients.claim())));
 self.addEventListener('fetch', event => {
