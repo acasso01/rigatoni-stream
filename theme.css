@@ -521,7 +521,9 @@ html[data-theme="studio"] .player-page nav button.active{border-bottom-color:var
 .prog-bar{position:absolute;left:0;bottom:0;height:3px;background:var(--accent);border-radius:0 2px 2px 0}
 .prog-empty{background:#141416}.prog-loading{background:#111113;color:var(--faint);font-size:13px}
 .now-line{position:absolute;top:0;bottom:0;width:2px;background:var(--accent);z-index:1;pointer-events:none}
-.now-pill{position:sticky;top:0;display:inline-block;transform:translate(-50%,-38px);background:var(--accent);color:#fff;font-weight:700;font-size:12px;padding:3px 7px;border-radius:7px}
+.guide-times .now-pill{position:absolute;top:10px;transform:translateX(-50%);background:var(--accent);color:#fff;font-weight:700;font-size:12px;padding:3px 7px;border-radius:7px;z-index:2}
+body.ant-tab-guide .hero{display:none}
+body.ant-tab-guide #searchwrap{margin-top:18px}
 .guide-body .now-line{margin-left:0}
 @media(max-width:700px){.guide{--chw:140px}.guide-name{font-size:13px}.guide-num{display:none}}
 
@@ -566,3 +568,5 @@ html[data-theme="studio"] .player-page nav button.active{border-bottom-color:var
 #watch>#compatible,#watch>#alternate{position:absolute;z-index:4;left:50%;transform:translateX(-50%);bottom:110px;margin:0!important}
 #watch>#alternate{bottom:160px}
 body.tesla-lite .ant-center{gap:40px}body.tesla-lite .ant-play{width:84px;height:84px}
+
+@media(max-width:700px){.hero.has-art{min-height:0;padding-top:120px}.poster{flex-basis:132px}.continue{flex-basis:200px}}

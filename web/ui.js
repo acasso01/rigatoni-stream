@@ -36,7 +36,7 @@ function openSheet(section){
   for(const [key,label] of [['live','Live TV'],['movies','Movies'],['series','Series']]){const b=el('button',key===section?'active':'',label);b.onclick=()=>openSheet(key);seg.append(b)}
   sheet.append(seg);
   // US-only lives in the main script; mirror it by clicking the real checkbox.
-  const us=el('label','sheet-row');const box=el('input');box.type='checkbox';box.checked=!!api().usOnly;box.onchange=()=>{const real=doc.querySelector('.filterbar .us-only input');if(real){real.checked=box.checked;real.onchange?.()}else{try{localStorage.setItem('ant-us-only',box.checked?'1':'0')}catch{}}setTimeout(()=>openSheet(section),0)};
+  const us=el('label','sheet-row');const box=el('input','switch');box.type='checkbox';box.checked=!!api().usOnly;box.onchange=()=>{const real=doc.querySelector('.filterbar .us-only input');if(real){real.checked=box.checked;real.onchange?.()}else{try{localStorage.setItem('ant-us-only',box.checked?'1':'0')}catch{}}setTimeout(()=>openSheet(section),0)};
   us.append(el('span',null,'US / English only'),box);sheet.append(us);
   const eng=el('label','sheet-row');const sel=el('select');for(const [v,l] of [['auto','Auto (recommended)'],['native','Native'],['hlsjs','HLS.js'],['mpegts','MPEG-TS'],['canvas','Canvas (WebCodecs)'],['legacy','Classic player']]){const o=el('option',null,l);o.value=v;sel.append(o)}
   sel.value=root.AntPlayer?.settings.engine||'auto';sel.onchange=()=>{if(root.AntPlayer)root.AntPlayer.settings.engine=sel.value};eng.append(el('span',null,'Player engine'),sel);sheet.append(eng);
@@ -69,14 +69,14 @@ const trending={key:null,movie:null,tv:null,loading:false,failed:false};
 async function loadTrending(){
   const a=api(),iptv=a?.iptv;if(!iptv)return;const key=iptv.origin+'|'+iptv.id;
   if(trending.key===key&&(trending.movie||trending.loading||trending.failed))return;
-  Object.assign(trending,{key,loading:true,failed:false,movie:null,tv:null});
+  Object.assign(trending,{key,loading:true,failed:false,movie:null,tv:null});moviesRequested=false;
   try{
     const get=async m=>{const r=await fetch(iptv.origin+'/iptv/trending/'+iptv.id+'?media='+m,{cache:'no-store'});if(!r.ok)throw Error(String(r.status));return (await r.json()).results||[]};
     const [movie,tv]=await Promise.all([get('movie'),get('tv').catch(()=>[])]);trending.movie=movie;trending.tv=tv;
   }catch{trending.failed=true}finally{trending.loading=false}
   if(api().tab==='home')api().render();
 }
-let moviesRequested=false;
+var moviesRequested=false;
 function matchCatalog(items,catalog){
   const index=new Map();for(const c of catalog||[]){const k=norm(c.name);if(k&&!index.has(k))index.set(k,c)}
   return items.map(t=>{const k=norm(t.title);let hit=index.get(k);if(!hit&&k.length>=4){for(const [name,c] of index){if(name.startsWith(k+' ')){hit=c;break}}}return {...t,item:hit||null}});
@@ -114,7 +114,7 @@ const AntHome={
     if(a.iptv){
       void loadTrending();
       if(trending.movie){
-        if(!a.moviesLoaded&&!moviesRequested){moviesRequested=true;void a.loadMovies().catch(()=>{})}
+        if(!moviesRequested){moviesRequested=true;const again=()=>{if(api().tab==='home')api().render()};Promise.allSettled([a.moviesLoaded?null:a.loadMovies(),a.seriesLoaded?null:a.loadSeries()]).then(again)}
         const movies=matchCatalog(trending.movie,a.movies),tv=matchCatalog(trending.tv||[],a.series);
         const mixed=[];for(let i=0;i<Math.max(movies.length,tv.length);i++){if(movies[i])mixed.push([movies[i],'movie']);if(tv[i])mixed.push([tv[i],'tv'])}
         mixed.sort((x,y)=>(y[0].item?1:0)-(x[0].item?1:0));
@@ -142,7 +142,7 @@ const AntHome={
 
 // ================= Guide =================
 const GUIDE={page:0,category:'',cache:new Map(),pending:new Set(),timer:null};
-const PER_PAGE=25,PX_PER_MIN=4,SPAN_MIN=210;
+const PER_PAGE=25,PX_PER_MIN=6,SPAN_MIN=210;
 const b64=s=>{try{return decodeURIComponent(escape(atob(String(s||''))))}catch{return String(s||'')}};
 async function fetchEpg(ids){
   const a=api(),need=ids.filter(id=>{const h=GUIDE.cache.get(id);return !(h&&Date.now()-h.at<10*60*1000)&&!GUIDE.pending.has(id)});
@@ -159,7 +159,7 @@ async function fetchEpg(ids){
 const clock=t=>new Date(t*1000).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
 const AntGuide={
   render(root){
-    const a=api();clearInterval(GUIDE.timer);
+    const a=api();clearInterval(GUIDE.timer);doc.body.classList.add('ant-tab-guide');
     const catMap=new Map(a.categories.map(c=>[String(c.category_id),c]));
     const cats=a.categories.filter(c=>(!a.usOnly||a.isUsEnCategory(c))&&AntCategories.visible('live',c.category_id));
     const visibleIds=new Set(cats.map(c=>String(c.category_id)));
@@ -181,6 +181,7 @@ const AntGuide={
     const grid=el('div','guide');grid.style.setProperty('--ppm',PX_PER_MIN+'px');grid.style.setProperty('--span',SPAN_MIN);
     const head=el('div','guide-head');head.append(el('div','guide-corner'));const times=el('div','guide-times');
     for(let t=winStart;t<winEnd;t+=1800){const s=el('span',null,clock(t));s.style.left=((t-winStart)/60*PX_PER_MIN)+'px';times.append(s)}
+    const nowPill=el('span','now-pill',clock(nowS).replace(/\s?[AP]M$/i,''));nowPill.style.left=((nowS-winStart)/60*PX_PER_MIN)+'px';times.append(nowPill);
     head.append(times);grid.append(head);
     const body=el('div','guide-body');
     rows.forEach((c,i)=>{
@@ -199,12 +200,12 @@ const AntGuide={
       }
       r.append(ch,lane);body.append(r);
     });
-    const line=el('div','now-line');const pill=el('span','now-pill',clock(nowS).replace(/\s?[AP]M$/i,''));line.append(pill);
+    const line=el('div','now-line');const pill=nowPill;
     line.style.left='calc(var(--chw) + '+((nowS-winStart)/60*PX_PER_MIN)+'px)';body.append(line);
     grid.append(body);root.append(grid);
     const scroller=grid;requestAnimationFrame(()=>{scroller.scrollLeft=Math.max(0,(nowS-winStart)/60*PX_PER_MIN-120)});
     void fetchEpg(rows.map(c=>String(c.stream_id))).then(changed=>{if(changed&&api().tab==='guide')api().render()});
-    GUIDE.timer=setInterval(()=>{if(api().tab!=='guide'){clearInterval(GUIDE.timer);return}const n=Date.now()/1000;line.style.left='calc(var(--chw) + '+((n-winStart)/60*PX_PER_MIN)+'px)';pill.textContent=clock(n).replace(/\s?[AP]M$/i,'');if(n>winStart+3600)api().render()},30000);
+    GUIDE.timer=setInterval(()=>{if(api().tab!=='guide'){clearInterval(GUIDE.timer);return}const n=Date.now()/1000;line.style.left='calc(var(--chw) + '+((n-winStart)/60*PX_PER_MIN)+'px)';pill.style.left=((n-winStart)/60*PX_PER_MIN)+'px';pill.textContent=clock(n).replace(/\s?[AP]M$/i,'');if(n>winStart+3600)api().render()},30000);
   }
 };
 
@@ -222,7 +223,7 @@ function addM3uForm(){
     try{const result=await root.__rigatoniM3uConnect(url);input.value='';api().applyM3u(result);s.textContent='Connected: '+result.channels.length+' channels'+(result.vod_skipped?' ('+result.vod_skipped+' movie/series entries skipped)':'')}catch(e){s.textContent='M3U connection failed: '+e.message}finally{btn.disabled=false}};
   card.append(label,input,btn);login.append(card);
 }
-function clearHeroOnTab(){doc.querySelectorAll('nav button').forEach(b=>b.addEventListener('click',()=>{if(b.dataset.tab!=='home')setHero(null)}))}
+function clearHeroOnTab(){doc.querySelectorAll('nav button').forEach(b=>b.addEventListener('click',()=>{if(b.dataset.tab!=='home')setHero(null);if(b.dataset.tab!=='guide')doc.body.classList.remove('ant-tab-guide')}))}
 
 root.AntCategories=AntCategories;root.AntHome=AntHome;root.AntGuide=AntGuide;
 const boot=()=>{addM3uForm();clearHeroOnTab()};
